@@ -8,6 +8,7 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+mime_guess = "2"
 
 # Windowing + WebView
 wry = "0.54.1"

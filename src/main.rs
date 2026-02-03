@@ -2,7 +2,13 @@ use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::{
+    env,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, Mutex},
+};
 use tao::{
     event::{Event, StartCause, WindowEvent},
     event_loop::ControlFlow,
@@ -16,6 +22,7 @@ use wry::{
 use alloy_primitives::{Address, B256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
+use mime_guess::MimeGuess;
 
 static INDEX_HTML: &str = include_str!("../assets/index.html");
 
@@ -181,7 +188,26 @@ static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     .to_string()
 });
 
+#[derive(Debug, Clone)]
+struct BundleConfig {
+    source_dir: PathBuf,
+    dist_dir: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+struct BundleManifest {
+    files: Vec<BundleManifestFile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BundleManifestFile {
+    path: String,
+    bytes: u64,
+}
+
 fn main() -> Result<()> {
+    let bundle = parse_args()?;
+
     // --- Build signing wallet (Alloy) ---
     let signer: PrivateKeySigner = DEMO_PRIVKEY_HEX
         .parse()
@@ -234,7 +260,7 @@ fn main() -> Result<()> {
                         }
                     };
 
-                    let built = build_webview(&window_handle, state.clone(), proxy.clone());
+                    let built = build_webview(&window_handle, state.clone(), proxy.clone(), bundle.clone());
                     let webview_handle = match built {
                         Ok(webview) => webview,
                         Err(e) => {
@@ -266,20 +292,47 @@ fn build_webview(
     window: &tao::window::Window,
     state: AppState,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    bundle: Option<BundleConfig>,
 ) -> Result<WebView> {
     let wallet_state = state.wallet.clone();
 
     // Serve only our embedded assets.
+    let protocol_bundle = bundle.clone();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
         let path = request.uri().path();
-        let (body, mime) = match path {
-            "/" | "/index.html" => (INDEX_HTML.as_bytes().to_vec(), "text/html; charset=utf-8"),
-            _ => (format!("Not found: {path}").into_bytes(), "text/plain; charset=utf-8"),
+        let (body, mime) = if let Some(cfg) = &protocol_bundle {
+            let rel = path.trim_start_matches('/');
+            let mut file_path = if rel.is_empty() {
+                cfg.dist_dir.join("index.html")
+            } else {
+                cfg.dist_dir.join(rel)
+            };
+            if file_path.is_dir() {
+                file_path = file_path.join("index.html");
+            }
+            if !file_path.exists() {
+                (
+                    format!("Not found: {path}").into_bytes(),
+                    "text/plain; charset=utf-8".to_string(),
+                )
+            } else {
+                let data = fs::read(&file_path).unwrap_or_else(|_| Vec::new());
+                let guess = MimeGuess::from_path(&file_path)
+                    .first_or_octet_stream()
+                    .essence_str()
+                    .to_string();
+                (data, guess)
+            }
+        } else {
+            match path {
+                "/" | "/index.html" => (INDEX_HTML.as_bytes().to_vec(), "text/html; charset=utf-8".to_string()),
+                _ => (format!("Not found: {path}").into_bytes(), "text/plain; charset=utf-8".to_string()),
+            }
         };
 
         Response::builder()
             .status(200)
-            .header(CONTENT_TYPE, mime)
+            .header(CONTENT_TYPE, mime.as_str())
             // harden: disallow loading remote resources via CSP.
             .header(
                 "Content-Security-Policy",
@@ -321,6 +374,93 @@ fn build_webview(
     emit_chain_changed(&webview, chain_hex);
 
     Ok(webview)
+}
+
+fn parse_args() -> Result<Option<BundleConfig>> {
+    let mut args = env::args().skip(1);
+    let mut bundle_dir: Option<PathBuf> = None;
+    let mut no_build = false;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--bundle" => {
+                let value = args.next().ok_or_else(|| anyhow!("--bundle requires a path"))?;
+                bundle_dir = Some(PathBuf::from(value));
+            }
+            "--no-build" => no_build = true,
+            _ => {}
+        }
+    }
+
+    let Some(source_dir) = bundle_dir else {
+        return Ok(None);
+    };
+    let source_dir = source_dir
+        .canonicalize()
+        .context("bundle path does not exist")?;
+    let dist_dir = source_dir.join(".vibefi").join("dist");
+
+    verify_manifest(&source_dir)?;
+    if !no_build {
+        build_bundle(&source_dir, &dist_dir)?;
+    }
+
+    Ok(Some(BundleConfig { source_dir, dist_dir }))
+}
+
+fn verify_manifest(bundle_dir: &Path) -> Result<()> {
+    let manifest_path = bundle_dir.join("manifest.json");
+    if !manifest_path.exists() {
+        return Err(anyhow!("manifest.json missing in bundle"));
+    }
+    let content = fs::read_to_string(&manifest_path).context("read manifest.json")?;
+    let manifest: BundleManifest = serde_json::from_str(&content).context("parse manifest.json")?;
+    for entry in manifest.files {
+        let file_path = bundle_dir.join(&entry.path);
+        if !file_path.exists() {
+            return Err(anyhow!("bundle missing file {}", entry.path));
+        }
+        let meta = fs::metadata(&file_path).context("stat bundle file")?;
+        if meta.len() != entry.bytes {
+            return Err(anyhow!(
+                "bundle file size mismatch {} expected {} got {}",
+                entry.path,
+                entry.bytes,
+                meta.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
+    let node_modules = bundle_dir.join("node_modules");
+    if !node_modules.exists() {
+        let status = Command::new("bun")
+            .arg("install")
+            .arg("--no-save")
+            .current_dir(bundle_dir)
+            .status()
+            .context("bun install failed")?;
+        if !status.success() {
+            return Err(anyhow!("bun install failed"));
+        }
+    }
+
+    fs::create_dir_all(dist_dir).context("create dist dir")?;
+    let status = Command::new("bun")
+        .arg("x")
+        .arg("vite")
+        .arg("build")
+        .arg("--emptyOutDir")
+        .arg("--outDir")
+        .arg(dist_dir)
+        .current_dir(bundle_dir)
+        .status()
+        .context("bun vite build failed")?;
+    if !status.success() {
+        return Err(anyhow!("bun vite build failed"));
+    }
+    Ok(())
 }
 
 fn handle_ipc(webview: &WebView, state: &AppState, msg: String) -> Result<()> {
