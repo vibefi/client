@@ -13,6 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tao::{
+    dpi::LogicalSize,
     event::{Event, StartCause, WindowEvent},
     event_loop::ControlFlow,
     window::WindowBuilder,
@@ -49,6 +50,7 @@ impl Default for Chain {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct IpcRequest {
     id: u64,
     #[serde(default)]
@@ -218,12 +220,12 @@ struct BundleConfig {
     dist_dir: PathBuf,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct BundleManifest {
     files: Vec<BundleManifestFile>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct BundleManifestFile {
     path: String,
     bytes: u64,
@@ -339,7 +341,8 @@ fn main() -> Result<()> {
             Event::NewEvents(StartCause::Init) => {
                 if webview.is_none() {
                     let built = WindowBuilder::new()
-                        .with_title("Wry EIP-1193 demo (no network)")
+                        .with_title("VibeFi")
+                        .with_inner_size(LogicalSize::new(1280.0, 720.0))
                         .build(event_loop_window_target)
                         .context("failed to build window");
                     let window_handle = match built {
@@ -487,7 +490,7 @@ fn build_webview(
 }
 
 fn parse_args() -> Result<(Option<BundleConfig>, Option<LauncherConfig>)> {
-    let mut args = env::args().skip(1);
+    let mut args = env::args().skip(1).peekable();
     let mut bundle_dir: Option<PathBuf> = None;
     let mut devnet_path: Option<PathBuf> = None;
     let mut devnet_mode = false;
@@ -504,10 +507,8 @@ fn parse_args() -> Result<(Option<BundleConfig>, Option<LauncherConfig>)> {
             }
             "--devnet" => {
                 devnet_mode = true;
-                if let Some(next) = args.clone().next() {
-                    if !next.starts_with("--") {
-                        devnet_path = Some(PathBuf::from(args.next().unwrap()));
-                    }
+                if let Some(next) = args.next_if(|s| !s.starts_with("--")) {
+                    devnet_path = Some(PathBuf::from(next));
                 }
             }
             "--rpc" => rpc_url = args.next(),
@@ -598,7 +599,63 @@ fn verify_manifest(bundle_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+const STANDARD_PACKAGE_JSON: &str = r#"{
+  "name": "vibefi-dapp",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "wagmi": "3.4.1",
+    "viem": "2.45.0",
+    "shadcn": "3.7.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "5.1.2",
+    "typescript": "5.9.3",
+    "vite": "7.2.4"
+  }
+}
+"#;
+
+const STANDARD_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+});
+"#;
+
+const STANDARD_TSCONFIG: &str = r#"{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true
+  },
+  "include": ["src"]
+}
+"#;
+
+fn write_standard_build_files(bundle_dir: &Path) -> Result<()> {
+    fs::write(bundle_dir.join("package.json"), STANDARD_PACKAGE_JSON)?;
+    fs::write(bundle_dir.join("vite.config.ts"), STANDARD_VITE_CONFIG)?;
+    fs::write(bundle_dir.join("tsconfig.json"), STANDARD_TSCONFIG)?;
+    Ok(())
+}
+
 fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
+    write_standard_build_files(bundle_dir)?;
+
     let node_modules = bundle_dir.join("node_modules");
     if !node_modules.exists() {
         let status = Command::new("bun")
@@ -613,13 +670,15 @@ fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     }
 
     fs::create_dir_all(dist_dir).context("create dist dir")?;
+    // Use relative path from bundle_dir for vite's outDir since vite runs in bundle_dir
+    let relative_dist = PathBuf::from(".vibefi").join("dist");
     let status = Command::new("bun")
         .arg("x")
         .arg("vite")
         .arg("build")
         .arg("--emptyOutDir")
         .arg("--outDir")
-        .arg(dist_dir)
+        .arg(&relative_dist)
         .current_dir(bundle_dir)
         .status()
         .context("bun vite build failed")?;
@@ -725,20 +784,25 @@ fn ensure_bundle_cached(devnet: &DevnetContext, root_cid: &str, bundle_dir: &Pat
     }
     println!("launcher: download bundle from IPFS gateway");
     fs::create_dir_all(bundle_dir).context("create cache dir")?;
-    let manifest = fetch_dapp_manifest(devnet, root_cid)?;
-    download_dapp_bundle(devnet, root_cid, bundle_dir, &manifest)?;
+    let (manifest, manifest_bytes) = fetch_dapp_manifest(devnet, root_cid)?;
+    download_dapp_bundle(devnet, root_cid, bundle_dir, &manifest, &manifest_bytes)?;
     Ok(())
 }
 
-fn fetch_dapp_manifest(devnet: &DevnetContext, root_cid: &str) -> Result<BundleManifest> {
+fn fetch_dapp_manifest(devnet: &DevnetContext, root_cid: &str) -> Result<(BundleManifest, Vec<u8>)> {
     let gateway = normalize_gateway(&devnet.ipfs_gateway);
     let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
     let res = devnet.http.get(url).send().context("fetch manifest")?;
-    let manifest: BundleManifest = parse_json(res)?;
+    if !res.status().is_success() {
+        let text = res.text().unwrap_or_default();
+        return Err(anyhow!("fetch manifest failed: {}", text));
+    }
+    let raw_bytes = res.bytes().context("read manifest bytes")?.to_vec();
+    let manifest: BundleManifest = serde_json::from_slice(&raw_bytes).context("parse manifest")?;
     if manifest.files.is_empty() {
         return Err(anyhow!("manifest.json missing files list"));
     }
-    Ok(manifest)
+    Ok((manifest, raw_bytes))
 }
 
 fn download_dapp_bundle(
@@ -746,12 +810,10 @@ fn download_dapp_bundle(
     root_cid: &str,
     out_dir: &Path,
     manifest: &BundleManifest,
+    manifest_bytes: &[u8],
 ) -> Result<()> {
     let gateway = normalize_gateway(&devnet.ipfs_gateway);
-    fs::write(
-        out_dir.join("manifest.json"),
-        serde_json::to_vec_pretty(manifest)?,
-    )?;
+    fs::write(out_dir.join("manifest.json"), manifest_bytes)?;
     for entry in &manifest.files {
         let url = format!("{}/ipfs/{}/{}", gateway, root_cid, entry.path);
         let res = devnet.http.get(url).send().context("fetch bundle file")?;
@@ -814,7 +876,16 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name == "node_modules" || name == ".git" || name == ".vibefi" {
+        // Skip generated build files (not part of bundle content)
+        if name == "node_modules"
+            || name == ".git"
+            || name == ".vibefi"
+            || name == "package.json"
+            || name == "vite.config.ts"
+            || name == "tsconfig.json"
+            || name == "bun.lock"
+            || name == "bun.lockb"
+        {
             continue;
         }
         if entry.file_type()?.is_dir() {
@@ -909,22 +980,24 @@ fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
     }
 
     let mut dapps: HashMap<u64, Dapp> = HashMap::new();
-    let mut get_version = |dapp_id: u64, version_id: u64| {
-        let dapp = dapps.entry(dapp_id).or_insert_with(|| Dapp {
-            dapp_id,
-            latest_version_id: 0,
-            versions: HashMap::new(),
-        });
-        let v = dapp.versions.entry(version_id).or_insert_with(|| Version {
-            version_id,
-            root_cid: None,
-            name: None,
-            version: None,
-            description: None,
-            status: None,
-        });
-        (dapp, v)
-    };
+
+    macro_rules! get_or_create_version {
+        ($dapps:expr, $dapp_id:expr, $version_id:expr) => {{
+            let dapp = $dapps.entry($dapp_id).or_insert_with(|| Dapp {
+                dapp_id: $dapp_id,
+                latest_version_id: 0,
+                versions: HashMap::new(),
+            });
+            dapp.versions.entry($version_id).or_insert_with(|| Version {
+                version_id: $version_id,
+                root_cid: None,
+                name: None,
+                version: None,
+                description: None,
+                status: None,
+            })
+        }};
+    }
 
     for log in all {
         match log.kind.as_str() {
@@ -933,26 +1006,26 @@ fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
                 let dapp_id = u256_to_u64(decoded.data.dappId)?;
                 let version_id = u256_to_u64(decoded.data.versionId)?;
                 let root = bytes_to_string(&decoded.data.rootCid);
-                let (dapp, v) = get_version(dapp_id, version_id);
+                let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.root_cid = Some(root);
                 v.status = Some("Published".to_string());
-                dapp.latest_version_id = version_id;
+                dapps.get_mut(&dapp_id).unwrap().latest_version_id = version_id;
             }
             "DappUpgraded" => {
                 let decoded = DappUpgraded::decode_log(&log.log)?;
                 let dapp_id = u256_to_u64(decoded.data.dappId)?;
                 let version_id = u256_to_u64(decoded.data.toVersionId)?;
                 let root = bytes_to_string(&decoded.data.rootCid);
-                let (dapp, v) = get_version(dapp_id, version_id);
+                let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.root_cid = Some(root);
                 v.status = Some("Published".to_string());
-                dapp.latest_version_id = version_id;
+                dapps.get_mut(&dapp_id).unwrap().latest_version_id = version_id;
             }
             "DappMetadata" => {
                 let decoded = DappMetadata::decode_log(&log.log)?;
                 let dapp_id = u256_to_u64(decoded.data.dappId)?;
                 let version_id = u256_to_u64(decoded.data.versionId)?;
-                let (_, v) = get_version(dapp_id, version_id);
+                let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.name = Some(decoded.data.name.to_string());
                 v.version = Some(decoded.data.version.to_string());
                 v.description = Some(decoded.data.description.to_string());
@@ -961,21 +1034,21 @@ fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
                 let decoded = DappPaused::decode_log(&log.log)?;
                 let dapp_id = u256_to_u64(decoded.data.dappId)?;
                 let version_id = u256_to_u64(decoded.data.versionId)?;
-                let (_, v) = get_version(dapp_id, version_id);
+                let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.status = Some("Paused".to_string());
             }
             "DappUnpaused" => {
                 let decoded = DappUnpaused::decode_log(&log.log)?;
                 let dapp_id = u256_to_u64(decoded.data.dappId)?;
                 let version_id = u256_to_u64(decoded.data.versionId)?;
-                let (_, v) = get_version(dapp_id, version_id);
+                let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.status = Some("Published".to_string());
             }
             "DappDeprecated" => {
                 let decoded = DappDeprecated::decode_log(&log.log)?;
                 let dapp_id = u256_to_u64(decoded.data.dappId)?;
                 let version_id = u256_to_u64(decoded.data.versionId)?;
-                let (_, v) = get_version(dapp_id, version_id);
+                let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.status = Some("Deprecated".to_string());
             }
             _ => {}
