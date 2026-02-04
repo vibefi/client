@@ -9,6 +9,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 mime_guess = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 
 # Windowing + WebView
 wry = "0.54.1"

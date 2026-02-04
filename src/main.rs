@@ -1,12 +1,15 @@
 use anyhow::{anyhow, Context, Result};
+use alloy_primitives::{Address, B256, Bytes, Log, U256};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     env,
     fs,
     path::{Path, PathBuf},
     process::Command,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 use tao::{
@@ -19,12 +22,15 @@ use wry::{
     WebView, WebViewBuilder,
 };
 
-use alloy_primitives::{Address, B256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
+use alloy_sol_types::{sol, SolEvent};
 use mime_guess::MimeGuess;
+use reqwest::blocking::{Client as HttpClient, Response as HttpResponse};
+use reqwest::blocking::multipart::{Form, Part};
 
 static INDEX_HTML: &str = include_str!("../assets/index.html");
+static LAUNCHER_HTML: &str = include_str!("../assets/launcher.html");
 
 /// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
 /// This matches a common dev key used across many tutorials.
@@ -45,6 +51,8 @@ impl Default for Chain {
 #[derive(Debug, Deserialize)]
 struct IpcRequest {
     id: u64,
+    #[serde(default)]
+    provider_id: Option<String>,
     method: String,
     #[serde(default)]
     params: Value,
@@ -73,6 +81,8 @@ struct WalletState {
 struct AppState {
     wallet: Arc<Mutex<WalletState>>,
     signer: Arc<PrivateKeySigner>,
+    devnet: Option<DevnetContext>,
+    current_bundle: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl AppState {
@@ -175,6 +185,20 @@ static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     });
   }
 
+  // Minimal vibefi launcher API for non-provider UI actions.
+  window.vibefi = {
+    request: ({ method, params }) => new Promise((resolve, reject) => {
+      const id = nextId++;
+      callbacks.set(id, { resolve, reject });
+      window.ipc.postMessage(JSON.stringify({
+        id,
+        providerId: 'vibefi-launcher',
+        method,
+        params: params ?? []
+      }));
+    })
+  };
+
   // Signal a connect event once the page is ready.
   // Wallets often emit connect as soon as injected.
   Promise.resolve().then(async () => {
@@ -205,17 +229,84 @@ struct BundleManifestFile {
     bytes: u64,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct DevnetConfig {
+    chainId: u64,
+    dappRegistry: String,
+    developerPrivateKey: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DevnetContext {
+    config: DevnetConfig,
+    rpc_url: String,
+    ipfs_api: String,
+    ipfs_gateway: String,
+    cache_dir: PathBuf,
+    http: HttpClient,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DappInfo {
+    dappId: String,
+    versionId: String,
+    name: String,
+    version: String,
+    description: String,
+    status: String,
+    rootCid: String,
+}
+
+#[derive(Debug)]
+struct LauncherConfig {
+    devnet_path: Option<PathBuf>,
+    rpc_url: String,
+    ipfs_api: String,
+    ipfs_gateway: String,
+    cache_dir: PathBuf,
+}
+
 fn main() -> Result<()> {
-    let bundle = parse_args()?;
+    let (bundle, launcher) = parse_args()?;
 
     // --- Build signing wallet (Alloy) ---
-    let signer: PrivateKeySigner = DEMO_PRIVKEY_HEX
+    let devnet = launcher
+        .as_ref()
+        .and_then(|cfg| cfg.devnet_path.as_ref())
+        .and_then(|path| load_devnet(path).ok());
+    let signer_hex = devnet
+        .as_ref()
+        .and_then(|cfg| cfg.developerPrivateKey.clone())
+        .unwrap_or_else(|| DEMO_PRIVKEY_HEX.to_string());
+    let signer: PrivateKeySigner = signer_hex
         .parse()
-        .context("failed to parse demo private key")?;
+        .context("failed to parse signing private key")?;
 
+    let initial_chain_id = devnet
+        .as_ref()
+        .map(|cfg| cfg.chainId)
+        .unwrap_or_else(|| if launcher.is_some() { 31337 } else { 1 });
     let state = AppState {
-        wallet: Arc::new(Mutex::new(WalletState::default())),
+        wallet: Arc::new(Mutex::new(WalletState {
+            authorized: false,
+            chain: Chain {
+                chain_id: initial_chain_id,
+            },
+        })),
         signer: Arc::new(signer),
+        devnet: launcher.as_ref().map(|cfg| DevnetContext {
+            config: devnet.clone().unwrap_or(DevnetConfig {
+                chainId: 31337,
+                dappRegistry: String::new(),
+                developerPrivateKey: None,
+            }),
+            rpc_url: cfg.rpc_url.clone(),
+            ipfs_api: cfg.ipfs_api.clone(),
+            ipfs_gateway: cfg.ipfs_gateway.clone(),
+            cache_dir: cfg.cache_dir.clone(),
+            http: HttpClient::new(),
+        }),
+        current_bundle: Arc::new(Mutex::new(bundle.as_ref().map(|cfg| cfg.dist_dir.clone()))),
     };
 
     // --- Window + event loop ---
@@ -260,7 +351,13 @@ fn main() -> Result<()> {
                         }
                     };
 
-                    let built = build_webview(&window_handle, state.clone(), proxy.clone(), bundle.clone());
+                    let built = build_webview(
+                        &window_handle,
+                        state.clone(),
+                        proxy.clone(),
+                        bundle.clone(),
+                        launcher.is_some(),
+                    );
                     let webview_handle = match built {
                         Ok(webview) => webview,
                         Err(e) => {
@@ -293,19 +390,26 @@ fn build_webview(
     state: AppState,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bundle: Option<BundleConfig>,
+    devnet_mode: bool,
 ) -> Result<WebView> {
     let wallet_state = state.wallet.clone();
+    let current_bundle = state.current_bundle.clone();
 
     // Serve only our embedded assets.
     let protocol_bundle = bundle.clone();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
         let path = request.uri().path();
-        let (body, mime) = if let Some(cfg) = &protocol_bundle {
+        let active_bundle = current_bundle.lock().unwrap().clone().or_else(|| {
+            protocol_bundle
+                .as_ref()
+                .map(|cfg| cfg.dist_dir.clone())
+        });
+        let (body, mime) = if let Some(dist_dir) = active_bundle {
             let rel = path.trim_start_matches('/');
             let mut file_path = if rel.is_empty() {
-                cfg.dist_dir.join("index.html")
+                dist_dir.join("index.html")
             } else {
-                cfg.dist_dir.join(rel)
+                dist_dir.join(rel)
             };
             if file_path.is_dir() {
                 file_path = file_path.join("index.html");
@@ -325,7 +429,13 @@ fn build_webview(
             }
         } else {
             match path {
-                "/" | "/index.html" => (INDEX_HTML.as_bytes().to_vec(), "text/html; charset=utf-8".to_string()),
+                "/" | "/index.html" => {
+                    if devnet_mode {
+                        (LAUNCHER_HTML.as_bytes().to_vec(), "text/html; charset=utf-8".to_string())
+                    } else {
+                        (INDEX_HTML.as_bytes().to_vec(), "text/html; charset=utf-8".to_string())
+                    }
+                }
                 _ => (format!("Not found: {path}").into_bytes(), "text/plain; charset=utf-8".to_string()),
             }
         };
@@ -376,9 +486,15 @@ fn build_webview(
     Ok(webview)
 }
 
-fn parse_args() -> Result<Option<BundleConfig>> {
+fn parse_args() -> Result<(Option<BundleConfig>, Option<LauncherConfig>)> {
     let mut args = env::args().skip(1);
     let mut bundle_dir: Option<PathBuf> = None;
+    let mut devnet_path: Option<PathBuf> = None;
+    let mut devnet_mode = false;
+    let mut rpc_url: Option<String> = None;
+    let mut ipfs_api: Option<String> = None;
+    let mut ipfs_gateway: Option<String> = None;
+    let mut cache_dir: Option<PathBuf> = None;
     let mut no_build = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -386,13 +502,44 @@ fn parse_args() -> Result<Option<BundleConfig>> {
                 let value = args.next().ok_or_else(|| anyhow!("--bundle requires a path"))?;
                 bundle_dir = Some(PathBuf::from(value));
             }
+            "--devnet" => {
+                devnet_mode = true;
+                if let Some(next) = args.clone().next() {
+                    if !next.starts_with("--") {
+                        devnet_path = Some(PathBuf::from(args.next().unwrap()));
+                    }
+                }
+            }
+            "--rpc" => rpc_url = args.next(),
+            "--ipfs-api" => ipfs_api = args.next(),
+            "--ipfs-gateway" => ipfs_gateway = args.next(),
+            "--cache-dir" => cache_dir = args.next().map(PathBuf::from),
             "--no-build" => no_build = true,
             _ => {}
         }
     }
 
     let Some(source_dir) = bundle_dir else {
-        return Ok(None);
+        let launcher = if devnet_mode {
+            let default_devnet = PathBuf::from("contracts/.devnet/devnet.json");
+            let resolved = devnet_path.or_else(|| {
+                if default_devnet.exists() {
+                    Some(default_devnet)
+                } else {
+                    None
+                }
+            });
+            Some(LauncherConfig {
+                devnet_path: resolved,
+                rpc_url: rpc_url.unwrap_or_else(|| "http://127.0.0.1:8546".to_string()),
+                ipfs_api: ipfs_api.unwrap_or_else(|| "http://127.0.0.1:5001".to_string()),
+                ipfs_gateway: ipfs_gateway.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+                cache_dir: cache_dir.unwrap_or_else(|| PathBuf::from("client/.vibefi/cache")),
+            })
+        } else {
+            None
+        };
+        return Ok((None, launcher));
     };
     let source_dir = source_dir
         .canonicalize()
@@ -404,7 +551,26 @@ fn parse_args() -> Result<Option<BundleConfig>> {
         build_bundle(&source_dir, &dist_dir)?;
     }
 
-    Ok(Some(BundleConfig { source_dir, dist_dir }))
+    let launcher = if devnet_mode {
+        let default_devnet = PathBuf::from("contracts/.devnet/devnet.json");
+        let resolved = devnet_path.or_else(|| {
+            if default_devnet.exists() {
+                Some(default_devnet)
+            } else {
+                None
+            }
+        });
+        Some(LauncherConfig {
+            devnet_path: resolved,
+            rpc_url: rpc_url.unwrap_or_else(|| "http://127.0.0.1:8546".to_string()),
+            ipfs_api: ipfs_api.unwrap_or_else(|| "http://127.0.0.1:5001".to_string()),
+            ipfs_gateway: ipfs_gateway.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+            cache_dir: cache_dir.unwrap_or_else(|| PathBuf::from("client/.vibefi/cache")),
+        })
+    } else {
+        None
+    };
+    Ok((Some(BundleConfig { source_dir, dist_dir }), launcher))
 }
 
 fn verify_manifest(bundle_dir: &Path) -> Result<()> {
@@ -463,8 +629,502 @@ fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn load_devnet(path: &Path) -> Result<DevnetConfig> {
+    let raw = fs::read_to_string(path).context("read devnet.json")?;
+    let cfg: DevnetConfig = serde_json::from_str(&raw).context("parse devnet.json")?;
+    Ok(cfg)
+}
+
+fn is_rpc_passthrough(method: &str) -> bool {
+    matches!(
+        method,
+        "eth_blockNumber"
+            | "eth_getBlockByNumber"
+            | "eth_getBlockByHash"
+            | "eth_getBalance"
+            | "eth_getCode"
+            | "eth_getLogs"
+            | "eth_call"
+            | "eth_estimateGas"
+            | "eth_gasPrice"
+            | "eth_feeHistory"
+            | "eth_maxPriorityFeePerGas"
+            | "eth_getTransactionReceipt"
+            | "eth_getTransactionByHash"
+            | "eth_getStorageAt"
+            | "eth_getTransactionCount"
+    )
+}
+
+fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
+    let devnet = state.devnet.as_ref().ok_or_else(|| anyhow!("Devnet not configured"))?;
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": req.method,
+        "params": req.params,
+    });
+    let res = devnet
+        .http
+        .post(&devnet.rpc_url)
+        .json(&payload)
+        .send()
+        .context("rpc request failed")?;
+    let v: Value = res.json().context("rpc decode failed")?;
+    if let Some(err) = v.get("error") {
+        return Err(anyhow!("rpc error: {}", err));
+    }
+    Ok(v.get("result").cloned().unwrap_or(Value::Null))
+}
+
+fn handle_launcher_ipc(webview: &WebView, state: &AppState, req: &IpcRequest) -> Result<Value> {
+    let devnet = state.devnet.as_ref().ok_or_else(|| anyhow!("Devnet not enabled"))?;
+    match req.method.as_str() {
+        "vibefi_listDapps" => {
+            println!("launcher: fetching dapp list from logs");
+            let dapps = list_dapps(devnet)?;
+            Ok(serde_json::to_value(dapps)?)
+        }
+        "vibefi_launchDapp" => {
+            let root_cid = req
+                .params
+                .get(0)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("missing rootCid"))?;
+            println!("launcher: fetch bundle {root_cid}");
+            let bundle_dir = devnet.cache_dir.join(root_cid);
+            ensure_bundle_cached(devnet, root_cid, &bundle_dir)?;
+            println!("launcher: verify bundle manifest");
+            verify_manifest(&bundle_dir)?;
+            println!("launcher: verify CID via IPFS");
+            let computed = compute_ipfs_cid(&bundle_dir, &devnet.ipfs_api)?;
+            if computed != root_cid {
+                return Err(anyhow!("CID mismatch: expected {root_cid} got {computed}"));
+            }
+            let dist_dir = bundle_dir.join(".vibefi").join("dist");
+            if dist_dir.join("index.html").exists() {
+                println!("launcher: using cached build");
+            } else {
+                println!("launcher: build bundle");
+                build_bundle(&bundle_dir, &dist_dir)?;
+            }
+            {
+                let mut current = state.current_bundle.lock().unwrap();
+                *current = Some(dist_dir);
+            }
+            webview.evaluate_script("window.location = 'app://index.html';")?;
+            Ok(Value::Bool(true))
+        }
+        _ => Err(anyhow!("Unsupported launcher method: {}", req.method)),
+    }
+}
+
+fn ensure_bundle_cached(devnet: &DevnetContext, root_cid: &str, bundle_dir: &Path) -> Result<()> {
+    if bundle_dir.join("manifest.json").exists() {
+        return Ok(());
+    }
+    println!("launcher: download bundle from IPFS gateway");
+    fs::create_dir_all(bundle_dir).context("create cache dir")?;
+    let manifest = fetch_dapp_manifest(devnet, root_cid)?;
+    download_dapp_bundle(devnet, root_cid, bundle_dir, &manifest)?;
+    Ok(())
+}
+
+fn fetch_dapp_manifest(devnet: &DevnetContext, root_cid: &str) -> Result<BundleManifest> {
+    let gateway = normalize_gateway(&devnet.ipfs_gateway);
+    let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
+    let res = devnet.http.get(url).send().context("fetch manifest")?;
+    let manifest: BundleManifest = parse_json(res)?;
+    if manifest.files.is_empty() {
+        return Err(anyhow!("manifest.json missing files list"));
+    }
+    Ok(manifest)
+}
+
+fn download_dapp_bundle(
+    devnet: &DevnetContext,
+    root_cid: &str,
+    out_dir: &Path,
+    manifest: &BundleManifest,
+) -> Result<()> {
+    let gateway = normalize_gateway(&devnet.ipfs_gateway);
+    fs::write(
+        out_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(manifest)?,
+    )?;
+    for entry in &manifest.files {
+        let url = format!("{}/ipfs/{}/{}", gateway, root_cid, entry.path);
+        let res = devnet.http.get(url).send().context("fetch bundle file")?;
+        if !res.status().is_success() {
+            let text = res.text().unwrap_or_default();
+            return Err(anyhow!("bundle fetch failed: {}", text));
+        }
+        let bytes = res.bytes().context("read bundle file")?;
+        let dest = out_dir.join(&entry.path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(dest, &bytes)?;
+    }
+    Ok(())
+}
+
+fn compute_ipfs_cid(out_dir: &Path, ipfs_api: &str) -> Result<String> {
+    let files = walk_files(out_dir)?;
+    let mut form = Form::new();
+    for file in files {
+        let rel = file.strip_prefix(out_dir)?.to_string_lossy().replace('\\', "/");
+        let data = fs::read(&file)?;
+        let part = Part::bytes(data).file_name(rel);
+        form = form.part("file", part);
+    }
+    let url = format!("{}/api/v0/add", ipfs_api.trim_end_matches('/'));
+    let res = HttpClient::new()
+        .post(url)
+        .query(&[
+            ("recursive", "true"),
+            ("wrap-with-directory", "true"),
+            ("cid-version", "1"),
+            ("pin", "false"),
+            ("only-hash", "true"),
+        ])
+        .multipart(form)
+        .send()
+        .context("ipfs add failed")?;
+    let body = res.text().context("read ipfs response")?;
+    let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return Err(anyhow!("IPFS add returned empty response"));
+    }
+    let last = lines[lines.len() - 1];
+    let json: Value = serde_json::from_str(last).context("parse ipfs response")?;
+    if let Some(hash) = json.get("Hash").and_then(|v| v.as_str()) {
+        return Ok(hash.to_string());
+    }
+    if let Some(hash) = json.get("Cid").and_then(|v| v.get("/")).and_then(|v| v.as_str()) {
+        return Ok(hash.to_string());
+    }
+    Err(anyhow!("IPFS add response missing CID"))
+}
+
+fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == "node_modules" || name == ".git" || name == ".vibefi" {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            out.extend(walk_files(&path)?);
+        } else if entry.file_type()?.is_file() {
+            out.push(path);
+        }
+    }
+    Ok(out)
+}
+
+fn normalize_gateway(gateway: &str) -> String {
+    gateway.trim_end_matches('/').to_string()
+}
+
+fn parse_json<T: for<'de> Deserialize<'de>>(res: HttpResponse) -> Result<T> {
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().unwrap_or_default();
+        return Err(anyhow!("HTTP {} {}", status, text));
+    }
+    Ok(res.json()?)
+}
+
+sol! {
+    event DappPublished(uint256 indexed dappId, uint256 indexed versionId, bytes rootCid, address proposer);
+    event DappUpgraded(
+        uint256 indexed dappId,
+        uint256 indexed fromVersionId,
+        uint256 indexed toVersionId,
+        bytes rootCid,
+        address proposer
+    );
+    event DappMetadata(uint256 indexed dappId, uint256 indexed versionId, string name, string version, string description);
+    event DappPaused(uint256 indexed dappId, uint256 indexed versionId, address pausedBy, string reason);
+    event DappUnpaused(uint256 indexed dappId, uint256 indexed versionId, address unpausedBy, string reason);
+    event DappDeprecated(uint256 indexed dappId, uint256 indexed versionId, address deprecatedBy, string reason);
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcLog {
+    address: String,
+    data: String,
+    topics: Vec<String>,
+    #[serde(default)]
+    blockNumber: Option<String>,
+    #[serde(default)]
+    logIndex: Option<String>,
+}
+
+fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
+    if devnet.config.dappRegistry.is_empty() {
+        return Err(anyhow!("devnet.json missing dappRegistry"));
+    }
+    let address = devnet.config.dappRegistry.clone();
+    let published = rpc_get_logs(devnet, &address, DappPublished::SIGNATURE_HASH)?;
+    let upgraded = rpc_get_logs(devnet, &address, DappUpgraded::SIGNATURE_HASH)?;
+    let metadata = rpc_get_logs(devnet, &address, DappMetadata::SIGNATURE_HASH)?;
+    let paused = rpc_get_logs(devnet, &address, DappPaused::SIGNATURE_HASH)?;
+    let unpaused = rpc_get_logs(devnet, &address, DappUnpaused::SIGNATURE_HASH)?;
+    let deprecated = rpc_get_logs(devnet, &address, DappDeprecated::SIGNATURE_HASH)?;
+
+    let mut all = Vec::new();
+    all.extend(published);
+    all.extend(upgraded);
+    all.extend(metadata);
+    all.extend(paused);
+    all.extend(unpaused);
+    all.extend(deprecated);
+    all.sort_by(|a, b| {
+        let block_diff = a.block_number.cmp(&b.block_number);
+        if block_diff != std::cmp::Ordering::Equal {
+            return block_diff;
+        }
+        a.log_index.cmp(&b.log_index)
+    });
+
+    #[derive(Debug)]
+    struct Version {
+        version_id: u64,
+        root_cid: Option<String>,
+        name: Option<String>,
+        version: Option<String>,
+        description: Option<String>,
+        status: Option<String>,
+    }
+    #[derive(Debug)]
+    struct Dapp {
+        dapp_id: u64,
+        latest_version_id: u64,
+        versions: HashMap<u64, Version>,
+    }
+
+    let mut dapps: HashMap<u64, Dapp> = HashMap::new();
+    let mut get_version = |dapp_id: u64, version_id: u64| {
+        let dapp = dapps.entry(dapp_id).or_insert_with(|| Dapp {
+            dapp_id,
+            latest_version_id: 0,
+            versions: HashMap::new(),
+        });
+        let v = dapp.versions.entry(version_id).or_insert_with(|| Version {
+            version_id,
+            root_cid: None,
+            name: None,
+            version: None,
+            description: None,
+            status: None,
+        });
+        (dapp, v)
+    };
+
+    for log in all {
+        match log.kind.as_str() {
+            "DappPublished" => {
+                let decoded = DappPublished::decode_log(&log.log)?;
+                let dapp_id = u256_to_u64(decoded.data.dappId)?;
+                let version_id = u256_to_u64(decoded.data.versionId)?;
+                let root = bytes_to_string(&decoded.data.rootCid);
+                let (dapp, v) = get_version(dapp_id, version_id);
+                v.root_cid = Some(root);
+                v.status = Some("Published".to_string());
+                dapp.latest_version_id = version_id;
+            }
+            "DappUpgraded" => {
+                let decoded = DappUpgraded::decode_log(&log.log)?;
+                let dapp_id = u256_to_u64(decoded.data.dappId)?;
+                let version_id = u256_to_u64(decoded.data.toVersionId)?;
+                let root = bytes_to_string(&decoded.data.rootCid);
+                let (dapp, v) = get_version(dapp_id, version_id);
+                v.root_cid = Some(root);
+                v.status = Some("Published".to_string());
+                dapp.latest_version_id = version_id;
+            }
+            "DappMetadata" => {
+                let decoded = DappMetadata::decode_log(&log.log)?;
+                let dapp_id = u256_to_u64(decoded.data.dappId)?;
+                let version_id = u256_to_u64(decoded.data.versionId)?;
+                let (_, v) = get_version(dapp_id, version_id);
+                v.name = Some(decoded.data.name.to_string());
+                v.version = Some(decoded.data.version.to_string());
+                v.description = Some(decoded.data.description.to_string());
+            }
+            "DappPaused" => {
+                let decoded = DappPaused::decode_log(&log.log)?;
+                let dapp_id = u256_to_u64(decoded.data.dappId)?;
+                let version_id = u256_to_u64(decoded.data.versionId)?;
+                let (_, v) = get_version(dapp_id, version_id);
+                v.status = Some("Paused".to_string());
+            }
+            "DappUnpaused" => {
+                let decoded = DappUnpaused::decode_log(&log.log)?;
+                let dapp_id = u256_to_u64(decoded.data.dappId)?;
+                let version_id = u256_to_u64(decoded.data.versionId)?;
+                let (_, v) = get_version(dapp_id, version_id);
+                v.status = Some("Published".to_string());
+            }
+            "DappDeprecated" => {
+                let decoded = DappDeprecated::decode_log(&log.log)?;
+                let dapp_id = u256_to_u64(decoded.data.dappId)?;
+                let version_id = u256_to_u64(decoded.data.versionId)?;
+                let (_, v) = get_version(dapp_id, version_id);
+                v.status = Some("Deprecated".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    let mut result = Vec::new();
+    let mut keys: Vec<u64> = dapps.keys().cloned().collect();
+    keys.sort_unstable();
+    for key in keys {
+        if let Some(dapp) = dapps.get(&key) {
+            let latest = dapp.versions.get(&dapp.latest_version_id);
+            result.push(DappInfo {
+                dappId: dapp.dapp_id.to_string(),
+                versionId: dapp.latest_version_id.to_string(),
+                name: latest.and_then(|v| v.name.clone()).unwrap_or_default(),
+                version: latest.and_then(|v| v.version.clone()).unwrap_or_default(),
+                description: latest.and_then(|v| v.description.clone()).unwrap_or_default(),
+                status: latest.and_then(|v| v.status.clone()).unwrap_or_else(|| "Unknown".to_string()),
+                rootCid: latest.and_then(|v| v.root_cid.clone()).unwrap_or_default(),
+            });
+        }
+    }
+    Ok(result)
+}
+
+struct LogEntry {
+    block_number: u64,
+    log_index: u64,
+    kind: String,
+    log: Log,
+}
+
+fn rpc_get_logs(devnet: &DevnetContext, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
+    let topics = vec![format!("0x{}", hex::encode(topic0))];
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getLogs",
+        "params": [{
+            "address": address,
+            "topics": topics,
+            "fromBlock": "0x0",
+            "toBlock": "latest"
+        }]
+    });
+    let res = devnet
+        .http
+        .post(&devnet.rpc_url)
+        .json(&payload)
+        .send()
+        .context("rpc getLogs failed")?;
+    let v: Value = res.json().context("rpc getLogs decode failed")?;
+    if let Some(err) = v.get("error") {
+        return Err(anyhow!("rpc getLogs error: {}", err));
+    }
+    let logs_val = v.get("result").cloned().unwrap_or(Value::Array(Vec::new()));
+    let logs: Vec<RpcLog> = serde_json::from_value(logs_val)?;
+    let mut out = Vec::new();
+    for log in logs {
+        let log_entry = rpc_log_to_entry(log, address)?;
+        out.push(log_entry);
+    }
+    Ok(out)
+}
+
+fn rpc_log_to_entry(rpc_log: RpcLog, _address: &str) -> Result<LogEntry> {
+    let address = Address::from_str(&rpc_log.address)?;
+    let mut topics = Vec::new();
+    for topic in rpc_log.topics {
+        topics.push(hex_to_b256(&topic)?);
+    }
+    let data = hex_to_bytes(&rpc_log.data)?;
+    let log = Log::new_unchecked(address, topics, data);
+    let kind = event_kind(&log)?;
+    Ok(LogEntry {
+        block_number: parse_hex_u64_opt(rpc_log.blockNumber.as_deref()).unwrap_or(0),
+        log_index: parse_hex_u64_opt(rpc_log.logIndex.as_deref()).unwrap_or(0),
+        kind,
+        log,
+    })
+}
+
+fn event_kind(log: &Log) -> Result<String> {
+    let topics = log.topics();
+    if topics.is_empty() {
+        return Err(anyhow!("log missing topics"));
+    }
+    let topic0 = topics[0];
+    if topic0 == DappPublished::SIGNATURE_HASH {
+        Ok("DappPublished".to_string())
+    } else if topic0 == DappUpgraded::SIGNATURE_HASH {
+        Ok("DappUpgraded".to_string())
+    } else if topic0 == DappMetadata::SIGNATURE_HASH {
+        Ok("DappMetadata".to_string())
+    } else if topic0 == DappPaused::SIGNATURE_HASH {
+        Ok("DappPaused".to_string())
+    } else if topic0 == DappUnpaused::SIGNATURE_HASH {
+        Ok("DappUnpaused".to_string())
+    } else if topic0 == DappDeprecated::SIGNATURE_HASH {
+        Ok("DappDeprecated".to_string())
+    } else {
+        Err(anyhow!("unknown event signature"))
+    }
+}
+
+fn bytes_to_string(bytes: &Bytes) -> String {
+    let mut out = bytes.to_vec();
+    while out.last() == Some(&0) {
+        out.pop();
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn hex_to_b256(s: &str) -> Result<B256> {
+    let bytes = hex_to_vec(s)?;
+    if bytes.len() != 32 {
+        return Err(anyhow!("invalid topic length"));
+    }
+    Ok(B256::from_slice(&bytes))
+}
+
+fn hex_to_bytes(s: &str) -> Result<Bytes> {
+    Ok(Bytes::from(hex_to_vec(s)?))
+}
+
+fn hex_to_vec(s: &str) -> Result<Vec<u8>> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    Ok(hex::decode(s)?)
+}
+
+fn parse_hex_u64_opt(s: Option<&str>) -> Option<u64> {
+    s.and_then(|v| parse_hex_u64(v))
+}
+
+fn u256_to_u64(value: U256) -> Result<u64> {
+    value.try_into().map_err(|_| anyhow!("u256 out of range"))
+}
+
 fn handle_ipc(webview: &WebView, state: &AppState, msg: String) -> Result<()> {
     let req: IpcRequest = serde_json::from_str(&msg).context("invalid IPC JSON")?;
+    if matches!(req.provider_id.as_deref(), Some("vibefi-launcher")) {
+        let result = handle_launcher_ipc(webview, state, &req);
+        match result {
+            Ok(v) => respond_ok(webview, req.id, v)?,
+            Err(e) => respond_err(webview, req.id, &e.to_string())?,
+        }
+        return Ok(());
+    }
 
     // Dispatch EIP-1193 methods.
     let result = match req.method.as_str() {
@@ -605,7 +1265,13 @@ fn handle_ipc(webview: &WebView, state: &AppState, msg: String) -> Result<()> {
             Ok(serde_json::to_value(info)?)
         }
 
-        _ => Err(anyhow!("Unsupported method: {}", req.method)),
+        _ => {
+            if state.devnet.is_some() && is_rpc_passthrough(req.method.as_str()) {
+                proxy_rpc(state, &req)
+            } else {
+                Err(anyhow!("Unsupported method: {}", req.method))
+            }
+        }
     };
 
     match result {
