@@ -14,6 +14,20 @@ This is a minimal example of:
 cargo run
 ```
 
+Linux build deps (Ubuntu/Debian):
+
+```bash
+./scripts/install-deps-ubuntu.sh
+```
+
+Run a bundled dapp (expects `manifest.json` in the bundle directory):
+
+```bash
+cargo run -- --bundle /path/to/bundle
+```
+
+The bundle build step uses `bun` and `vite` from the bundle's `package.json`.
+
 ## What is sandboxed?
 
 - The WebView only allows navigation to `app://...` and `about:blank`.
