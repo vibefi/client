@@ -92,6 +92,10 @@ impl AppState {
         self.signer.address()
     }
 
+    fn get_address(&self) -> String {
+        format!("{:?}", self.signer.address())
+    }
+
     fn chain_id_hex(&self) -> String {
         let chain_id = self.wallet.lock().unwrap().chain.chain_id;
         format!("0x{:x}", chain_id)
@@ -234,6 +238,7 @@ struct BundleManifestFile {
 #[derive(Debug, Deserialize, Clone)]
 struct DevnetConfig {
     chainId: u64,
+    deployBlock: Option<u64>,
     dappRegistry: String,
     developerPrivateKey: Option<String>,
 }
@@ -299,6 +304,7 @@ fn main() -> Result<()> {
         devnet: launcher.as_ref().map(|cfg| DevnetContext {
             config: devnet.clone().unwrap_or(DevnetConfig {
                 chainId: 31337,
+                deployBlock: None,
                 dappRegistry: String::new(),
                 developerPrivateKey: None,
             }),
@@ -712,6 +718,7 @@ fn is_rpc_passthrough(method: &str) -> bool {
             | "eth_getTransactionByHash"
             | "eth_getStorageAt"
             | "eth_getTransactionCount"
+            | "eth_sendRawTransaction"
     )
 }
 
@@ -723,6 +730,10 @@ fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         "method": req.method,
         "params": req.params,
     });
+
+    // Log RPC request
+    println!("[RPC] -> {} params={}", req.method, serde_json::to_string(&req.params).unwrap_or_default());
+
     let res = devnet
         .http
         .post(&devnet.rpc_url)
@@ -730,9 +741,19 @@ fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         .send()
         .context("rpc request failed")?;
     let v: Value = res.json().context("rpc decode failed")?;
+
+    // Log RPC response (truncate if too long)
+    let result_str = v.get("result").map(|r| {
+        let s = r.to_string();
+        if s.len() > 200 { format!("{}...", &s[..200]) } else { s }
+    }).unwrap_or_else(|| "null".to_string());
+
     if let Some(err) = v.get("error") {
+        println!("[RPC] <- {} ERROR: {}", req.method, err);
         return Err(anyhow!("rpc error: {}", err));
     }
+
+    println!("[RPC] <- {} result={}", req.method, result_str);
     Ok(v.get("result").cloned().unwrap_or(Value::Null))
 }
 
@@ -1084,6 +1105,11 @@ struct LogEntry {
 
 fn rpc_get_logs(devnet: &DevnetContext, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
     let topics = vec![format!("0x{}", hex::encode(topic0))];
+    let from_block = devnet
+        .config
+        .deployBlock
+        .map(|b| format!("0x{:x}", b))
+        .unwrap_or_else(|| "0x0".to_string());
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1091,7 +1117,7 @@ fn rpc_get_logs(devnet: &DevnetContext, address: &str, topic0: B256) -> Result<V
         "params": [{
             "address": address,
             "topics": topics,
-            "fromBlock": "0x0",
+            "fromBlock": from_block,
             "toBlock": "latest"
         }]
     });
@@ -1302,7 +1328,8 @@ fn handle_ipc(webview: &WebView, state: &AppState, msg: String) -> Result<()> {
         }
 
         // eth_sendTransaction: params [txObject]
-        // Demo signs a "transaction-like" digest and returns a fake tx hash (no network).
+        // If devnet is configured, proxy to anvil (which has accounts unlocked).
+        // Otherwise use a demo signing mode that returns a fake tx hash.
         "eth_sendTransaction" => {
             let ws = state.wallet.lock().unwrap();
             if !ws.authorized {
@@ -1310,23 +1337,49 @@ fn handle_ipc(webview: &WebView, state: &AppState, msg: String) -> Result<()> {
             }
             drop(ws);
 
-            let tx_obj = req
-                .params
-                .get(0)
-                .cloned()
-                .ok_or_else(|| anyhow!("invalid params for eth_sendTransaction"))?;
+            // If devnet is configured, proxy to anvil for real transaction execution
+            if state.devnet.is_some() {
+                // Ensure from address is set to our wallet address
+                let mut tx_obj = req
+                    .params
+                    .get(0)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("invalid params for eth_sendTransaction"))?;
 
-            // Hash the canonical JSON as a stand-in.
-            let canonical = serde_json::to_vec(&tx_obj).context("tx json encode")?;
-            let digest = alloy_primitives::keccak256(&canonical);
-            let sig = state
-                .signer
-                .sign_hash_sync(&B256::from(digest))
-                .context("sign_hash failed")?;
+                // Set from address if not present
+                if tx_obj.get("from").is_none() {
+                    if let Some(obj) = tx_obj.as_object_mut() {
+                        obj.insert("from".to_string(), Value::String(state.get_address()));
+                    }
+                }
 
-            // Produce a stable "tx hash" = keccak256(signature bytes)
-            let tx_hash = alloy_primitives::keccak256(sig.as_bytes());
-            Ok(Value::String(format!("0x{}", hex::encode(tx_hash))))
+                // Create modified request with updated params
+                let modified_req = IpcRequest {
+                    id: req.id,
+                    provider_id: req.provider_id.clone(),
+                    method: req.method.clone(),
+                    params: Value::Array(vec![tx_obj]),
+                };
+
+                proxy_rpc(state, &modified_req)
+            } else {
+                // Fallback: demo mode - hash the tx and return fake hash (no network)
+                let tx_obj = req
+                    .params
+                    .get(0)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("invalid params for eth_sendTransaction"))?;
+
+                let canonical = serde_json::to_vec(&tx_obj).context("tx json encode")?;
+                let digest = alloy_primitives::keccak256(&canonical);
+                let sig = state
+                    .signer
+                    .sign_hash_sync(&B256::from(digest))
+                    .context("sign_hash failed")?;
+
+                let tx_hash = alloy_primitives::keccak256(sig.as_bytes());
+                Ok(Value::String(format!("0x{}", hex::encode(tx_hash))))
+            }
         }
 
         // EIP-1193 provider info (non-standard but useful)
