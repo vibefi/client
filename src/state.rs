@@ -6,8 +6,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use tao::event_loop::EventLoopProxy;
+
 use crate::devnet::DevnetContext;
-use crate::walletconnect::WalletConnectBridge;
+use crate::walletconnect::{WalletConnectBridge, WalletConnectSession};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Chain {
@@ -35,6 +37,11 @@ pub struct IpcRequest {
 #[derive(Debug, Clone)]
 pub enum UserEvent {
     Ipc(String),
+    WalletConnectOverlay { uri: String, qr_svg: String },
+    WalletConnectResult {
+        ipc_id: u64,
+        result: Result<WalletConnectSession, String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +77,7 @@ pub struct AppState {
     pub walletconnect: Option<Arc<Mutex<WalletConnectBridge>>>,
     pub devnet: Option<DevnetContext>,
     pub current_bundle: Arc<Mutex<Option<PathBuf>>>,
+    pub proxy: EventLoopProxy<UserEvent>,
 }
 
 impl AppState {

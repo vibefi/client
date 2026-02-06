@@ -25,7 +25,7 @@ use reqwest::blocking::Client as HttpClient;
 
 use bundle::{build_bundle, verify_manifest, BundleConfig};
 use devnet::{load_devnet, DevnetConfig, DevnetContext};
-use ipc::handle_ipc;
+use ipc::{handle_ipc, handle_walletconnect_connect_result, show_walletconnect_pairing_overlay};
 use state::{AppState, Chain, LauncherConfig, UserEvent, WalletBackend, WalletState};
 use walletconnect::{WalletConnectBridge, WalletConnectConfig};
 use webview::build_webview;
@@ -93,6 +93,19 @@ fn main() -> Result<()> {
             1
         }
     });
+    // --- Window + event loop ---
+    let mut event_loop = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
+    #[cfg(target_os = "macos")]
+    {
+        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+
+        event_loop.set_activation_policy(ActivationPolicy::Regular);
+        event_loop.set_dock_visibility(true);
+        event_loop.set_activate_ignoring_other_apps(true);
+        menu::setup_macos_app_menu("Wry EIP-1193 demo");
+    }
+    let proxy = event_loop.create_proxy();
+
     let state = AppState {
         wallet: Arc::new(Mutex::new(WalletState {
             authorized: false,
@@ -119,20 +132,8 @@ fn main() -> Result<()> {
             http: HttpClient::new(),
         }),
         current_bundle: Arc::new(Mutex::new(bundle.as_ref().map(|cfg| cfg.dist_dir.clone()))),
+        proxy: proxy.clone(),
     };
-
-    // --- Window + event loop ---
-    let mut event_loop = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
-    #[cfg(target_os = "macos")]
-    {
-        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
-
-        event_loop.set_activation_policy(ActivationPolicy::Regular);
-        event_loop.set_dock_visibility(true);
-        event_loop.set_activate_ignoring_other_apps(true);
-        menu::setup_macos_app_menu("Wry EIP-1193 demo");
-    }
-    let proxy = event_loop.create_proxy();
     let mut webview: Option<wry::WebView> = None;
     let mut window: Option<tao::window::Window> = None;
 
@@ -144,6 +145,25 @@ fn main() -> Result<()> {
                     if let Err(e) = handle_ipc(webview, &state, msg) {
                         eprintln!("ipc error: {e:?}");
                     }
+                }
+            }
+            Event::UserEvent(UserEvent::WalletConnectOverlay { uri, qr_svg }) => {
+                if let Some(webview) = webview.as_ref() {
+                    show_walletconnect_pairing_overlay(webview, &uri, &qr_svg);
+                    let payload = serde_json::json!({
+                        "type": "walletconnect_uri",
+                        "data": uri,
+                        "qrSvg": qr_svg
+                    });
+                    let js = format!("window.__WryEthereumEmit('message', {});", payload);
+                    if let Err(err) = webview.evaluate_script(&js) {
+                        eprintln!("[walletconnect] failed to emit message event: {err}");
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::WalletConnectResult { ipc_id, result }) => {
+                if let Some(webview) = webview.as_ref() {
+                    handle_walletconnect_connect_result(webview, &state, ipc_id, result);
                 }
             }
 

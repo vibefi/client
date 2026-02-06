@@ -5,8 +5,8 @@ use serde_json::Value;
 use wry::WebView;
 
 use crate::devnet::handle_launcher_ipc;
-use crate::state::{AppState, IpcRequest, ProviderInfo, WalletBackend};
-use crate::walletconnect::HelperEvent;
+use crate::state::{AppState, IpcRequest, ProviderInfo, UserEvent, WalletBackend};
+use crate::walletconnect::{HelperEvent, WalletConnectSession};
 
 pub fn handle_ipc(webview: &WebView, state: &AppState, msg: String) -> Result<()> {
     let req: IpcRequest = serde_json::from_str(&msg).context("invalid IPC JSON")?;
@@ -20,12 +20,13 @@ pub fn handle_ipc(webview: &WebView, state: &AppState, msg: String) -> Result<()
     }
 
     let result = match state.wallet_backend {
-        WalletBackend::Local => handle_local_ipc(webview, state, &req),
+        WalletBackend::Local => handle_local_ipc(webview, state, &req).map(Some),
         WalletBackend::WalletConnect => handle_walletconnect_ipc(webview, state, &req),
     };
 
     match result {
-        Ok(v) => respond_ok(webview, req.id, v)?,
+        Ok(Some(v)) => respond_ok(webview, req.id, v)?,
+        Ok(None) => { /* response will be sent later via UserEvent */ }
         Err(e) => respond_err(webview, req.id, &e.to_string())?,
     }
 
@@ -187,10 +188,10 @@ fn handle_local_ipc(webview: &WebView, state: &AppState, req: &IpcRequest) -> Re
 }
 
 fn handle_walletconnect_ipc(
-    webview: &WebView,
+    _webview: &WebView,
     state: &AppState,
     req: &IpcRequest,
-) -> Result<Value> {
+) -> Result<Option<Value>> {
     match req.method.as_str() {
         "eth_requestAccounts" => {
             let chain_id = state.wallet.lock().unwrap().chain.chain_id;
@@ -201,39 +202,37 @@ fn handle_walletconnect_ipc(
             let bridge = state
                 .walletconnect
                 .as_ref()
-                .ok_or_else(|| anyhow!("walletconnect bridge unavailable"))?;
-            let mut bridge = bridge.lock().unwrap();
-            let session = bridge.connect_with_event_handler(chain_id, |event| {
-                apply_walletconnect_event(webview, state, event);
-            })?;
-            drop(bridge);
+                .ok_or_else(|| anyhow!("walletconnect bridge unavailable"))?
+                .clone();
+            let proxy = state.proxy.clone();
+            let ipc_id = req.id;
 
-            let accounts = session
-                .accounts
-                .iter()
-                .map(|a| Value::String(a.clone()))
-                .collect::<Vec<_>>();
-            let chain_id = parse_hex_u64(&session.chain_id_hex).unwrap_or(chain_id);
-            {
-                let mut ws = state.wallet.lock().unwrap();
-                ws.authorized = !session.accounts.is_empty();
-                ws.account = session.accounts.first().cloned();
-                ws.chain.chain_id = chain_id;
-                ws.walletconnect_uri = None;
-            }
-            if !session.accounts.is_empty() {
-                emit_accounts_changed(webview, session.accounts.clone());
-            }
-            emit_chain_changed(webview, session.chain_id_hex);
-            eprintln!(
-                "[walletconnect] eth_requestAccounts resolved ({} account(s))",
-                session.accounts.len()
-            );
-            Ok(Value::Array(accounts))
+            std::thread::spawn(move || {
+                let result = {
+                    let mut bridge = bridge.lock().unwrap();
+                    let proxy_for_events = proxy.clone();
+                    bridge.connect_with_event_handler(chain_id, move |event| {
+                        if event.event == "display_uri" {
+                            if let Some(uri) = event.uri.clone() {
+                                let qr_svg = event.qr_svg.clone().unwrap_or_default();
+                                let _ = proxy_for_events
+                                    .send_event(UserEvent::WalletConnectOverlay { uri, qr_svg });
+                            }
+                        }
+                    })
+                };
+                let mapped = result.map_err(|e| e.to_string());
+                let _ = proxy.send_event(UserEvent::WalletConnectResult {
+                    ipc_id,
+                    result: mapped,
+                });
+            });
+
+            Ok(None)
         }
         "eth_accounts" => {
             let value =
-                walletconnect_request(webview, state, req.method.as_str(), req.params.clone())?;
+                walletconnect_request(_webview, state, req.method.as_str(), req.params.clone())?;
             let accounts = if let Some(arr) = value.as_array() {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(str::to_string))
@@ -244,29 +243,29 @@ fn handle_walletconnect_ipc(
             let mut ws = state.wallet.lock().unwrap();
             ws.authorized = !accounts.is_empty();
             ws.account = accounts.first().cloned();
-            Ok(value)
+            Ok(Some(value))
         }
         "eth_chainId" => {
             let value =
-                walletconnect_request(webview, state, req.method.as_str(), req.params.clone())?;
+                walletconnect_request(_webview, state, req.method.as_str(), req.params.clone())?;
             if let Some(chain_hex) = value.as_str() {
                 if let Some(chain_id) = parse_hex_u64(chain_hex) {
                     let mut ws = state.wallet.lock().unwrap();
                     ws.chain.chain_id = chain_id;
                 }
             }
-            Ok(value)
+            Ok(Some(value))
         }
         "net_version" => {
             let chain_hex =
-                walletconnect_request(webview, state, "eth_chainId", Value::Array(vec![]))?;
+                walletconnect_request(_webview, state, "eth_chainId", Value::Array(vec![]))?;
             let chain_hex = chain_hex.as_str().unwrap_or("0x1");
             let chain_id = parse_hex_u64(chain_hex).unwrap_or(1);
             {
                 let mut ws = state.wallet.lock().unwrap();
                 ws.chain.chain_id = chain_id;
             }
-            Ok(Value::String(chain_id.to_string()))
+            Ok(Some(Value::String(chain_id.to_string())))
         }
         "wallet_getProviderInfo" => {
             let ws = state.wallet.lock().unwrap();
@@ -277,11 +276,11 @@ fn handle_walletconnect_ipc(
                 account: ws.account.clone(),
                 walletconnect_uri: ws.walletconnect_uri.clone(),
             };
-            Ok(serde_json::to_value(info)?)
+            Ok(Some(serde_json::to_value(info)?))
         }
         "wallet_switchEthereumChain" => {
             let value =
-                walletconnect_request(webview, state, req.method.as_str(), req.params.clone())?;
+                walletconnect_request(_webview, state, req.method.as_str(), req.params.clone())?;
             let chain_id_hex = req
                 .params
                 .get(0)
@@ -291,11 +290,12 @@ fn handle_walletconnect_ipc(
             if let Some(chain_id) = parse_hex_u64(chain_id_hex) {
                 let mut ws = state.wallet.lock().unwrap();
                 ws.chain.chain_id = chain_id;
-                emit_chain_changed(webview, format!("0x{:x}", chain_id));
+                emit_chain_changed(_webview, format!("0x{:x}", chain_id));
             }
-            Ok(value)
+            Ok(Some(value))
         }
-        _ => walletconnect_request(webview, state, req.method.as_str(), req.params.clone()),
+        _ => walletconnect_request(_webview, state, req.method.as_str(), req.params.clone())
+            .map(Some),
     }
 }
 
@@ -327,15 +327,17 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
     match event.event.as_str() {
         "display_uri" => {
             if let Some(uri) = event.uri.clone() {
+                let qr_svg = event.qr_svg.clone().unwrap_or_default();
                 println!("[WalletConnect] pairing uri: {uri}");
                 {
                     let mut ws = state.wallet.lock().unwrap();
                     ws.walletconnect_uri = Some(uri.clone());
                 }
-                show_walletconnect_pairing_overlay(webview, &uri);
+                show_walletconnect_pairing_overlay(webview, &uri, &qr_svg);
                 let payload = serde_json::json!({
                     "type": "walletconnect_uri",
-                    "data": uri
+                    "data": uri,
+                    "qrSvg": qr_svg
                 });
                 let js = format!("window.__WryEthereumEmit('message', {});", payload);
                 if let Err(err) = webview.evaluate_script(&js) {
@@ -376,7 +378,7 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
     }
 }
 
-fn show_walletconnect_pairing_overlay(webview: &WebView, uri: &str) {
+pub fn show_walletconnect_pairing_overlay(webview: &WebView, uri: &str, qr_svg: &str) {
     let uri_json = match serde_json::to_string(uri) {
         Ok(v) => v,
         Err(err) => {
@@ -384,10 +386,12 @@ fn show_walletconnect_pairing_overlay(webview: &WebView, uri: &str) {
             return;
         }
     };
+    let qr_svg_json = serde_json::to_string(qr_svg).unwrap_or_else(|_| "\"\"".to_string());
     let js = format!(
         r#"(function() {{
   try {{
     var uri = {uri_json};
+    var qrSvg = {qr_svg_json};
     var panel = document.getElementById('__vibefi_wc_overlay');
     if (!panel) {{
       panel = document.createElement('div');
@@ -474,14 +478,23 @@ fn show_walletconnect_pairing_overlay(webview: &WebView, uri: &str) {
       }});
       footer.appendChild(copyBtn);
 
+      var qrDiv = document.createElement('div');
+      qrDiv.id = '__vibefi_wc_qr';
+      qrDiv.style.display = 'flex';
+      qrDiv.style.justifyContent = 'center';
+      qrDiv.style.marginBottom = '8px';
+
       panel.appendChild(header);
       panel.appendChild(description);
+      panel.appendChild(qrDiv);
       panel.appendChild(area);
       panel.appendChild(footer);
       document.documentElement.appendChild(panel);
     }}
     var uriArea = document.getElementById('__vibefi_wc_uri');
     if (uriArea) uriArea.value = uri;
+    var qrEl = document.getElementById('__vibefi_wc_qr');
+    if (qrEl && qrSvg) qrEl.innerHTML = qrSvg;
     panel.style.display = 'block';
   }} catch (err) {{
     console.error('vibefi wc overlay error', err);
@@ -501,6 +514,51 @@ fn hide_walletconnect_pairing_overlay(webview: &WebView) {
 })();"#;
     if let Err(err) = webview.evaluate_script(js) {
         eprintln!("[walletconnect] failed to hide pairing overlay: {err}");
+    }
+}
+
+pub fn handle_walletconnect_connect_result(
+    webview: &WebView,
+    state: &AppState,
+    ipc_id: u64,
+    result: Result<WalletConnectSession, String>,
+) {
+    match result {
+        Ok(session) => {
+            let chain_id = parse_hex_u64(&session.chain_id_hex)
+                .unwrap_or(state.wallet.lock().unwrap().chain.chain_id);
+            let accounts = session
+                .accounts
+                .iter()
+                .map(|a| Value::String(a.clone()))
+                .collect::<Vec<_>>();
+            {
+                let mut ws = state.wallet.lock().unwrap();
+                ws.authorized = !session.accounts.is_empty();
+                ws.account = session.accounts.first().cloned();
+                ws.chain.chain_id = chain_id;
+                ws.walletconnect_uri = None;
+            }
+            if !session.accounts.is_empty() {
+                emit_accounts_changed(webview, session.accounts.clone());
+            }
+            emit_chain_changed(webview, session.chain_id_hex.clone());
+            hide_walletconnect_pairing_overlay(webview);
+            eprintln!(
+                "[walletconnect] eth_requestAccounts resolved ({} account(s))",
+                session.accounts.len()
+            );
+            if let Err(e) = respond_ok(webview, ipc_id, Value::Array(accounts)) {
+                eprintln!("[walletconnect] failed to send ok response: {e}");
+            }
+        }
+        Err(msg) => {
+            hide_walletconnect_pairing_overlay(webview);
+            eprintln!("[walletconnect] eth_requestAccounts failed: {msg}");
+            if let Err(e) = respond_err(webview, ipc_id, &msg) {
+                eprintln!("[walletconnect] failed to send error response: {e}");
+            }
+        }
     }
 }
 

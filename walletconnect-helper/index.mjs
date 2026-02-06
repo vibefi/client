@@ -3,6 +3,7 @@
 import process from "node:process";
 import readline from "node:readline";
 import { EthereumProvider } from "@walletconnect/ethereum-provider";
+import QRCode from "qrcode";
 
 const projectId = process.env.VIBEFI_WC_PROJECT_ID || process.env.WC_PROJECT_ID || "";
 const relayUrl = process.env.VIBEFI_WC_RELAY_URL || process.env.WC_RELAY_URL || undefined;
@@ -11,6 +12,51 @@ const metadataUrl = process.env.VIBEFI_WC_METADATA_URL || "https://vibefi.local"
 const metadataDesc = process.env.VIBEFI_WC_METADATA_DESC || "VibeFi desktop WalletConnect bridge";
 const metadataIcon = process.env.VIBEFI_WC_METADATA_ICON || "";
 const connectTimeoutMs = Number.parseInt(process.env.VIBEFI_WC_CONNECT_TIMEOUT_MS || "180000", 10);
+
+// The WalletConnect SDK throws unhandled exceptions for several internal issues:
+// - chainChanged fires before rpcProviders are populated (TypeError: setDefaultChain)
+// - stale session topics from previous pairings (No matching key / session topic doesn't exist)
+// These are non-fatal SDK bugs that shouldn't crash the helper process.
+const WC_SDK_ERROR_PATTERNS = [
+  /No matching key/,
+  /session topic doesn't exist/,
+  /isValidSessionTopic/,
+];
+// WC SDK fires internal async calls (chainChanged → setDefaultChain, switchEthereumChain,
+// request) before rpcProviders are populated. These all manifest as TypeErrors from within
+// the SDK's own call stack, not from our code.
+const WC_SDK_STACK_MARKERS = [
+  "@walletconnect/universal-provider",
+  "@walletconnect/ethereum-provider",
+  "@walletconnect/sign-client",
+];
+function isWcSdkError(err) {
+  const msg = (err?.stack || err?.message || String(err));
+  if (WC_SDK_ERROR_PATTERNS.some((p) => p.test(msg))) return true;
+  // TypeErrors originating entirely within WC SDK internals (not our code)
+  if (err instanceof TypeError && err.stack) {
+    const frames = err.stack.split("\n").slice(1);
+    const firstFrame = frames[0] || "";
+    if (WC_SDK_STACK_MARKERS.some((m) => firstFrame.includes(m))) return true;
+  }
+  return false;
+}
+process.on("uncaughtException", (err) => {
+  if (isWcSdkError(err)) {
+    log(`suppressed WC SDK error: ${err.message}`);
+    return;
+  }
+  log(`fatal uncaughtException: ${err.stack || err.message}`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  if (isWcSdkError(reason)) {
+    log(`suppressed WC SDK rejection: ${reason?.message || reason}`);
+    return;
+  }
+  log(`fatal unhandledRejection: ${reason?.stack || reason}`);
+  process.exit(1);
+});
 
 if (!projectId) {
   writeResponse({
@@ -101,17 +147,27 @@ async function ensureProvider(requiredChainId) {
     }
   });
 
-  provider.on("display_uri", (uri) => {
+  provider.on("display_uri", async (uri) => {
     log(`display_uri ${uri}`);
-    emitEvent("display_uri", { uri });
+    let qrSvg = "";
+    try {
+      qrSvg = await QRCode.toString(uri, { type: "svg", margin: 2, width: 200, errorCorrectionLevel: "L" });
+    } catch (err) {
+      log(`qr generation failed: ${err.message}`);
+    }
+    emitEvent("display_uri", { uri, qrSvg });
   });
   provider.on("accountsChanged", (accounts) => {
     connectedAccounts = parseAccounts(accounts);
     emitEvent("accountsChanged", { accounts: connectedAccounts });
   });
   provider.on("chainChanged", (chainId) => {
-    connectedChainIdHex = normalizeChainIdHex(chainId);
-    emitEvent("chainChanged", { chainId: connectedChainIdHex });
+    try {
+      connectedChainIdHex = normalizeChainIdHex(chainId);
+      emitEvent("chainChanged", { chainId: connectedChainIdHex });
+    } catch (err) {
+      log(`chainChanged handler error (non-fatal): ${err.message}`);
+    }
   });
   provider.on("disconnect", () => {
     connectedAccounts = [];
