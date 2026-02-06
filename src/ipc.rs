@@ -203,9 +203,10 @@ fn handle_walletconnect_ipc(
                 .as_ref()
                 .ok_or_else(|| anyhow!("walletconnect bridge unavailable"))?;
             let mut bridge = bridge.lock().unwrap();
-            let (session, events) = bridge.connect(chain_id)?;
+            let session = bridge.connect_with_event_handler(chain_id, |event| {
+                apply_walletconnect_event(webview, state, event);
+            })?;
             drop(bridge);
-            apply_walletconnect_events(webview, state, &events);
 
             let accounts = session
                 .accounts
@@ -318,50 +319,54 @@ fn walletconnect_request(
 
 fn apply_walletconnect_events(webview: &WebView, state: &AppState, events: &[HelperEvent]) {
     for event in events {
-        match event.event.as_str() {
-            "display_uri" => {
-                if let Some(uri) = event.uri.clone() {
-                    println!("[WalletConnect] pairing uri: {uri}");
-                    {
-                        let mut ws = state.wallet.lock().unwrap();
-                        ws.walletconnect_uri = Some(uri.clone());
-                    }
-                    let payload = serde_json::json!({
-                        "type": "walletconnect_uri",
-                        "data": uri
-                    });
-                    let js = format!("window.__WryEthereumEmit('message', {});", payload);
-                    let _ = webview.evaluate_script(&js);
-                }
-            }
-            "accountsChanged" => {
-                let accounts = event.accounts.clone().unwrap_or_default();
+        apply_walletconnect_event(webview, state, event);
+    }
+}
+
+fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &HelperEvent) {
+    match event.event.as_str() {
+        "display_uri" => {
+            if let Some(uri) = event.uri.clone() {
+                println!("[WalletConnect] pairing uri: {uri}");
                 {
                     let mut ws = state.wallet.lock().unwrap();
-                    ws.authorized = !accounts.is_empty();
-                    ws.account = accounts.first().cloned();
+                    ws.walletconnect_uri = Some(uri.clone());
                 }
-                emit_accounts_changed(webview, accounts);
+                let payload = serde_json::json!({
+                    "type": "walletconnect_uri",
+                    "data": uri
+                });
+                let js = format!("window.__WryEthereumEmit('message', {});", payload);
+                let _ = webview.evaluate_script(&js);
             }
-            "chainChanged" => {
-                if let Some(chain_hex) = event.chain_id.clone() {
-                    if let Some(chain_id) = parse_hex_u64(&chain_hex) {
-                        let mut ws = state.wallet.lock().unwrap();
-                        ws.chain.chain_id = chain_id;
-                    }
-                    emit_chain_changed(webview, chain_hex);
-                }
-            }
-            "disconnect" => {
-                {
-                    let mut ws = state.wallet.lock().unwrap();
-                    ws.authorized = false;
-                    ws.account = None;
-                }
-                emit_accounts_changed(webview, Vec::new());
-            }
-            _ => {}
         }
+        "accountsChanged" => {
+            let accounts = event.accounts.clone().unwrap_or_default();
+            {
+                let mut ws = state.wallet.lock().unwrap();
+                ws.authorized = !accounts.is_empty();
+                ws.account = accounts.first().cloned();
+            }
+            emit_accounts_changed(webview, accounts);
+        }
+        "chainChanged" => {
+            if let Some(chain_hex) = event.chain_id.clone() {
+                if let Some(chain_id) = parse_hex_u64(&chain_hex) {
+                    let mut ws = state.wallet.lock().unwrap();
+                    ws.chain.chain_id = chain_id;
+                }
+                emit_chain_changed(webview, chain_hex);
+            }
+        }
+        "disconnect" => {
+            {
+                let mut ws = state.wallet.lock().unwrap();
+                ws.authorized = false;
+                ws.account = None;
+            }
+            emit_accounts_changed(webview, Vec::new());
+        }
+        _ => {}
     }
 }
 

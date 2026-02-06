@@ -33,7 +33,7 @@ struct HelperError {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct HelperEvent {
     pub event: String,
     #[serde(default)]
@@ -105,26 +105,31 @@ impl WalletConnectBridge {
         Ok(bridge)
     }
 
-    pub fn connect(&mut self, chain_id: u64) -> Result<(WalletConnectSession, Vec<HelperEvent>)> {
+    pub fn connect_with_event_handler<F>(
+        &mut self,
+        chain_id: u64,
+        mut on_event: F,
+    ) -> Result<WalletConnectSession>
+    where
+        F: FnMut(&HelperEvent),
+    {
         eprintln!(
             "[walletconnect] connect requested for chain_id=0x{:x}; waiting for wallet approval",
             chain_id
         );
-        let result = self.send_command(
+        let result = self.send_command_with_event_handler(
             "connect",
             serde_json::json!({
                 "chainId": format!("0x{:x}", chain_id)
             }),
+            |event| on_event(event),
         )?;
         let response: ConnectResponse =
-            serde_json::from_value(result.0).context("invalid connect response from helper")?;
-        Ok((
-            WalletConnectSession {
-                accounts: response.accounts,
-                chain_id_hex: response.chain_id,
-            },
-            result.1,
-        ))
+            serde_json::from_value(result).context("invalid connect response from helper")?;
+        Ok(WalletConnectSession {
+            accounts: response.accounts,
+            chain_id_hex: response.chain_id,
+        })
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Result<(Value, Vec<HelperEvent>)> {
@@ -148,6 +153,22 @@ impl WalletConnectBridge {
     }
 
     fn send_command(&mut self, method: &str, params: Value) -> Result<(Value, Vec<HelperEvent>)> {
+        let mut events = Vec::new();
+        let result = self.send_command_with_event_handler(method, params, |event| {
+            events.push(event.clone());
+        })?;
+        Ok((result, events))
+    }
+
+    fn send_command_with_event_handler<F>(
+        &mut self,
+        method: &str,
+        params: Value,
+        mut on_event: F,
+    ) -> Result<Value>
+    where
+        F: FnMut(&HelperEvent),
+    {
         let id = self.next_id;
         self.next_id += 1;
         let payload = serde_json::json!({
@@ -166,7 +187,6 @@ impl WalletConnectBridge {
             .flush()
             .context("failed flushing helper request")?;
 
-        let mut events = Vec::new();
         loop {
             let mut raw = String::new();
             let n = self
@@ -183,7 +203,7 @@ impl WalletConnectBridge {
             match parse_bridge_line(raw)? {
                 BridgeMessage::Event(event) => {
                     log_helper_event(&event);
-                    events.push(event);
+                    on_event(&event);
                     continue;
                 }
                 BridgeMessage::Response(resp) => {
@@ -201,7 +221,7 @@ impl WalletConnectBridge {
                             error.message
                         );
                     }
-                    return Ok((resp.result.unwrap_or(Value::Null), events));
+                    return Ok(resp.result.unwrap_or(Value::Null));
                 }
             }
         }

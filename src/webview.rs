@@ -37,11 +37,85 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     set.delete(handler);
   }
   function emit(event, ...args) {
+    // Built-in WalletConnect pairing UX:
+    // show a lightweight overlay as soon as Rust forwards a `walletconnect_uri` message.
+    const first = args[0];
+    if (event === 'message' && first && first.type === 'walletconnect_uri' && typeof first.data === 'string') {
+      showWalletConnectOverlay(first.data);
+    }
+    if (event === 'accountsChanged' && Array.isArray(first) && first.length > 0) {
+      hideWalletConnectOverlay();
+    }
+
     const set = listeners.get(event);
     if (!set) return;
     for (const h of Array.from(set)) {
       try { h(...args); } catch (_) {}
     }
+  }
+
+  let wcOverlay = null;
+  let wcUriEl = null;
+  function ensureWalletConnectOverlay() {
+    if (wcOverlay) return;
+    const panel = document.createElement('div');
+    panel.style.position = 'fixed';
+    panel.style.right = '12px';
+    panel.style.bottom = '12px';
+    panel.style.width = 'min(560px, calc(100vw - 24px))';
+    panel.style.background = 'rgba(2, 6, 23, 0.96)';
+    panel.style.color = '#e2e8f0';
+    panel.style.border = '1px solid rgba(148, 163, 184, 0.35)';
+    panel.style.borderRadius = '12px';
+    panel.style.padding = '12px';
+    panel.style.fontSize = '12px';
+    panel.style.lineHeight = '1.4';
+    panel.style.zIndex = '2147483647';
+    panel.style.boxShadow = '0 20px 40px rgba(0, 0, 0, 0.4)';
+    panel.style.display = 'none';
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
+        <strong>WalletConnect Pairing</strong>
+        <button id="__vibefi_wc_close" style="border:1px solid #475569;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:4px 8px;cursor:pointer;">Hide</button>
+      </div>
+      <div style="opacity:0.9;margin-bottom:8px;">Open a WalletConnect-compatible wallet and approve the session. You can copy the pairing URI below.</div>
+      <textarea id="__vibefi_wc_uri" readonly style="width:100%;height:92px;background:#020617;color:#93c5fd;border:1px solid #1e293b;border-radius:8px;padding:8px;resize:vertical;font-family:ui-monospace, Menlo, Monaco, Consolas, monospace;"></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+        <button id="__vibefi_wc_copy" style="border:1px solid #475569;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer;">Copy URI</button>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    wcOverlay = panel;
+    wcUriEl = panel.querySelector('#__vibefi_wc_uri');
+    const closeBtn = panel.querySelector('#__vibefi_wc_close');
+    const copyBtn = panel.querySelector('#__vibefi_wc_copy');
+    closeBtn?.addEventListener('click', () => hideWalletConnectOverlay());
+    copyBtn?.addEventListener('click', async () => {
+      const value = wcUriEl?.value ?? '';
+      if (!value) return;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+          return;
+        }
+      } catch (_) {}
+      try {
+        wcUriEl?.focus();
+        wcUriEl?.select();
+        document.execCommand('copy');
+      } catch (_) {}
+    });
+  }
+
+  function showWalletConnectOverlay(uri) {
+    ensureWalletConnectOverlay();
+    if (wcUriEl) wcUriEl.value = uri;
+    if (wcOverlay) wcOverlay.style.display = 'block';
+  }
+
+  function hideWalletConnectOverlay() {
+    if (wcOverlay) wcOverlay.style.display = 'none';
   }
 
   // Expose a controlled hook for Rust -> JS event emission.
