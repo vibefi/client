@@ -332,12 +332,15 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
                     let mut ws = state.wallet.lock().unwrap();
                     ws.walletconnect_uri = Some(uri.clone());
                 }
+                show_walletconnect_pairing_overlay(webview, &uri);
                 let payload = serde_json::json!({
                     "type": "walletconnect_uri",
                     "data": uri
                 });
                 let js = format!("window.__WryEthereumEmit('message', {});", payload);
-                let _ = webview.evaluate_script(&js);
+                if let Err(err) = webview.evaluate_script(&js) {
+                    eprintln!("[walletconnect] failed to emit message event to webview: {err}");
+                }
             }
         }
         "accountsChanged" => {
@@ -346,6 +349,9 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
                 let mut ws = state.wallet.lock().unwrap();
                 ws.authorized = !accounts.is_empty();
                 ws.account = accounts.first().cloned();
+            }
+            if !accounts.is_empty() {
+                hide_walletconnect_pairing_overlay(webview);
             }
             emit_accounts_changed(webview, accounts);
         }
@@ -367,6 +373,134 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
             emit_accounts_changed(webview, Vec::new());
         }
         _ => {}
+    }
+}
+
+fn show_walletconnect_pairing_overlay(webview: &WebView, uri: &str) {
+    let uri_json = match serde_json::to_string(uri) {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("[walletconnect] failed to serialize pairing uri for overlay: {err}");
+            return;
+        }
+    };
+    let js = format!(
+        r#"(function() {{
+  try {{
+    var uri = {uri_json};
+    var panel = document.getElementById('__vibefi_wc_overlay');
+    if (!panel) {{
+      panel = document.createElement('div');
+      panel.id = '__vibefi_wc_overlay';
+      panel.style.position = 'fixed';
+      panel.style.right = '12px';
+      panel.style.bottom = '12px';
+      panel.style.width = 'min(560px, calc(100vw - 24px))';
+      panel.style.background = 'rgba(2, 6, 23, 0.96)';
+      panel.style.color = '#e2e8f0';
+      panel.style.border = '1px solid rgba(148, 163, 184, 0.35)';
+      panel.style.borderRadius = '12px';
+      panel.style.padding = '12px';
+      panel.style.fontSize = '12px';
+      panel.style.lineHeight = '1.4';
+      panel.style.zIndex = '2147483647';
+      panel.style.boxShadow = '0 20px 40px rgba(0, 0, 0, 0.4)';
+      panel.style.display = 'none';
+
+      var header = document.createElement('div');
+      header.style.display = 'flex';
+      header.style.justifyContent = 'space-between';
+      header.style.alignItems = 'center';
+      header.style.gap = '8px';
+      header.style.marginBottom = '8px';
+      var title = document.createElement('strong');
+      title.textContent = 'WalletConnect Pairing';
+      var hideBtn = document.createElement('button');
+      hideBtn.textContent = 'Hide';
+      hideBtn.style.border = '1px solid #475569';
+      hideBtn.style.background = '#0f172a';
+      hideBtn.style.color = '#e2e8f0';
+      hideBtn.style.borderRadius = '8px';
+      hideBtn.style.padding = '4px 8px';
+      hideBtn.style.cursor = 'pointer';
+      hideBtn.addEventListener('click', function() {{ panel.style.display = 'none'; }});
+      header.appendChild(title);
+      header.appendChild(hideBtn);
+
+      var description = document.createElement('div');
+      description.style.opacity = '0.9';
+      description.style.marginBottom = '8px';
+      description.textContent = 'Open a WalletConnect-compatible wallet and approve the session. You can copy the pairing URI below.';
+
+      var area = document.createElement('textarea');
+      area.id = '__vibefi_wc_uri';
+      area.readOnly = true;
+      area.style.width = '100%';
+      area.style.height = '92px';
+      area.style.background = '#020617';
+      area.style.color = '#93c5fd';
+      area.style.border = '1px solid #1e293b';
+      area.style.borderRadius = '8px';
+      area.style.padding = '8px';
+      area.style.resize = 'vertical';
+      area.style.fontFamily = 'ui-monospace, Menlo, Monaco, Consolas, monospace';
+
+      var footer = document.createElement('div');
+      footer.style.display = 'flex';
+      footer.style.justifyContent = 'flex-end';
+      footer.style.marginTop = '8px';
+      var copyBtn = document.createElement('button');
+      copyBtn.textContent = 'Copy URI';
+      copyBtn.style.border = '1px solid #475569';
+      copyBtn.style.background = '#0f172a';
+      copyBtn.style.color = '#e2e8f0';
+      copyBtn.style.borderRadius = '8px';
+      copyBtn.style.padding = '6px 10px';
+      copyBtn.style.cursor = 'pointer';
+      copyBtn.addEventListener('click', async function() {{
+        var value = area.value || '';
+        if (!value) return;
+        try {{
+          if (navigator.clipboard && navigator.clipboard.writeText) {{
+            await navigator.clipboard.writeText(value);
+            return;
+          }}
+        }} catch (_) {{}}
+        try {{
+          area.focus();
+          area.select();
+          document.execCommand('copy');
+        }} catch (_) {{}}
+      }});
+      footer.appendChild(copyBtn);
+
+      panel.appendChild(header);
+      panel.appendChild(description);
+      panel.appendChild(area);
+      panel.appendChild(footer);
+      document.documentElement.appendChild(panel);
+    }}
+    var uriArea = document.getElementById('__vibefi_wc_uri');
+    if (uriArea) uriArea.value = uri;
+    panel.style.display = 'block';
+  }} catch (err) {{
+    console.error('vibefi wc overlay error', err);
+  }}
+}})();"#,
+        uri_json = uri_json
+    );
+    if let Err(err) = webview.evaluate_script(&js) {
+        eprintln!("[walletconnect] failed to show pairing overlay: {err}");
+    }
+}
+
+fn hide_walletconnect_pairing_overlay(webview: &WebView) {
+    let js = r#"(function() {
+  var panel = document.getElementById('__vibefi_wc_overlay');
+  if (panel) panel.style.display = 'none';
+})();"#;
+    if let Err(err) = webview.evaluate_script(js) {
+        eprintln!("[walletconnect] failed to hide pairing overlay: {err}");
     }
 }
 
