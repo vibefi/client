@@ -22,18 +22,6 @@ Date: 2026-02-04
 - `cli` already supports devnet, dapp list via logs, and IPFS bundle fetch/verify (used in e2e).
 - `studio` only has a README at the moment.
 
-## Implemented in this branch
-
-- Added a bundled HTML launcher UI (`client/assets/launcher.html`) for devnet selection.
-- Added devnet-mode plumbing to the client:
-  - CLI flags: `--devnet`, `--rpc`, `--ipfs-api`, `--ipfs-gateway`, `--cache-dir`.
-  - Default devnet path: `contracts/.devnet/devnet.json` if present.
-  - Devnet cache: `client/.vibefi/cache/<cid>`.
-- Added a Rust RPC proxy for read-only JSON-RPC methods (no direct WebView network access).
-- Added on-chain log fetching and decoding for DappRegistry events (publish/upgrade/metadata/pause).
-- Added IPFS fetch + CID verification (`/api/v0/add?only-hash=true`) before build.
-- Added build caching: reuse existing `.vibefi/dist` if present; otherwise run `bun x vite build`.
-
 ## Target behavior
 
 In devnet mode, the client should:
