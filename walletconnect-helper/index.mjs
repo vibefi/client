@@ -1,0 +1,223 @@
+#!/usr/bin/env node
+
+import process from "node:process";
+import readline from "node:readline";
+import { EthereumProvider } from "@walletconnect/ethereum-provider";
+
+const projectId = process.env.VIBEFI_WC_PROJECT_ID || process.env.WC_PROJECT_ID || "";
+const relayUrl = process.env.VIBEFI_WC_RELAY_URL || process.env.WC_RELAY_URL || undefined;
+const metadataName = process.env.VIBEFI_WC_METADATA_NAME || "VibeFi Desktop";
+const metadataUrl = process.env.VIBEFI_WC_METADATA_URL || "https://vibefi.local";
+const metadataDesc = process.env.VIBEFI_WC_METADATA_DESC || "VibeFi desktop WalletConnect bridge";
+const metadataIcon = process.env.VIBEFI_WC_METADATA_ICON || "";
+
+if (!projectId) {
+  writeResponse({
+    id: 0,
+    error: {
+      code: -32000,
+      message:
+        "WalletConnect project id missing. Set VIBEFI_WC_PROJECT_ID or use --wc-project-id."
+    }
+  });
+  process.exit(1);
+}
+
+let provider = null;
+let connectedAccounts = [];
+let connectedChainIdHex = "0x1";
+
+function writeMessage(payload) {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+function writeResponse(payload) {
+  writeMessage(payload);
+}
+
+function emitEvent(event, data = {}) {
+  writeMessage({ event, ...data });
+}
+
+function normalizeChainIdHex(value) {
+  if (typeof value === "number") return `0x${value.toString(16)}`;
+  if (typeof value === "string") {
+    if (value.startsWith("0x")) return value.toLowerCase();
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return `0x${parsed.toString(16)}`;
+  }
+  return "0x1";
+}
+
+function uniqueNumbers(values) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (!Number.isFinite(value) || value <= 0) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function parseAddressFromAccount(value) {
+  if (typeof value !== "string") return null;
+  if (value.startsWith("eip155:")) {
+    const parts = value.split(":");
+    return parts[2] || null;
+  }
+  if (value.startsWith("0x")) return value;
+  return null;
+}
+
+function parseAccounts(result) {
+  if (!Array.isArray(result)) return [];
+  return result
+    .map((entry) => parseAddressFromAccount(entry))
+    .filter((entry) => typeof entry === "string");
+}
+
+async function ensureProvider(requiredChainId) {
+  if (provider) return provider;
+  const preferred = Number.isFinite(requiredChainId) ? Number(requiredChainId) : 1;
+  const optionalChains = uniqueNumbers([preferred, 1, 11155111, 31337]);
+  provider = await EthereumProvider.init({
+    projectId,
+    optionalChains,
+    showQrModal: false,
+    relayUrl,
+    metadata: {
+      name: metadataName,
+      description: metadataDesc,
+      url: metadataUrl,
+      icons: metadataIcon ? [metadataIcon] : []
+    }
+  });
+
+  provider.on("display_uri", (uri) => {
+    emitEvent("display_uri", { uri });
+  });
+  provider.on("accountsChanged", (accounts) => {
+    connectedAccounts = parseAccounts(accounts);
+    emitEvent("accountsChanged", { accounts: connectedAccounts });
+  });
+  provider.on("chainChanged", (chainId) => {
+    connectedChainIdHex = normalizeChainIdHex(chainId);
+    emitEvent("chainChanged", { chainId: connectedChainIdHex });
+  });
+  provider.on("disconnect", () => {
+    connectedAccounts = [];
+    emitEvent("disconnect", {});
+  });
+
+  return provider;
+}
+
+async function connect(requiredChainId) {
+  const wc = await ensureProvider(requiredChainId);
+  const chainId = Number.isFinite(requiredChainId) ? Number(requiredChainId) : undefined;
+  if (!wc.session) {
+    if (chainId && chainId > 0) {
+      await wc.connect({ optionalChains: uniqueNumbers([chainId]) });
+    } else {
+      await wc.connect();
+    }
+  }
+  const accountsRaw = await wc.request({ method: "eth_accounts", params: [] });
+  const chainIdRaw = await wc.request({ method: "eth_chainId", params: [] });
+  connectedAccounts = parseAccounts(accountsRaw);
+  connectedChainIdHex = normalizeChainIdHex(chainIdRaw);
+  return {
+    accounts: connectedAccounts,
+    chainId: connectedChainIdHex
+  };
+}
+
+async function requestRpc(method, params) {
+  if (!provider?.session) {
+    throw new Error("WalletConnect session is not connected");
+  }
+  return await provider.request({ method, params });
+}
+
+async function handleCommand(msg) {
+  const { id, method, params } = msg || {};
+  if (typeof id !== "number") {
+    throw new Error("Command is missing numeric id");
+  }
+  if (typeof method !== "string") {
+    throw new Error("Command is missing method");
+  }
+  if (method === "ping") {
+    return { id, result: { ok: true } };
+  }
+  if (method === "connect") {
+    const chainId = params?.chainId;
+    const required = typeof chainId === "string"
+      ? Number.parseInt(chainId.startsWith("0x") ? chainId.slice(2) : chainId, chainId.startsWith("0x") ? 16 : 10)
+      : typeof chainId === "number"
+      ? chainId
+      : undefined;
+    const result = await connect(required);
+    return { id, result };
+  }
+  if (method === "request") {
+    const rpcMethod = params?.method;
+    if (typeof rpcMethod !== "string") {
+      throw new Error("request.method missing");
+    }
+    const rpcParams = params?.params ?? [];
+    const result = await requestRpc(rpcMethod, rpcParams);
+    return { id, result };
+  }
+  if (method === "disconnect") {
+    if (provider) {
+      await provider.disconnect();
+    }
+    connectedAccounts = [];
+    return { id, result: { ok: true } };
+  }
+  throw new Error(`Unknown helper method: ${method}`);
+}
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  crlfDelay: Infinity
+});
+
+rl.on("line", async (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  let msg;
+  try {
+    msg = JSON.parse(trimmed);
+  } catch (error) {
+    writeResponse({
+      id: 0,
+      error: {
+        code: -32700,
+        message: `Invalid JSON: ${String(error)}`
+      }
+    });
+    return;
+  }
+
+  const id = typeof msg?.id === "number" ? msg.id : 0;
+  try {
+    const response = await handleCommand(msg);
+    writeResponse(response);
+  } catch (error) {
+    writeResponse({
+      id,
+      error: {
+        code: -32000,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    });
+  }
+});
+
+rl.on("close", () => {
+  process.exit(0);
+});

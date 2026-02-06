@@ -12,7 +12,7 @@ Date: 2026-02-04
 - Always show a list of dapps first; no auto-launch.
 - CID verification is on by default.
 - Always run `bun+vite`, unless build output is already cached.
-- Do not expand signing beyond the existing offline signer behavior.
+- WalletConnect support is now in progress; local demo signer remains the fallback backend.
 - Use verbose logging for now.
 
 ## Current state (baseline)
@@ -71,7 +71,7 @@ In devnet mode, the client should:
 
 - **Launcher UX**: add progress/error states in the UI (right now it logs to a simple console box).
 - **RPC proxy coverage**: validate the current allowlist against real dapps; expand read methods as needed.
-- **Signing behavior**: currently keeps the offline demo signer and fake `eth_sendTransaction`; dapps needing real txs will fail.
+- **WalletConnect hardening**: implement richer session UX (QR modal UI, reconnect, explicit disconnect) and background event handling.
 - **Devnet config hardening**: validate required fields and surface errors in UI, not just stderr.
 - **React launcher**: replace HTML UI with a minimal React build when ready.
 - **Testing**: add a devnet e2e for client (start devnet + IPFS + launch selected dapp).

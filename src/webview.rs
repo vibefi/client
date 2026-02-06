@@ -19,7 +19,7 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     // - no outbound network; requests go to Rust via IPC
     r#"
 (() => {
-  const PROVIDER_ID = 'wry-demo-wallet';
+  const PROVIDER_ID = 'vibefi-provider';
   const callbacks = new Map();
   let nextId = 1;
 
@@ -141,11 +141,11 @@ pub fn build_webview(
     let protocol_bundle = bundle.clone();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
         let path = request.uri().path();
-        let active_bundle = current_bundle.lock().unwrap().clone().or_else(|| {
-            protocol_bundle
-                .as_ref()
-                .map(|cfg| cfg.dist_dir.clone())
-        });
+        let active_bundle = current_bundle
+            .lock()
+            .unwrap()
+            .clone()
+            .or_else(|| protocol_bundle.as_ref().map(|cfg| cfg.dist_dir.clone()));
         let (body, mime) = if let Some(dist_dir) = active_bundle {
             let rel = path.trim_start_matches('/');
             let mut file_path = if rel.is_empty() {
@@ -173,12 +173,21 @@ pub fn build_webview(
             match path {
                 "/" | "/index.html" => {
                     if devnet_mode {
-                        (LAUNCHER_HTML.as_bytes().to_vec(), "text/html; charset=utf-8".to_string())
+                        (
+                            LAUNCHER_HTML.as_bytes().to_vec(),
+                            "text/html; charset=utf-8".to_string(),
+                        )
                     } else {
-                        (INDEX_HTML.as_bytes().to_vec(), "text/html; charset=utf-8".to_string())
+                        (
+                            INDEX_HTML.as_bytes().to_vec(),
+                            "text/html; charset=utf-8".to_string(),
+                        )
                     }
                 }
-                _ => (format!("Not found: {path}").into_bytes(), "text/plain; charset=utf-8".to_string()),
+                _ => (
+                    format!("Not found: {path}").into_bytes(),
+                    "text/plain; charset=utf-8".to_string(),
+                ),
             }
         };
 
@@ -215,12 +224,14 @@ pub fn build_webview(
 
     // Emit initial chain/accounts state after load.
     // Some dapps rely on accountsChanged/chainChanged events.
-    let addr = state.address();
+    let addr = state.account();
     let chain_hex = state.chain_id_hex();
     {
         let ws = wallet_state.lock().unwrap();
         if ws.authorized {
-            emit_accounts_changed(&webview, vec![addr]);
+            if let Some(addr) = addr {
+                emit_accounts_changed(&webview, vec![addr]);
+            }
         }
     }
     emit_chain_changed(&webview, chain_hex);
