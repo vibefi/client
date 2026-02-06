@@ -39,6 +39,9 @@ pub struct HelperEvent {
     #[serde(default)]
     pub uri: Option<String>,
     #[serde(default)]
+    #[serde(rename = "qrSvg")]
+    pub qr_svg: Option<String>,
+    #[serde(default)]
     pub accounts: Option<Vec<String>>,
     #[serde(default)]
     #[serde(rename = "chainId")]

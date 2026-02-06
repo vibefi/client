@@ -41,7 +41,7 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     // show a lightweight overlay as soon as Rust forwards a `walletconnect_uri` message.
     const first = args[0];
     if (event === 'message' && first && first.type === 'walletconnect_uri' && typeof first.data === 'string') {
-      showWalletConnectOverlay(first.data);
+      showWalletConnectOverlay(first.data, first.qrSvg || '');
     }
     if (event === 'accountsChanged' && Array.isArray(first) && first.length > 0) {
       hideWalletConnectOverlay();
@@ -79,6 +79,7 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
         <button id="__vibefi_wc_close" style="border:1px solid #475569;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:4px 8px;cursor:pointer;">Hide</button>
       </div>
       <div style="opacity:0.9;margin-bottom:8px;">Open a WalletConnect-compatible wallet and approve the session. You can copy the pairing URI below.</div>
+      <div id="__vibefi_wc_qr" style="display:flex;justify-content:center;margin-bottom:8px;"></div>
       <textarea id="__vibefi_wc_uri" readonly style="width:100%;height:92px;background:#020617;color:#93c5fd;border:1px solid #1e293b;border-radius:8px;padding:8px;resize:vertical;font-family:ui-monospace, Menlo, Monaco, Consolas, monospace;"></textarea>
       <div style="display:flex;justify-content:flex-end;margin-top:8px;">
         <button id="__vibefi_wc_copy" style="border:1px solid #475569;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer;">Copy URI</button>
@@ -108,9 +109,11 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     });
   }
 
-  function showWalletConnectOverlay(uri) {
+  function showWalletConnectOverlay(uri, qrSvg) {
     ensureWalletConnectOverlay();
     if (wcUriEl) wcUriEl.value = uri;
+    var qrEl = wcOverlay && wcOverlay.querySelector('#__vibefi_wc_qr');
+    if (qrEl && qrSvg) qrEl.innerHTML = qrSvg;
     if (wcOverlay) wcOverlay.style.display = 'block';
   }
 
