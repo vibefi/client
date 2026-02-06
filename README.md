@@ -1,17 +1,42 @@
-# Wry + EIP-1193 injected provider (offline, local assets only)
+# Wry + EIP-1193 injected provider
 
 This is a minimal example of:
 
 - A **Wry** desktop app that embeds a WebView
 - Injects a **`window.ethereum`** provider shim (EIP-1193-style)
 - Bridges `ethereum.request(...)` to a Rust backend via Wry IPC
-- Uses **Alloy** to do offline signing
+- Uses **Alloy** for local dev-key signing (default)
+- Supports **WalletConnect v2** via a local helper process (`walletconnect-helper/`)
 - **Blocks outbound network**: only loads `app://...` assets and sets `connect-src 'none'`.
 
-## Run
+## Run (local signer)
 
 ```bash
 cargo run
+```
+
+## Run with WalletConnect
+
+Install helper dependencies once:
+
+```bash
+cd walletconnect-helper
+bun install
+cd ..
+```
+
+Run the client with WalletConnect enabled:
+
+```bash
+VIBEFI_WC_PROJECT_ID=your_project_id cargo run -- --wallet walletconnect
+```
+
+Optional relay override:
+
+```bash
+VIBEFI_WC_PROJECT_ID=your_project_id \
+VIBEFI_WC_RELAY_URL=wss://your-relay.example \
+cargo run -- --wallet walletconnect
 ```
 
 Linux build deps (Ubuntu/Debian):
@@ -37,6 +62,15 @@ Run a bundled dapp (expects `manifest.json` in the bundle directory):
 cargo run -- --bundle /path/to/bundle
 ```
 
+Run a bundled dapp with WalletConnect (for example, a bundle produced from `dapp-examples/uniswap-v2`):
+
+```bash
+VIBEFI_WC_PROJECT_ID=your_project_id \
+cargo run -- --bundle /path/to/packaged-bundle --wallet walletconnect
+```
+
+You can produce `/path/to/packaged-bundle` with the CLI `package` command.
+
 The bundle build step uses `bun` and `vite` from the bundle's `package.json`.
 
 ## What is sandboxed?
@@ -45,7 +79,7 @@ The bundle build step uses `bun` and `vite` from the bundle's `package.json`.
 - The content is served via Wry's `with_custom_protocol` from embedded assets.
 - CSP includes `connect-src 'none'` to prevent `fetch`/XHR/WebSockets.
 
-## Demo wallet
+## Wallet backends
 
-This project uses a hard-coded demo private key purely for local testing.
-Do not use this in real software.
+- `local` (default): hard-coded/demo private key fallback for local testing only.
+- `walletconnect`: remote signer via WalletConnect; `eth_requestAccounts` triggers pairing and logs a `wc:` URI.
