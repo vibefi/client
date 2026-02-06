@@ -51,6 +51,7 @@ fn main() -> Result<()> {
     let wallet_backend = args.wallet_backend;
     let (signer, walletconnect, initial_account) = match wallet_backend {
         WalletBackend::Local => {
+            eprintln!("[wallet] backend=local");
             let signer_hex = devnet
                 .as_ref()
                 .and_then(|cfg| cfg.developerPrivateKey.clone())
@@ -62,9 +63,11 @@ fn main() -> Result<()> {
             (Some(Arc::new(signer)), None, Some(account))
         }
         WalletBackend::WalletConnect => {
+            eprintln!("[wallet] backend=walletconnect");
             let project_id = args
                 .wc_project_id
                 .or_else(|| env::var("VIBEFI_WC_PROJECT_ID").ok())
+                .or_else(|| env::var("WC_PROJECT_ID").ok())
                 .ok_or_else(|| {
                     anyhow!(
                         "WalletConnect backend requires --wc-project-id or VIBEFI_WC_PROJECT_ID"
@@ -72,7 +75,8 @@ fn main() -> Result<()> {
                 })?;
             let relay_url = args
                 .wc_relay_url
-                .or_else(|| env::var("VIBEFI_WC_RELAY_URL").ok());
+                .or_else(|| env::var("VIBEFI_WC_RELAY_URL").ok())
+                .or_else(|| env::var("WC_RELAY_URL").ok());
             let bridge = WalletConnectBridge::spawn(WalletConnectConfig {
                 project_id,
                 relay_url,
@@ -216,8 +220,12 @@ fn parse_args() -> Result<CliArgs> {
         .map(parse_wallet_backend)
         .transpose()?
         .unwrap_or(WalletBackend::Local);
-    let mut wc_project_id: Option<String> = env::var("VIBEFI_WC_PROJECT_ID").ok();
-    let mut wc_relay_url: Option<String> = env::var("VIBEFI_WC_RELAY_URL").ok();
+    let mut wc_project_id: Option<String> = env::var("VIBEFI_WC_PROJECT_ID")
+        .ok()
+        .or_else(|| env::var("WC_PROJECT_ID").ok());
+    let mut wc_relay_url: Option<String> = env::var("VIBEFI_WC_RELAY_URL")
+        .ok()
+        .or_else(|| env::var("WC_RELAY_URL").ok());
     let mut no_build = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {

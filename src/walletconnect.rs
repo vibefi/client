@@ -106,6 +106,10 @@ impl WalletConnectBridge {
     }
 
     pub fn connect(&mut self, chain_id: u64) -> Result<(WalletConnectSession, Vec<HelperEvent>)> {
+        eprintln!(
+            "[walletconnect] connect requested for chain_id=0x{:x}; waiting for wallet approval",
+            chain_id
+        );
         let result = self.send_command(
             "connect",
             serde_json::json!({
@@ -178,6 +182,7 @@ impl WalletConnectBridge {
             }
             match parse_bridge_line(raw)? {
                 BridgeMessage::Event(event) => {
+                    log_helper_event(&event);
                     events.push(event);
                     continue;
                 }
@@ -251,4 +256,30 @@ fn resolve_node_binary() -> Result<String> {
     bail!(
         "node runtime not found. install node or bun, or set VIBEFI_NODE_BIN to an executable path"
     )
+}
+
+fn log_helper_event(event: &HelperEvent) {
+    match event.event.as_str() {
+        "display_uri" => {
+            if let Some(uri) = event.uri.as_deref() {
+                eprintln!("[walletconnect] pairing uri: {uri}");
+            } else {
+                eprintln!("[walletconnect] pairing uri event received");
+            }
+        }
+        "accountsChanged" => {
+            let count = event.accounts.as_ref().map(|a| a.len()).unwrap_or(0);
+            eprintln!("[walletconnect] accountsChanged ({count} accounts)");
+        }
+        "chainChanged" => {
+            let chain = event.chain_id.as_deref().unwrap_or("unknown");
+            eprintln!("[walletconnect] chainChanged {chain}");
+        }
+        "disconnect" => {
+            eprintln!("[walletconnect] disconnect");
+        }
+        _ => {
+            eprintln!("[walletconnect] event {}", event.event);
+        }
+    }
 }
