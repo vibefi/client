@@ -194,6 +194,10 @@ fn handle_walletconnect_ipc(
     match req.method.as_str() {
         "eth_requestAccounts" => {
             let chain_id = state.wallet.lock().unwrap().chain.chain_id;
+            eprintln!(
+                "[walletconnect] eth_requestAccounts received (chain=0x{:x})",
+                chain_id
+            );
             let bridge = state
                 .walletconnect
                 .as_ref()
@@ -220,6 +224,10 @@ fn handle_walletconnect_ipc(
                 emit_accounts_changed(webview, session.accounts.clone());
             }
             emit_chain_changed(webview, session.chain_id_hex);
+            eprintln!(
+                "[walletconnect] eth_requestAccounts resolved ({} account(s))",
+                session.accounts.len()
+            );
             Ok(Value::Array(accounts))
         }
         "eth_accounts" => {

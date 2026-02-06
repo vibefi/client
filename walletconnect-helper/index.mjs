@@ -10,6 +10,7 @@ const metadataName = process.env.VIBEFI_WC_METADATA_NAME || "VibeFi Desktop";
 const metadataUrl = process.env.VIBEFI_WC_METADATA_URL || "https://vibefi.local";
 const metadataDesc = process.env.VIBEFI_WC_METADATA_DESC || "VibeFi desktop WalletConnect bridge";
 const metadataIcon = process.env.VIBEFI_WC_METADATA_ICON || "";
+const connectTimeoutMs = Number.parseInt(process.env.VIBEFI_WC_CONNECT_TIMEOUT_MS || "180000", 10);
 
 if (!projectId) {
   writeResponse({
@@ -37,6 +38,10 @@ function writeResponse(payload) {
 
 function emitEvent(event, data = {}) {
   writeMessage({ event, ...data });
+}
+
+function log(message) {
+  process.stderr.write(`[walletconnect-helper] ${message}\n`);
 }
 
 function normalizeChainIdHex(value) {
@@ -82,6 +87,7 @@ async function ensureProvider(requiredChainId) {
   if (provider) return provider;
   const preferred = Number.isFinite(requiredChainId) ? Number(requiredChainId) : 1;
   const optionalChains = uniqueNumbers([preferred, 1, 11155111, 31337]);
+  log(`init provider optionalChains=${optionalChains.join(",")}`);
   provider = await EthereumProvider.init({
     projectId,
     optionalChains,
@@ -96,6 +102,7 @@ async function ensureProvider(requiredChainId) {
   });
 
   provider.on("display_uri", (uri) => {
+    log(`display_uri ${uri}`);
     emitEvent("display_uri", { uri });
   });
   provider.on("accountsChanged", (accounts) => {
@@ -117,13 +124,18 @@ async function ensureProvider(requiredChainId) {
 async function connect(requiredChainId) {
   const wc = await ensureProvider(requiredChainId);
   const chainId = Number.isFinite(requiredChainId) ? Number(requiredChainId) : undefined;
+  const connectChains = uniqueNumbers([chainId, 1, 11155111, 31337]);
   if (!wc.session) {
-    if (chainId && chainId > 0) {
-      await wc.connect({ optionalChains: uniqueNumbers([chainId]) });
-    } else {
-      await wc.connect();
-    }
+    log(`connecting session optionalChains=${connectChains.join(",")}`);
+    const connectPromise = wc.connect({ optionalChains: connectChains });
+    await Promise.race([
+      connectPromise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`connect timeout after ${connectTimeoutMs}ms`)), connectTimeoutMs)
+      )
+    ]);
   }
+  log("session connected, requesting accounts/chain");
   const accountsRaw = await wc.request({ method: "eth_accounts", params: [] });
   const chainIdRaw = await wc.request({ method: "eth_chainId", params: [] });
   connectedAccounts = parseAccounts(accountsRaw);
@@ -159,6 +171,7 @@ async function handleCommand(msg) {
       : typeof chainId === "number"
       ? chainId
       : undefined;
+    log(`command connect chainId=${required ?? "none"}`);
     const result = await connect(required);
     return { id, result };
   }
