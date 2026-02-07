@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::bundle::{build_bundle, verify_manifest, BundleManifest};
-use crate::state::AppState;
+use crate::state::{AppState, TabAction, UserEvent};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DevnetConfig {
@@ -298,7 +298,7 @@ fn event_kind(log: &Log) -> Result<String> {
     }
 }
 
-pub fn handle_launcher_ipc(webview: &wry::WebView, state: &AppState, req: &crate::state::IpcRequest) -> Result<serde_json::Value> {
+pub fn handle_launcher_ipc(_webview: &wry::WebView, state: &AppState, req: &crate::state::IpcRequest) -> Result<serde_json::Value> {
     let devnet = state.devnet.as_ref().ok_or_else(|| anyhow!("Devnet not enabled"))?;
     match req.method.as_str() {
         "vibefi_listDapps" => {
@@ -312,6 +312,11 @@ pub fn handle_launcher_ipc(webview: &wry::WebView, state: &AppState, req: &crate
                 .get(0)
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("missing rootCid"))?;
+            let name = req
+                .params
+                .get(1)
+                .and_then(|v| v.as_str())
+                .unwrap_or(root_cid);
             println!("launcher: fetch bundle {root_cid}");
             let bundle_dir = devnet.cache_dir.join(root_cid);
             ensure_bundle_cached(devnet, root_cid, &bundle_dir)?;
@@ -329,11 +334,10 @@ pub fn handle_launcher_ipc(webview: &wry::WebView, state: &AppState, req: &crate
                 println!("launcher: build bundle");
                 build_bundle(&bundle_dir, &dist_dir)?;
             }
-            {
-                let mut current = state.current_bundle.lock().unwrap();
-                *current = Some(dist_dir);
-            }
-            webview.evaluate_script("window.location = 'app://index.html';")?;
+            let _ = state.proxy.send_event(UserEvent::TabAction(TabAction::OpenApp {
+                name: name.to_string(),
+                dist_dir,
+            }));
             Ok(serde_json::Value::Bool(true))
         }
         _ => Err(anyhow!("Unsupported launcher method: {}", req.method)),

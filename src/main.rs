@@ -5,6 +5,7 @@ mod menu;
 mod state;
 mod walletconnect;
 mod webview;
+mod webview_manager;
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
@@ -25,13 +26,16 @@ use reqwest::blocking::Client as HttpClient;
 
 use bundle::{build_bundle, verify_manifest, BundleConfig};
 use devnet::{load_devnet, DevnetConfig, DevnetContext};
-use ipc::{handle_ipc, handle_walletconnect_connect_result, show_walletconnect_pairing_overlay};
-use state::{AppState, Chain, LauncherConfig, UserEvent, WalletBackend, WalletState};
+use ipc::{handle_ipc, handle_walletconnect_connect_result};
+use state::{AppState, Chain, LauncherConfig, TabAction, UserEvent, WalletBackend, WalletState};
 use walletconnect::{WalletConnectBridge, WalletConnectConfig};
-use webview::build_webview;
+use webview::{build_app_webview, build_tab_bar_webview, build_wallet_webview};
+use webview_manager::{AppWebViewEntry, WebViewManager};
 
 static INDEX_HTML: &str = include_str!("../assets/index.html");
 static LAUNCHER_HTML: &str = include_str!("../assets/launcher.html");
+static TAB_BAR_HTML: &str = include_str!("../assets/tabbar.html");
+static WALLET_HTML: &str = include_str!("../assets/wallet.html");
 
 /// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
 /// This matches a common dev key used across many tutorials.
@@ -131,44 +135,104 @@ fn main() -> Result<()> {
             cache_dir: cfg.cache_dir.clone(),
             http: HttpClient::new(),
         }),
-        current_bundle: Arc::new(Mutex::new(bundle.as_ref().map(|cfg| cfg.dist_dir.clone()))),
         proxy: proxy.clone(),
     };
-    let mut webview: Option<wry::WebView> = None;
+    let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
 
     event_loop.run(move |event, event_loop_window_target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(UserEvent::Ipc(msg)) => {
-                if let Some(webview) = webview.as_ref() {
-                    if let Err(e) = handle_ipc(webview, &state, msg) {
+            Event::UserEvent(UserEvent::Ipc { webview_id, msg }) => {
+                if webview_id == "tab-bar" {
+                    // Parse tab bar IPC
+                    if let Ok(req) = serde_json::from_str::<state::IpcRequest>(&msg) {
+                        if req.provider_id.as_deref() == Some("vibefi-tabbar") {
+                            match req.method.as_str() {
+                                "switchTab" => {
+                                    if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
+                                        manager.switch_to(idx as usize);
+                                    }
+                                }
+                                "closeTab" => {
+                                    if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
+                                        manager.close_app(idx as usize);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                } else if webview_id == "wallet" {
+                    // Handle wallet webview IPC (e.g. hide overlay button)
+                    if let Ok(req) = serde_json::from_str::<state::IpcRequest>(&msg) {
+                        if req.provider_id.as_deref() == Some("vibefi-wallet") {
+                            if req.method == "hideOverlay" {
+                                manager.hide_wallet_overlay();
+                            }
+                        }
+                    }
+                } else if let Some(wv) = manager.webview_for_id(&webview_id) {
+                    if let Err(e) = handle_ipc(wv, &state, &webview_id, msg) {
                         eprintln!("ipc error: {e:?}");
                     }
                 }
             }
             Event::UserEvent(UserEvent::WalletConnectOverlay { uri, qr_svg }) => {
-                if let Some(webview) = webview.as_ref() {
-                    show_walletconnect_pairing_overlay(webview, &uri, &qr_svg);
-                    let payload = serde_json::json!({
-                        "type": "walletconnect_uri",
-                        "data": uri,
-                        "qrSvg": qr_svg
-                    });
-                    let js = format!("window.__WryEthereumEmit('message', {});", payload);
-                    if let Err(err) = webview.evaluate_script(&js) {
-                        eprintln!("[walletconnect] failed to emit message event: {err}");
-                    }
+                // Show the wallet overlay first (resize + bring to front),
+                // then update content so the page is visible when JS runs.
+                if let Some(w) = window.as_ref() {
+                    let size = w.inner_size();
+                    manager.show_wallet_overlay(size.width, size.height);
+                }
+                manager.update_wallet_pairing(&uri, &qr_svg);
+            }
+            Event::UserEvent(UserEvent::HideWalletOverlay) => {
+                manager.hide_wallet_overlay();
+            }
+            Event::UserEvent(UserEvent::WalletConnectResult { webview_id, ipc_id, result }) => {
+                // Try the specific webview first, fall back to active
+                let wv = manager
+                    .webview_for_id(&webview_id)
+                    .or_else(|| manager.active_app_webview());
+                if let Some(wv) = wv {
+                    handle_walletconnect_connect_result(wv, &state, ipc_id, result);
                 }
             }
-            Event::UserEvent(UserEvent::WalletConnectResult { ipc_id, result }) => {
-                if let Some(webview) = webview.as_ref() {
-                    handle_walletconnect_connect_result(webview, &state, ipc_id, result);
+            Event::UserEvent(UserEvent::TabAction(action)) => {
+                match action {
+                    TabAction::SwitchTab(i) => manager.switch_to(i),
+                    TabAction::CloseTab(i) => manager.close_app(i),
+                    TabAction::OpenApp { name, dist_dir } => {
+                        if let Some(w) = window.as_ref() {
+                            let size = w.inner_size();
+                            let id = manager.next_app_id();
+                            let bounds = manager.app_rect(size.width, size.height);
+                            match build_app_webview(w, &id, Some(dist_dir.clone()), false, &state, proxy.clone(), bounds) {
+                                Ok(wv) => {
+                                    // Hide currently active before adding new
+                                    if let Some(active) = manager.active_app_webview() {
+                                        let _ = active.set_visible(false);
+                                    }
+                                    let idx = manager.apps.len();
+                                    manager.apps.push(AppWebViewEntry {
+                                        webview: wv,
+                                        id,
+                                        label: name,
+                                        dist_dir: Some(dist_dir),
+                                    });
+                                    manager.active_app_index = Some(idx);
+                                    manager.update_tab_bar();
+                                }
+                                Err(e) => eprintln!("failed to open app tab: {e:?}"),
+                            }
+                        }
+                    }
                 }
             }
 
             Event::NewEvents(StartCause::Init) => {
-                if webview.is_none() {
+                if window.is_none() {
                     let built = WindowBuilder::new()
                         .with_title("VibeFi")
                         .with_inner_size(LogicalSize::new(1280.0, 720.0))
@@ -183,24 +247,54 @@ fn main() -> Result<()> {
                         }
                     };
 
-                    let built = build_webview(
-                        &window_handle,
-                        state.clone(),
-                        proxy.clone(),
-                        bundle.clone(),
-                        launcher.is_some(),
-                    );
-                    let webview_handle = match built {
-                        Ok(webview) => webview,
+                    manager.set_scale_factor(window_handle.scale_factor());
+                    let size = window_handle.inner_size();
+                    let w = size.width;
+                    let h = size.height;
+
+                    // 1. Build tab bar
+                    match build_tab_bar_webview(&window_handle, proxy.clone(), manager.tab_bar_rect(w)) {
+                        Ok(tb) => manager.tab_bar = Some(tb),
+                        Err(e) => eprintln!("tab bar error: {e:?}"),
+                    }
+
+                    // 2. Build wallet (hidden)
+                    match build_wallet_webview(&window_handle, proxy.clone()) {
+                        Ok(wv) => manager.wallet = Some(wv),
+                        Err(e) => eprintln!("wallet webview error: {e:?}"),
+                    }
+
+                    // 3. Build initial app webview
+                    let devnet_mode = launcher.is_some();
+                    let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
+                    let label = if dist_dir.is_some() {
+                        "App".to_string()
+                    } else if devnet_mode {
+                        "Launcher".to_string()
+                    } else {
+                        "Home".to_string()
+                    };
+                    let app_id = manager.next_app_id();
+                    let bounds = manager.app_rect(w, h);
+                    match build_app_webview(&window_handle, &app_id, dist_dir.clone(), devnet_mode, &state, proxy.clone(), bounds) {
+                        Ok(wv) => {
+                            manager.apps.push(AppWebViewEntry {
+                                webview: wv,
+                                id: app_id,
+                                label,
+                                dist_dir,
+                            });
+                            manager.active_app_index = Some(0);
+                            manager.update_tab_bar();
+                        }
                         Err(e) => {
                             eprintln!("webview error: {e:?}");
                             *control_flow = ControlFlow::Exit;
                             return;
                         }
-                    };
+                    }
 
                     window = Some(window_handle);
-                    webview = Some(webview_handle);
                 }
             }
 
@@ -209,6 +303,12 @@ fn main() -> Result<()> {
                 ..
             } => {
                 *control_flow = ControlFlow::Exit;
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Resized(size),
+                ..
+            } => {
+                manager.relayout(size.width, size.height);
             }
             _ => {}
         }
