@@ -1,33 +1,38 @@
+import { handleHostDispatch } from "./ipc/host-dispatch";
+
+declare global {
+  interface Window {
+    __WryEthereumResolve?: (id: number, result: unknown, error: unknown) => void;
+    __WryEthereumEmit?: (event: string, payload: unknown) => void;
+    __VibefiHostDispatch?: (message: unknown) => void;
+  }
+}
+
 (() => {
-  (window as any).__WryEthereumResolve =
-    (window as any).__WryEthereumResolve ||
+  window.__WryEthereumResolve =
+    window.__WryEthereumResolve ||
     function () {
-      // set by selector app
-    };
-  (window as any).__WryEthereumEmit =
-    (window as any).__WryEthereumEmit ||
-    function () {
-      // not used in selector
+      // Set by wallet selector app.
     };
 
-  (window as any).__VibefiHostDispatch =
-    (window as any).__VibefiHostDispatch ||
-    function (message: any) {
-      if (!message || typeof message !== "object") return;
-      const kind = message.kind;
-      const payload = message.payload;
-      if (kind === "rpcResponse" && payload) {
-        (window as any).__WryEthereumResolve(
-          payload.id,
-          payload.result ?? null,
-          payload.error ?? null
-        );
-        return;
-      }
-      if (kind === "walletconnectPairing") {
-        window.dispatchEvent(
-          new CustomEvent("vibefi:walletconnect-pairing", { detail: payload ?? {} })
-        );
-      }
+  window.__WryEthereumEmit =
+    window.__WryEthereumEmit ||
+    function () {
+      // Not used in selector.
+    };
+
+  window.__VibefiHostDispatch =
+    window.__VibefiHostDispatch ||
+    function (message: unknown) {
+      handleHostDispatch(message, {
+        onRpcResponse: (payload) => {
+          window.__WryEthereumResolve?.(payload.id, payload.result ?? null, payload.error ?? null);
+        },
+        onWalletconnectPairing: (payload) => {
+          window.dispatchEvent(
+            new CustomEvent("vibefi:walletconnect-pairing", { detail: payload ?? {} })
+          );
+        },
+      });
     };
 })();

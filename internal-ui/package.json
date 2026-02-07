@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "mkdir -p ./dist && bun build ./src/preload-app.ts --bundle --production --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/preload-app.js && bun build ./src/preload-wallet-selector.ts --bundle --production --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/preload-wallet-selector.js && bun build ./src/preload-tabbar.ts --bundle --production --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/preload-tabbar.js && bun build ./src/home.tsx --bundle --production --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/home.js && bun build ./src/launcher.tsx --bundle --production --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/launcher.js && bun build ./src/wallet-selector.tsx --bundle --production --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/wallet-selector.js && bun build ./src/tabbar.tsx --bundle --production --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/tabbar.js",
+    "build": "bun run ./scripts/build.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

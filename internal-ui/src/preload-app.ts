@@ -1,20 +1,55 @@
-(() => {
-  const PROVIDER_ID = "vibefi-provider";
-  const callbacks = new Map<number, { resolve: (value: unknown) => void; reject: (error: unknown) => void }>();
-  let nextId = 1;
+import { IpcClient } from "./ipc/client";
+import { PROVIDER_IDS } from "./ipc/contracts";
+import { handleHostDispatch } from "./ipc/host-dispatch";
 
-  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-  function on(event: string, handler: (...args: unknown[]) => void) {
+type Eip1193RequestArgs = {
+  method: string;
+  params?: unknown[];
+};
+
+type Listener = (...args: unknown[]) => void;
+
+declare global {
+  interface Window {
+    __WryEthereumEmit?: (event: string, payload: unknown) => void;
+    __WryEthereumResolve?: (id: number, result: unknown, error: unknown) => void;
+    __VibefiHostDispatch?: (message: unknown) => void;
+  }
+}
+
+(() => {
+  const globalWindow = window as Window & {
+    ethereum?: {
+      isWry: boolean;
+      isMetaMask: boolean;
+      request: (args: Eip1193RequestArgs) => Promise<unknown>;
+      on: (event: string, handler: Listener) => void;
+      removeListener: (event: string, handler: Listener) => void;
+      off: (event: string, handler: Listener) => void;
+      enable: () => Promise<unknown>;
+    };
+    vibefi?: {
+      request: (args: Eip1193RequestArgs) => Promise<unknown>;
+    };
+    updateTabs?: (tabs: unknown[], activeIndex: number) => void;
+  };
+
+  const ipc = new IpcClient();
+  const listeners = new Map<string, Set<Listener>>();
+
+  function on(event: string, handler: Listener) {
     if (typeof handler !== "function") return;
-    const set = listeners.get(event) ?? new Set<(...args: unknown[]) => void>();
+    const set = listeners.get(event) ?? new Set<Listener>();
     set.add(handler);
     listeners.set(event, set);
   }
-  function off(event: string, handler: (...args: unknown[]) => void) {
+
+  function off(event: string, handler: Listener) {
     const set = listeners.get(event);
     if (!set) return;
     set.delete(handler);
   }
+
   function emit(event: string, ...args: unknown[]) {
     const set = listeners.get(event);
     if (!set) return;
@@ -22,72 +57,44 @@
       try {
         handler(...args);
       } catch {
-        // Ignore listener exceptions to mirror wallet provider behavior.
+        // Keep provider semantics: listener failures should not break dispatch.
       }
     }
   }
 
-  function handleResponse(id: number, result: unknown, error: unknown) {
-    const callback = callbacks.get(id);
-    if (!callback) return;
-    callbacks.delete(id);
-    if (error) callback.reject(error);
-    else callback.resolve(result);
-  }
-
-  async function request(args: { method: string; params?: unknown[] }) {
+  async function request(args: Eip1193RequestArgs) {
     const method = args?.method;
     const params = Array.isArray(args?.params) ? args.params : [];
-    return await new Promise((resolve, reject) => {
-      const id = nextId++;
-      callbacks.set(id, { resolve, reject });
-      window.ipc.postMessage(
-        JSON.stringify({
-          id,
-          providerId: PROVIDER_ID,
-          method,
-          params,
-        })
-      );
-    });
+    return await ipc.request(PROVIDER_IDS.provider, method, params);
   }
 
-  (window as any).__WryEthereumEmit = (event: string, payload: unknown) => {
+  globalWindow.__WryEthereumEmit = (event: string, payload: unknown) => {
     emit(event, payload);
   };
 
-  (window as any).__WryEthereumResolve = (id: number, result: unknown, error: unknown) => {
-    handleResponse(id, result ?? null, error ?? null);
+  globalWindow.__WryEthereumResolve = (id: number, result: unknown, error: unknown) => {
+    ipc.resolve(id, result ?? null, error ?? null);
   };
 
-  (window as any).__VibefiHostDispatch = (message: any) => {
-    if (!message || typeof message !== "object") return;
-    const kind = message.kind;
-    const payload = message.payload;
-    switch (kind) {
-      case "rpcResponse":
-        if (payload) {
-          handleResponse(payload.id, payload.result ?? null, payload.error ?? null);
-        }
-        break;
-      case "providerEvent":
-        if (payload) {
-          emit(payload.event, payload.value);
-        }
-        break;
-      case "walletconnectPairing":
+  globalWindow.__VibefiHostDispatch = (message: unknown) => {
+    handleHostDispatch(message, {
+      onRpcResponse: (payload) => {
+        ipc.resolve(payload.id, payload.result ?? null, payload.error ?? null);
+      },
+      onProviderEvent: (payload) => {
+        emit(payload.event, payload.value);
+      },
+      onWalletconnectPairing: (payload) => {
         window.dispatchEvent(
           new CustomEvent("vibefi:walletconnect-pairing", { detail: payload ?? {} })
         );
-        break;
-      case "tabbarUpdate":
-        if (typeof (window as any).updateTabs === "function" && payload) {
-          (window as any).updateTabs(payload.tabs ?? [], payload.activeIndex ?? 0);
+      },
+      onTabbarUpdate: (payload) => {
+        if (typeof globalWindow.updateTabs === "function") {
+          globalWindow.updateTabs(payload.tabs ?? [], payload.activeIndex ?? 0);
         }
-        break;
-      default:
-        break;
-    }
+      },
+    });
   };
 
   const ethereum = {
@@ -100,8 +107,8 @@
     enable: () => request({ method: "eth_requestAccounts", params: [] }),
   };
 
-  if (!(window as any).ethereum) {
-    Object.defineProperty(window, "ethereum", {
+  if (!globalWindow.ethereum) {
+    Object.defineProperty(globalWindow, "ethereum", {
       value: ethereum,
       configurable: false,
       enumerable: true,
@@ -109,20 +116,11 @@
     });
   }
 
-  (window as any).vibefi = {
-    request: ({ method, params }: { method: string; params?: unknown[] }) =>
-      new Promise((resolve, reject) => {
-        const id = nextId++;
-        callbacks.set(id, { resolve, reject });
-        window.ipc.postMessage(
-          JSON.stringify({
-            id,
-            providerId: "vibefi-launcher",
-            method,
-            params: Array.isArray(params) ? params : [],
-          })
-        );
-      }),
+  globalWindow.vibefi = {
+    request: ({ method, params }: Eip1193RequestArgs) => {
+      const list = Array.isArray(params) ? params : [];
+      return ipc.request(PROVIDER_IDS.launcher, method, list);
+    },
   };
 
   Promise.resolve().then(async () => {

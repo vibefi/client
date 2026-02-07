@@ -1,7 +1,9 @@
 mod bundle;
 mod devnet;
+mod events;
 mod hardware;
 mod ipc;
+mod ipc_contract;
 mod menu;
 mod state;
 mod ui_bridge;
@@ -26,8 +28,7 @@ use reqwest::blocking::Client as HttpClient;
 
 use bundle::{BundleConfig, build_bundle, verify_manifest};
 use devnet::{DevnetConfig, DevnetContext, load_devnet};
-use ipc::{handle_ipc, handle_walletconnect_connect_result};
-use state::{AppState, Chain, LauncherConfig, TabAction, UserEvent, WalletState};
+use state::{AppState, Chain, LauncherConfig, UserEvent, WalletState};
 use webview::{EmbeddedContent, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, WebViewManager};
 
@@ -116,189 +117,52 @@ fn main() -> Result<()> {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(UserEvent::Ipc { webview_id, msg }) => {
-                if webview_id == "tab-bar" {
-                    // Parse tab bar IPC
-                    if let Ok(req) = serde_json::from_str::<state::IpcRequest>(&msg) {
-                        if req.provider_id.as_deref() == Some("vibefi-tabbar") {
-                            match req.method.as_str() {
-                                "switchTab" => {
-                                    if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
-                                        manager.switch_to(idx as usize);
-                                    }
-                                }
-                                "closeTab" => {
-                                    if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
-                                        manager.close_app(idx as usize);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                } else if let Some(wv) = manager.webview_for_id(&webview_id) {
-                    if let Err(e) = handle_ipc(wv, &state, &webview_id, msg) {
-                        eprintln!("ipc error: {e:?}");
-                    }
-                }
+                events::user_event::handle_ipc_event(&state, &mut manager, &webview_id, msg);
             }
             Event::UserEvent(UserEvent::OpenWalletSelector) => {
-                // Only open one selector at a time.
-                {
-                    let sel = state.selector_webview_id.lock().unwrap();
-                    if sel.is_some() {
-                        // Already open — just switch to it
-                        if let Some(idx) = manager.index_of_label("Connect Wallet") {
-                            manager.switch_to(idx);
-                        }
-                        return;
-                    }
-                }
-                if let Some(w) = window.as_ref() {
-                    let size = w.inner_size();
-                    let id = manager.next_app_id();
-                    let bounds = manager.app_rect(size.width, size.height);
-                    match build_app_webview(
-                        w,
-                        &id,
-                        None,
-                        EmbeddedContent::WalletSelector,
-                        &state,
-                        proxy.clone(),
-                        bounds,
-                    ) {
-                        Ok(wv) => {
-                            // Hide currently active before adding new
-                            if let Some(active) = manager.active_app_webview() {
-                                let _ = active.set_visible(false);
-                            }
-                            let idx = manager.apps.len();
-                            {
-                                let mut sel = state.selector_webview_id.lock().unwrap();
-                                *sel = Some(id.clone());
-                            }
-                            manager.apps.push(AppWebViewEntry {
-                                webview: wv,
-                                id,
-                                label: "Connect Wallet".to_string(),
-                                dist_dir: None,
-                            });
-                            manager.active_app_index = Some(idx);
-                            manager.update_tab_bar();
-                        }
-                        Err(e) => eprintln!("failed to open wallet selector tab: {e:?}"),
-                    }
-                }
+                events::user_event::handle_open_wallet_selector(
+                    window.as_ref(),
+                    &state,
+                    &mut manager,
+                    &proxy,
+                );
             }
             Event::UserEvent(UserEvent::WalletConnectPairing { uri, qr_svg }) => {
-                // Send pairing data to the wallet selector tab (if open).
-                let sel_id = state.selector_webview_id.lock().unwrap().clone();
-                if let Some(sel_id) = sel_id {
-                    if let Some(wv) = manager.webview_for_id(&sel_id) {
-                        ui_bridge::emit_walletconnect_pairing(wv, &uri, &qr_svg);
-                    }
-                }
+                events::user_event::handle_walletconnect_pairing(&state, &manager, uri, qr_svg);
             }
             Event::UserEvent(UserEvent::WalletConnectResult {
                 webview_id,
                 ipc_id,
                 result,
             }) => {
-                // Try the specific webview first, fall back to active
-                let wv = manager
-                    .webview_for_id(&webview_id)
-                    .or_else(|| manager.active_app_webview());
-                if let Some(wv) = wv {
-                    handle_walletconnect_connect_result(wv, &state, ipc_id, result.clone());
-                }
-
-                // If there is a pending eth_requestAccounts from a dapp,
-                // resolve it now that the wallet is connected.
-                if let Ok(ref session) = result {
-                    let pending = state.pending_connect.lock().unwrap().take();
-                    if let Some(pc) = pending {
-                        if pc.webview_id != webview_id {
-                            if let Some(dapp_wv) = manager.webview_for_id(&pc.webview_id) {
-                                let accounts: Vec<serde_json::Value> = session
-                                    .accounts
-                                    .iter()
-                                    .map(|a| serde_json::Value::String(a.clone()))
-                                    .collect();
-                                let _ = ipc::respond_ok(
-                                    dapp_wv,
-                                    pc.ipc_id,
-                                    serde_json::Value::Array(accounts),
-                                );
-                            }
-                        }
-                    }
-                }
+                events::user_event::handle_walletconnect_result(
+                    &state,
+                    &mut manager,
+                    webview_id,
+                    ipc_id,
+                    result,
+                );
             }
             Event::UserEvent(UserEvent::HardwareSignResult {
                 webview_id,
                 ipc_id,
                 result,
             }) => {
-                if let Some(wv) = manager.webview_for_id(&webview_id) {
-                    match result {
-                        Ok(value) => {
-                            let json_val: serde_json::Value = serde_json::Value::String(value);
-                            if let Err(e) = ipc::respond_ok(wv, ipc_id, json_val) {
-                                eprintln!("[hardware] failed to send ok response: {e}");
-                            }
-                        }
-                        Err(msg) => {
-                            if let Err(e) = ipc::respond_err(wv, ipc_id, &msg) {
-                                eprintln!("[hardware] failed to send error response: {e}");
-                            }
-                        }
-                    }
-                }
+                events::user_event::handle_hardware_sign_result(
+                    &manager, webview_id, ipc_id, result,
+                );
             }
             Event::UserEvent(UserEvent::CloseWalletSelector) => {
-                {
-                    let mut sel = state.selector_webview_id.lock().unwrap();
-                    *sel = None;
-                }
-                manager.close_by_label("Connect Wallet");
+                events::user_event::handle_close_wallet_selector(&state, &mut manager);
             }
             Event::UserEvent(UserEvent::TabAction(action)) => {
-                match action {
-                    TabAction::SwitchTab(i) => manager.switch_to(i),
-                    TabAction::CloseTab(i) => manager.close_app(i),
-                    TabAction::OpenApp { name, dist_dir } => {
-                        if let Some(w) = window.as_ref() {
-                            let size = w.inner_size();
-                            let id = manager.next_app_id();
-                            let bounds = manager.app_rect(size.width, size.height);
-                            match build_app_webview(
-                                w,
-                                &id,
-                                Some(dist_dir.clone()),
-                                EmbeddedContent::Default,
-                                &state,
-                                proxy.clone(),
-                                bounds,
-                            ) {
-                                Ok(wv) => {
-                                    // Hide currently active before adding new
-                                    if let Some(active) = manager.active_app_webview() {
-                                        let _ = active.set_visible(false);
-                                    }
-                                    let idx = manager.apps.len();
-                                    manager.apps.push(AppWebViewEntry {
-                                        webview: wv,
-                                        id,
-                                        label: name,
-                                        dist_dir: Some(dist_dir),
-                                    });
-                                    manager.active_app_index = Some(idx);
-                                    manager.update_tab_bar();
-                                }
-                                Err(e) => eprintln!("failed to open app tab: {e:?}"),
-                            }
-                        }
-                    }
-                }
+                events::user_event::handle_tab_action(
+                    window.as_ref(),
+                    &state,
+                    &mut manager,
+                    &proxy,
+                    action,
+                );
             }
 
             Event::NewEvents(StartCause::Init) => {

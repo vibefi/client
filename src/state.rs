@@ -23,18 +23,6 @@ impl Default for Chain {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IpcRequest {
-    #[serde(default)]
-    pub id: u64,
-    #[serde(default)]
-    pub provider_id: Option<String>,
-    pub method: String,
-    #[serde(default)]
-    pub params: serde_json::Value,
-}
-
 #[derive(Debug, Clone)]
 pub enum UserEvent {
     Ipc {
