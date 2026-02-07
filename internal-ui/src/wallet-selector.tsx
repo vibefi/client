@@ -1,18 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { IpcClient } from "./ipc/client";
+import { PROVIDER_IDS, type WalletconnectPairingPayload } from "./ipc/contracts";
 
 declare global {
   interface Window {
-    ipc: {
-      postMessage: (message: string) => void;
-    };
+    __WryEthereumResolve?: (id: number, result: unknown, error: unknown) => void;
   }
 }
-
-type PairingPayload = {
-  uri?: string;
-  qrSvg?: string;
-};
 
 type Phase = "select" | "connecting" | "done";
 
@@ -110,26 +105,15 @@ const styles = `
   .error { color: #dc2626; font-size: 13px; margin-top: 8px; }
 `;
 
-const _callbacks = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
-let _nextId = 1;
+const walletClient = new IpcClient();
 
-// Rust calls __WryEthereumResolve(id, result, error) to resolve pending requests.
-(window as any).__WryEthereumResolve = (id: number, result: unknown, error: unknown) => {
-  const cb = _callbacks.get(id);
-  if (!cb) return;
-  _callbacks.delete(id);
-  if (error) cb.reject(error);
-  else cb.resolve(result);
+// Rust emits rpcResponse through __WryEthereumResolve for selector requests.
+window.__WryEthereumResolve = (id: number, result: unknown, error: unknown) => {
+  walletClient.resolve(id, result, error);
 };
 
 function walletIpc(method: string, params: unknown[] = []): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = _nextId++;
-    _callbacks.set(id, { resolve, reject });
-    window.ipc.postMessage(
-      JSON.stringify({ id, providerId: "vibefi-wallet", method, params })
-    );
-  });
+  return walletClient.request(PROVIDER_IDS.wallet, method, params);
 }
 
 async function copyText(value: string) {
@@ -157,7 +141,7 @@ function App() {
 
   useEffect(() => {
     const onPairing = (event: Event) => {
-      const custom = event as CustomEvent<PairingPayload>;
+      const custom = event as CustomEvent<WalletconnectPairingPayload>;
       const detail = custom.detail || {};
       if (typeof detail.uri === "string") setUri(detail.uri);
       if (typeof detail.qrSvg === "string") setQrSvg(detail.qrSvg);

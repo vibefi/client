@@ -27,6 +27,7 @@ fn main() {
     emit_rerun_for_path(&internal_ui.join("package.json"));
     emit_rerun_for_path(&internal_ui.join("bun.lock"));
     emit_rerun_for_dir(&internal_ui.join("src"));
+    emit_rerun_for_dir(&internal_ui.join("scripts"));
     emit_rerun_for_dir(&internal_ui.join("static"));
 
     println!("cargo:warning=[internal-ui] running: bun run build");
@@ -49,10 +50,7 @@ fn main() {
             }
 
             if !output.status.success() {
-                panic!(
-                    "internal-ui build failed with status: {}",
-                    output.status
-                );
+                panic!("internal-ui build failed with status: {}", output.status);
             }
         }
         Err(error) => panic!("failed to execute bun for internal-ui build: {error}"),

@@ -1,23 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-
-type Tab = {
-  id?: string;
-  label?: string;
-};
+import { IpcClient } from "./ipc/client";
+import { PROVIDER_IDS, type Tab } from "./ipc/contracts";
 
 declare global {
   interface Window {
-    ipc: {
-      postMessage: (message: string) => void;
-    };
-    updateTabs?: (tabs: Tab[], activeIndex: number) => void;
-    __VibefiTabbarState?: {
-      tabs?: Tab[];
-      activeIndex?: number;
-    };
+    updateTabs?: (tabs: unknown[], activeIndex: number) => void;
+    __VibefiTabbarState?: unknown;
   }
 }
+
+const tabbarClient = new IpcClient();
 
 const styles = `
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -73,13 +66,7 @@ html, body {
 `;
 
 function postTabbarCommand(method: "switchTab" | "closeTab", index: number) {
-  window.ipc.postMessage(
-    JSON.stringify({
-      providerId: "vibefi-tabbar",
-      method,
-      params: [index],
-    })
-  );
+  tabbarClient.notify(PROVIDER_IDS.tabbar, method, [index]);
 }
 
 function App() {
@@ -87,13 +74,15 @@ function App() {
   const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
-    window.updateTabs = (nextTabs: Tab[], nextActiveIndex: number) => {
-      setTabs(Array.isArray(nextTabs) ? nextTabs : []);
+    window.updateTabs = (nextTabs: unknown[], nextActiveIndex: number) => {
+      setTabs(Array.isArray(nextTabs) ? (nextTabs as Tab[]) : []);
       setActiveIndex(Number.isFinite(nextActiveIndex) ? nextActiveIndex : 0);
     };
 
-    const initial = window.__VibefiTabbarState;
-    if (initial) {
+    const initial = window.__VibefiTabbarState as
+      | { tabs?: unknown[]; activeIndex?: number }
+      | undefined;
+    if (initial && typeof window.updateTabs === "function") {
       window.updateTabs(initial.tabs ?? [], initial.activeIndex ?? 0);
     }
 

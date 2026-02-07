@@ -1,13 +1,19 @@
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
 use wry::WebView;
 
-fn dispatch(webview: &WebView, kind: &str, payload: Value) -> Result<()> {
-    let envelope = json!({
-        "kind": kind,
-        "payload": payload,
-    });
-    let script = format!("window.__VibefiHostDispatch({});", envelope);
+use crate::ipc_contract::{
+    HostDispatchEnvelope, HostDispatchKind, ProviderEventPayload, RpcResponseError,
+    RpcResponsePayload, TabbarUpdatePayload, WalletconnectPairingPayload,
+};
+
+fn dispatch<T: Serialize>(webview: &WebView, kind: HostDispatchKind, payload: T) -> Result<()> {
+    let envelope = HostDispatchEnvelope { kind, payload };
+    let script = format!(
+        "window.__VibefiHostDispatch({});",
+        serde_json::to_string(&envelope)?
+    );
     webview.evaluate_script(&script)?;
     Ok(())
 }
@@ -15,27 +21,27 @@ fn dispatch(webview: &WebView, kind: &str, payload: Value) -> Result<()> {
 pub fn respond_ok(webview: &WebView, id: u64, value: Value) -> Result<()> {
     dispatch(
         webview,
-        "rpcResponse",
-        json!({
-            "id": id,
-            "result": value,
-            "error": Value::Null,
-        }),
+        HostDispatchKind::RpcResponse,
+        RpcResponsePayload {
+            id,
+            result: value,
+            error: None,
+        },
     )
 }
 
 pub fn respond_err(webview: &WebView, id: u64, message: &str) -> Result<()> {
     dispatch(
         webview,
-        "rpcResponse",
-        json!({
-            "id": id,
-            "result": Value::Null,
-            "error": {
-                "code": -32601,
-                "message": message,
-            },
-        }),
+        HostDispatchKind::RpcResponse,
+        RpcResponsePayload {
+            id,
+            result: Value::Null,
+            error: Some(RpcResponseError {
+                code: -32601,
+                message: message.to_string(),
+            }),
+        },
     )
 }
 
@@ -43,43 +49,40 @@ pub fn emit_accounts_changed(webview: &WebView, addrs: Vec<String>) {
     let payload = Value::Array(addrs.into_iter().map(Value::String).collect());
     let _ = dispatch(
         webview,
-        "providerEvent",
-        json!({
-            "event": "accountsChanged",
-            "value": payload,
-        }),
+        HostDispatchKind::ProviderEvent,
+        ProviderEventPayload {
+            event: "accountsChanged".to_string(),
+            value: payload,
+        },
     );
 }
 
 pub fn emit_chain_changed(webview: &WebView, chain_id_hex: String) {
     let _ = dispatch(
         webview,
-        "providerEvent",
-        json!({
-            "event": "chainChanged",
-            "value": chain_id_hex,
-        }),
+        HostDispatchKind::ProviderEvent,
+        ProviderEventPayload {
+            event: "chainChanged".to_string(),
+            value: Value::String(chain_id_hex),
+        },
     );
 }
 
 pub fn emit_walletconnect_pairing(webview: &WebView, uri: &str, qr_svg: &str) {
     let _ = dispatch(
         webview,
-        "walletconnectPairing",
-        json!({
-            "uri": uri,
-            "qrSvg": qr_svg,
-        }),
+        HostDispatchKind::WalletconnectPairing,
+        WalletconnectPairingPayload {
+            uri: uri.to_string(),
+            qr_svg: qr_svg.to_string(),
+        },
     );
 }
 
 pub fn update_tabs(webview: &WebView, tabs: Vec<Value>, active_index: usize) -> Result<()> {
     dispatch(
         webview,
-        "tabbarUpdate",
-        json!({
-            "tabs": tabs,
-            "activeIndex": active_index,
-        }),
+        HostDispatchKind::TabbarUpdate,
+        TabbarUpdatePayload { tabs, active_index },
     )
 }

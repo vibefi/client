@@ -308,7 +308,7 @@ fn event_kind(log: &Log) -> Result<String> {
 pub fn handle_launcher_ipc(
     _webview: &wry::WebView,
     state: &AppState,
-    req: &crate::state::IpcRequest,
+    req: &crate::ipc_contract::IpcRequest,
 ) -> Result<serde_json::Value> {
     let devnet = state
         .devnet
