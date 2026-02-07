@@ -4,6 +4,7 @@ mod hardware;
 mod ipc;
 mod menu;
 mod state;
+mod ui_bridge;
 mod walletconnect;
 mod webview;
 mod webview_manager;
@@ -27,15 +28,21 @@ use bundle::{BundleConfig, build_bundle, verify_manifest};
 use devnet::{DevnetConfig, DevnetContext, load_devnet};
 use ipc::{handle_ipc, handle_walletconnect_connect_result};
 use state::{AppState, Chain, LauncherConfig, TabAction, UserEvent, WalletState};
-use webview::{build_app_webview, build_tab_bar_webview, EmbeddedContent};
+use webview::{EmbeddedContent, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, WebViewManager};
 
-static INDEX_HTML: &str = include_str!("../assets/index.html");
-static LAUNCHER_HTML: &str = include_str!("../assets/launcher.html");
-static TAB_BAR_HTML: &str = include_str!("../assets/tabbar.html");
-static WALLET_SELECTOR_HTML: &str = include_str!("../assets/wallet-selector.html");
-static LAUNCHER_JS: &str = include_str!("../assets/react/launcher.js");
-static WALLET_SELECTOR_JS: &str = include_str!("../assets/react/wallet-selector.js");
+static INDEX_HTML: &str = include_str!("../internal-ui/static/home.html");
+static LAUNCHER_HTML: &str = include_str!("../internal-ui/static/launcher.html");
+static TAB_BAR_HTML: &str = include_str!("../internal-ui/static/tabbar.html");
+static WALLET_SELECTOR_HTML: &str = include_str!("../internal-ui/static/wallet-selector.html");
+static HOME_JS: &str = include_str!("../internal-ui/dist/home.js");
+static LAUNCHER_JS: &str = include_str!("../internal-ui/dist/launcher.js");
+static TAB_BAR_JS: &str = include_str!("../internal-ui/dist/tabbar.js");
+static WALLET_SELECTOR_JS: &str = include_str!("../internal-ui/dist/wallet-selector.js");
+static PRELOAD_APP_JS: &str = include_str!("../internal-ui/dist/preload-app.js");
+static PRELOAD_WALLET_SELECTOR_JS: &str =
+    include_str!("../internal-ui/dist/preload-wallet-selector.js");
+static PRELOAD_TAB_BAR_JS: &str = include_str!("../internal-ui/dist/preload-tabbar.js");
 
 /// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
 /// This matches a common dev key used across many tutorials.
@@ -187,15 +194,7 @@ fn main() -> Result<()> {
                 let sel_id = state.selector_webview_id.lock().unwrap().clone();
                 if let Some(sel_id) = sel_id {
                     if let Some(wv) = manager.webview_for_id(&sel_id) {
-                        let detail = serde_json::json!({
-                            "uri": uri,
-                            "qrSvg": qr_svg,
-                        });
-                        let js = format!(
-                            "window.dispatchEvent(new CustomEvent('vibefi:walletconnect-pairing', {{ detail: {} }}));",
-                            detail
-                        );
-                        let _ = wv.evaluate_script(&js);
+                        ui_bridge::emit_walletconnect_pairing(wv, &uri, &qr_svg);
                     }
                 }
             }

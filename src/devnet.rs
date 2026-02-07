@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, B256, Bytes, Log, U256};
-use alloy_sol_types::{sol, SolEvent};
-use anyhow::{anyhow, Context, Result};
+use alloy_sol_types::{SolEvent, sol};
+use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -10,7 +10,7 @@ use std::{
     str::FromStr,
 };
 
-use crate::bundle::{build_bundle, verify_manifest, BundleManifest};
+use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
 use crate::state::{AppState, TabAction, UserEvent};
 
 #[derive(Debug, Deserialize, Clone)]
@@ -211,8 +211,12 @@ pub fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
                 versionId: dapp.latest_version_id.to_string(),
                 name: latest.and_then(|v| v.name.clone()).unwrap_or_default(),
                 version: latest.and_then(|v| v.version.clone()).unwrap_or_default(),
-                description: latest.and_then(|v| v.description.clone()).unwrap_or_default(),
-                status: latest.and_then(|v| v.status.clone()).unwrap_or_else(|| "Unknown".to_string()),
+                description: latest
+                    .and_then(|v| v.description.clone())
+                    .unwrap_or_default(),
+                status: latest
+                    .and_then(|v| v.status.clone())
+                    .unwrap_or_else(|| "Unknown".to_string()),
                 rootCid: latest.and_then(|v| v.root_cid.clone()).unwrap_or_default(),
             });
         }
@@ -248,7 +252,10 @@ fn rpc_get_logs(devnet: &DevnetContext, address: &str, topic0: B256) -> Result<V
     if let Some(err) = v.get("error") {
         return Err(anyhow!("rpc getLogs error: {}", err));
     }
-    let logs_val = v.get("result").cloned().unwrap_or(serde_json::Value::Array(Vec::new()));
+    let logs_val = v
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new()));
     let logs: Vec<RpcLog> = serde_json::from_value(logs_val)?;
     let mut out = Vec::new();
     for log in logs {
@@ -298,8 +305,15 @@ fn event_kind(log: &Log) -> Result<String> {
     }
 }
 
-pub fn handle_launcher_ipc(_webview: &wry::WebView, state: &AppState, req: &crate::state::IpcRequest) -> Result<serde_json::Value> {
-    let devnet = state.devnet.as_ref().ok_or_else(|| anyhow!("Devnet not enabled"))?;
+pub fn handle_launcher_ipc(
+    _webview: &wry::WebView,
+    state: &AppState,
+    req: &crate::state::IpcRequest,
+) -> Result<serde_json::Value> {
+    let devnet = state
+        .devnet
+        .as_ref()
+        .ok_or_else(|| anyhow!("Devnet not enabled"))?;
     match req.method.as_str() {
         "vibefi_listDapps" => {
             println!("launcher: fetching dapp list from logs");
@@ -334,10 +348,12 @@ pub fn handle_launcher_ipc(_webview: &wry::WebView, state: &AppState, req: &crat
                 println!("launcher: build bundle");
                 build_bundle(&bundle_dir, &dist_dir)?;
             }
-            let _ = state.proxy.send_event(UserEvent::TabAction(TabAction::OpenApp {
-                name: name.to_string(),
-                dist_dir,
-            }));
+            let _ = state
+                .proxy
+                .send_event(UserEvent::TabAction(TabAction::OpenApp {
+                    name: name.to_string(),
+                    dist_dir,
+                }));
             Ok(serde_json::Value::Bool(true))
         }
         _ => Err(anyhow!("Unsupported launcher method: {}", req.method)),
@@ -355,7 +371,10 @@ fn ensure_bundle_cached(devnet: &DevnetContext, root_cid: &str, bundle_dir: &Pat
     Ok(())
 }
 
-fn fetch_dapp_manifest(devnet: &DevnetContext, root_cid: &str) -> Result<(BundleManifest, Vec<u8>)> {
+fn fetch_dapp_manifest(
+    devnet: &DevnetContext,
+    root_cid: &str,
+) -> Result<(BundleManifest, Vec<u8>)> {
     let gateway = normalize_gateway(&devnet.ipfs_gateway);
     let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
     let res = devnet.http.get(url).send().context("fetch manifest")?;
@@ -401,7 +420,10 @@ fn compute_ipfs_cid(out_dir: &Path, ipfs_api: &str) -> Result<String> {
     let files = crate::bundle::walk_files(out_dir)?;
     let mut form = reqwest::blocking::multipart::Form::new();
     for file in files {
-        let rel = file.strip_prefix(out_dir)?.to_string_lossy().replace('\\', "/");
+        let rel = file
+            .strip_prefix(out_dir)?
+            .to_string_lossy()
+            .replace('\\', "/");
         let data = fs::read(&file)?;
         let part = reqwest::blocking::multipart::Part::bytes(data).file_name(rel);
         form = form.part("file", part);
@@ -429,7 +451,11 @@ fn compute_ipfs_cid(out_dir: &Path, ipfs_api: &str) -> Result<String> {
     if let Some(hash) = json.get("Hash").and_then(|v| v.as_str()) {
         return Ok(hash.to_string());
     }
-    if let Some(hash) = json.get("Cid").and_then(|v| v.get("/")).and_then(|v| v.as_str()) {
+    if let Some(hash) = json
+        .get("Cid")
+        .and_then(|v| v.get("/"))
+        .and_then(|v| v.as_str())
+    {
         return Ok(hash.to_string());
     }
     Err(anyhow!("IPFS add response missing CID"))

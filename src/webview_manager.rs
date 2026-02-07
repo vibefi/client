@@ -175,12 +175,6 @@ impl WebViewManager {
         }
     }
 
-    pub fn broadcast_to_apps(&self, js: &str) {
-        for entry in &self.apps {
-            let _ = entry.webview.evaluate_script(js);
-        }
-    }
-
     pub fn update_tab_bar(&self) {
         let tb = match &self.tab_bar {
             Some(tb) => tb,
@@ -192,12 +186,7 @@ impl WebViewManager {
             .map(|e| serde_json::json!({ "id": e.id, "label": e.label }))
             .collect();
         let active = self.active_app_index.unwrap_or(0);
-        let js = format!(
-            "if(typeof window.updateTabs==='function')window.updateTabs({},{});",
-            serde_json::Value::Array(tabs),
-            active
-        );
-        let _ = tb.evaluate_script(&js);
+        let _ = crate::ui_bridge::update_tabs(tb, tabs, active);
     }
 
     pub fn tab_bar_rect(&self, phys_width: u32) -> Rect {

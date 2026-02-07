@@ -17,10 +17,13 @@ cargo run
 
 ## Internal UI (React)
 
-The launcher and WalletConnect overlay are React apps built from `internal-ui/src` into
-`assets/react/*.js` and loaded over `app://...`.
+Built-in UI pages and preload scripts are bundled from `internal-ui/src` to
+`internal-ui/dist/*` and loaded over `app://...`.
 
-Rebuild these internal UI bundles after editing React source:
+`cargo build` / `cargo run` automatically run the internal-ui build via `build.rs`,
+so `bun` must be installed.
+
+Manual rebuild (optional):
 
 ```bash
 cd internal-ui

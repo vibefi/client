@@ -37,7 +37,10 @@ pub struct IpcRequest {
 
 #[derive(Debug, Clone)]
 pub enum UserEvent {
-    Ipc { webview_id: String, msg: String },
+    Ipc {
+        webview_id: String,
+        msg: String,
+    },
     OpenWalletSelector,
     WalletConnectPairing {
         uri: String,
