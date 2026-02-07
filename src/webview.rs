@@ -9,7 +9,18 @@ use wry::{
 
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
-use crate::{INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, TAB_BAR_HTML, WALLET_HTML, WALLET_JS};
+use crate::{INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, TAB_BAR_HTML, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS};
+
+/// What embedded content to serve when `dist_dir` is `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddedContent {
+    /// The default demo `index.html`.
+    Default,
+    /// The devnet launcher (launcher.html + launcher.js).
+    Launcher,
+    /// The runtime wallet-selector tab.
+    WalletSelector,
+}
 
 pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     // A minimal EIP-1193 provider shim.
@@ -127,6 +138,19 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     .to_string()
 });
 
+/// Minimal init script for the wallet-selector tab.
+/// The selector React app defines __WryEthereumResolve itself; this stub
+/// prevents errors if Rust tries to call it before the page JS loads.
+pub static WALLET_SELECTOR_INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
+    r#"
+(() => {
+  window.__WryEthereumResolve = window.__WryEthereumResolve || function() {};
+  window.__WryEthereumEmit = window.__WryEthereumEmit || function() {};
+})();
+"#
+    .to_string()
+});
+
 fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
     let rel = path.trim_start_matches('/');
     let mut file_path = if rel.is_empty() {
@@ -187,7 +211,7 @@ pub fn build_app_webview(
     window: &tao::window::Window,
     id: &str,
     dist_dir: Option<PathBuf>,
-    devnet_mode: bool,
+    embedded: EmbeddedContent,
     state: &AppState,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
@@ -199,20 +223,24 @@ pub fn build_app_webview(
             let (body, mime) = serve_file(dist, &path);
             csp_response(body, mime)
         } else {
-            match path.as_str() {
-                "/" | "/index.html" => {
-                    let html = if devnet_mode {
-                        LAUNCHER_HTML
-                    } else {
-                        INDEX_HTML
+            match (embedded, path.as_str()) {
+                (_, "/" | "/index.html") => {
+                    let html = match embedded {
+                        EmbeddedContent::Default => INDEX_HTML,
+                        EmbeddedContent::Launcher => LAUNCHER_HTML,
+                        EmbeddedContent::WalletSelector => WALLET_SELECTOR_HTML,
                     };
                     csp_response(
                         html.as_bytes().to_vec(),
                         "text/html; charset=utf-8".to_string(),
                     )
                 }
-                "/launcher.js" if devnet_mode => csp_response(
+                (EmbeddedContent::Launcher, "/launcher.js") => csp_response(
                     LAUNCHER_JS.as_bytes().to_vec(),
+                    "application/javascript; charset=utf-8".to_string(),
+                ),
+                (EmbeddedContent::WalletSelector, "/wallet-selector.js") => csp_response(
+                    WALLET_SELECTOR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
                 ),
                 _ => csp_response(
@@ -225,11 +253,17 @@ pub fn build_app_webview(
 
     let navigation_handler = |url: String| url.starts_with("app://") || url == "about:blank";
 
+    let init_script = if embedded == EmbeddedContent::WalletSelector {
+        (*WALLET_SELECTOR_INIT_SCRIPT).clone()
+    } else {
+        (*INIT_SCRIPT).clone()
+    };
+
     let webview_id = id.to_string();
     let webview = WebViewBuilder::new()
         .with_id(id)
         .with_bounds(bounds)
-        .with_initialization_script((*INIT_SCRIPT).clone())
+        .with_initialization_script(init_script)
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://index.html")
         .with_navigation_handler(navigation_handler)
@@ -242,18 +276,20 @@ pub fn build_app_webview(
         .build_as_child(window)
         .context("failed to build app webview")?;
 
-    // Emit initial chain/accounts state after load.
-    let addr = state.account();
-    let chain_hex = state.chain_id_hex();
-    {
-        let ws = state.wallet.lock().unwrap();
-        if ws.authorized {
-            if let Some(addr) = addr {
-                emit_accounts_changed(&webview, vec![addr]);
+    // Emit initial chain/accounts state after load (skip for selector tab).
+    if embedded != EmbeddedContent::WalletSelector {
+        let addr = state.account();
+        let chain_hex = state.chain_id_hex();
+        {
+            let ws = state.wallet.lock().unwrap();
+            if ws.authorized {
+                if let Some(addr) = addr {
+                    emit_accounts_changed(&webview, vec![addr]);
+                }
             }
         }
+        emit_chain_changed(&webview, chain_hex);
     }
-    emit_chain_changed(&webview, chain_hex);
 
     Ok(webview)
 }
@@ -291,51 +327,6 @@ pub fn build_tab_bar_webview(
         })
         .build_as_child(window)
         .context("failed to build tab bar webview")?;
-
-    Ok(webview)
-}
-
-pub fn build_wallet_webview(
-    window: &tao::window::Window,
-    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
-) -> Result<WebView> {
-    let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
-        let path = normalized_app_path(request.uri());
-        let (body, mime) = match path.as_str() {
-            "/" | "/index.html" | "/wallet.html" => (
-                WALLET_HTML.as_bytes().to_vec(),
-                "text/html; charset=utf-8".to_string(),
-            ),
-            "/wallet.js" => (
-                WALLET_JS.as_bytes().to_vec(),
-                "application/javascript; charset=utf-8".to_string(),
-            ),
-            _ => (
-                format!("Not found: {}", path).into_bytes(),
-                "text/plain; charset=utf-8".to_string(),
-            ),
-        };
-        csp_response(body, mime)
-    };
-
-    let bounds = crate::webview_manager::WebViewManager::wallet_rect();
-
-    let webview = WebViewBuilder::new()
-        .with_id("wallet")
-        .with_bounds(bounds)
-        .with_focused(false)
-        .with_custom_protocol("app".into(), protocol)
-        .with_url("app://wallet.html")
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
-            let _ = proxy.send_event(UserEvent::Ipc {
-                webview_id: "wallet".to_string(),
-                msg: req.body().clone(),
-            });
-        })
-        .build_as_child(window)
-        .context("failed to build wallet webview")?;
-
-    let _ = webview.set_visible(false);
 
     Ok(webview)
 }

@@ -36,6 +36,10 @@ fn bring_webview_to_front(webview: &WebView) {
     }
 }
 
+// Suppress unused warning on non-macOS.
+#[cfg(not(target_os = "macos"))]
+fn bring_webview_to_front(_webview: &WebView) {}
+
 /// Logical tab bar height in points. Must be scaled by the window's scale factor
 /// to get the physical pixel height used in `Rect` bounds.
 pub const TAB_BAR_HEIGHT_LOGICAL: f64 = 40.0;
@@ -49,7 +53,6 @@ pub struct AppWebViewEntry {
 
 pub struct WebViewManager {
     pub tab_bar: Option<WebView>,
-    pub wallet: Option<WebView>,
     pub apps: Vec<AppWebViewEntry>,
     pub active_app_index: Option<usize>,
     next_id: u64,
@@ -60,7 +63,6 @@ impl WebViewManager {
     pub fn new(scale_factor: f64) -> Self {
         Self {
             tab_bar: None,
-            wallet: None,
             apps: Vec::new(),
             active_app_index: None,
             next_id: 0,
@@ -86,9 +88,6 @@ impl WebViewManager {
         if id == "tab-bar" {
             return self.tab_bar.as_ref();
         }
-        if id == "wallet" {
-            return self.wallet.as_ref();
-        }
         self.apps.iter().find(|e| e.id == id).map(|e| &e.webview)
     }
 
@@ -108,6 +107,8 @@ impl WebViewManager {
             }
         }
         let _ = self.apps[index].webview.set_visible(true);
+        #[cfg(target_os = "macos")]
+        bring_webview_to_front(&self.apps[index].webview);
         self.active_app_index = Some(index);
         self.update_tab_bar();
     }
@@ -140,6 +141,18 @@ impl WebViewManager {
             let _ = self.apps[i].webview.set_visible(true);
         }
         self.update_tab_bar();
+    }
+
+    /// Find an app entry by its label and return its index.
+    pub fn index_of_label(&self, label: &str) -> Option<usize> {
+        self.apps.iter().position(|e| e.label == label)
+    }
+
+    /// Close an app tab by label (used to close the wallet selector).
+    pub fn close_by_label(&mut self, label: &str) {
+        if let Some(idx) = self.index_of_label(label) {
+            self.close_app(idx);
+        }
     }
 
     pub fn relayout(&self, phys_width: u32, phys_height: u32) {
@@ -202,65 +215,5 @@ impl WebViewManager {
             position: PhysicalPosition::new(0i32, tb_h as i32).into(),
             size: PhysicalSize::new(phys_width, app_height).into(),
         }
-    }
-
-    pub fn wallet_rect() -> Rect {
-        // Use 1x1 instead of 0x0 so macOS WKWebView loads the page content.
-        Rect {
-            position: PhysicalPosition::new(0, 0).into(),
-            size: PhysicalSize::new(1u32, 1u32).into(),
-        }
-    }
-
-    /// Position the wallet webview as a floating panel in the bottom-right
-    /// of the app area and make it visible.
-    pub fn show_wallet_overlay(&self, phys_width: u32, phys_height: u32) {
-        let wv = match &self.wallet {
-            Some(wv) => wv,
-            None => return,
-        };
-        let panel_w = (360.0 * self.scale_factor) as u32;
-        let panel_h = (420.0 * self.scale_factor) as u32;
-        let margin = (12.0 * self.scale_factor) as u32;
-        let tb_h = self.tab_bar_height_px();
-        let x = phys_width.saturating_sub(panel_w + margin) as i32;
-        let y = phys_height.saturating_sub(panel_h + margin) as i32;
-        // Clamp y so it doesn't overlap the tab bar
-        let y = y.max(tb_h as i32);
-        let rect = Rect {
-            position: PhysicalPosition::new(x, y).into(),
-            size: PhysicalSize::new(panel_w, panel_h).into(),
-        };
-        let _ = wv.set_bounds(rect);
-        let _ = wv.set_visible(true);
-        #[cfg(target_os = "macos")]
-        bring_webview_to_front(wv);
-    }
-
-    /// Hide the wallet overlay and shrink it to zero-size.
-    pub fn hide_wallet_overlay(&self) {
-        let wv = match &self.wallet {
-            Some(wv) => wv,
-            None => return,
-        };
-        let _ = wv.set_visible(false);
-        let _ = wv.set_bounds(Self::wallet_rect());
-    }
-
-    /// Send pairing URI + QR SVG to the wallet webview's JS.
-    pub fn update_wallet_pairing(&self, uri: &str, qr_svg: &str) {
-        let wv = match &self.wallet {
-            Some(wv) => wv,
-            None => return,
-        };
-        let detail = serde_json::json!({
-            "uri": uri,
-            "qrSvg": qr_svg,
-        });
-        let js = format!(
-            "window.dispatchEvent(new CustomEvent('vibefi:walletconnect-pairing', {{ detail: {} }}));",
-            detail
-        );
-        let _ = wv.evaluate_script(&js);
     }
 }
