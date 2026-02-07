@@ -15,6 +15,19 @@ This is a minimal example of:
 cargo run
 ```
 
+## Internal UI (React)
+
+The launcher and WalletConnect overlay are React apps built from `internal-ui/src` into
+`assets/react/*.js` and loaded over `app://...`.
+
+Rebuild these internal UI bundles after editing React source:
+
+```bash
+cd internal-ui
+bun install
+bun run build
+```
+
 ## Run with WalletConnect
 
 Install helper dependencies once:

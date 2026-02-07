@@ -13,3 +13,4 @@ Thumbs.db
 .vscode/
 client/.vibefi
 walletconnect-helper/node_modules/
+internal-ui/node_modules/

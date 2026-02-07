@@ -3,13 +3,13 @@ use once_cell::sync::Lazy;
 use std::fs;
 use std::path::PathBuf;
 use wry::{
-    http::{header::CONTENT_TYPE, Response},
     Rect, WebView, WebViewBuilder,
+    http::{Response, header::CONTENT_TYPE},
 };
 
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
-use crate::{INDEX_HTML, LAUNCHER_HTML, TAB_BAR_HTML, WALLET_HTML};
+use crate::{INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, TAB_BAR_HTML, WALLET_HTML, WALLET_JS};
 
 pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     // A minimal EIP-1193 provider shim.
@@ -152,7 +152,26 @@ fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
     }
 }
 
-fn csp_response(body: Vec<u8>, mime: String) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+fn normalized_app_path(uri: &wry::http::Uri) -> String {
+    let mut path = uri.path().to_string();
+    if (path.is_empty() || path == "/") && uri.host().is_some() {
+        if let Some(host) = uri.host() {
+            path = format!("/{}", host);
+        }
+    }
+
+    let trimmed = path.trim_start_matches('/');
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", trimmed)
+    }
+}
+
+fn csp_response(
+    body: Vec<u8>,
+    mime: String,
+) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
     Response::builder()
         .status(200)
         .header(CONTENT_TYPE, mime.as_str())
@@ -175,30 +194,36 @@ pub fn build_app_webview(
 ) -> Result<WebView> {
     let protocol_dist = dist_dir.clone();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
-        let path = request.uri().path();
+        let path = normalized_app_path(request.uri());
         if let Some(ref dist) = protocol_dist {
-            let (body, mime) = serve_file(dist, path);
+            let (body, mime) = serve_file(dist, &path);
             csp_response(body, mime)
         } else {
-            match path {
+            match path.as_str() {
                 "/" | "/index.html" => {
-                    let html = if devnet_mode { LAUNCHER_HTML } else { INDEX_HTML };
+                    let html = if devnet_mode {
+                        LAUNCHER_HTML
+                    } else {
+                        INDEX_HTML
+                    };
                     csp_response(
                         html.as_bytes().to_vec(),
                         "text/html; charset=utf-8".to_string(),
                     )
                 }
+                "/launcher.js" if devnet_mode => csp_response(
+                    LAUNCHER_JS.as_bytes().to_vec(),
+                    "application/javascript; charset=utf-8".to_string(),
+                ),
                 _ => csp_response(
-                    format!("Not found: {path}").into_bytes(),
+                    format!("Not found: {}", path).into_bytes(),
                     "text/plain; charset=utf-8".to_string(),
                 ),
             }
         }
     };
 
-    let navigation_handler = |url: String| {
-        url.starts_with("app://") || url == "about:blank"
-    };
+    let navigation_handler = |url: String| url.starts_with("app://") || url == "about:blank";
 
     let webview_id = id.to_string();
     let webview = WebViewBuilder::new()
@@ -239,14 +264,14 @@ pub fn build_tab_bar_webview(
     bounds: Rect,
 ) -> Result<WebView> {
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
-        let path = request.uri().path();
-        let (body, mime) = match path {
+        let path = normalized_app_path(request.uri());
+        let (body, mime) = match path.as_str() {
             "/" | "/index.html" | "/tabbar.html" => (
                 TAB_BAR_HTML.as_bytes().to_vec(),
                 "text/html; charset=utf-8".to_string(),
             ),
             _ => (
-                format!("Not found: {path}").into_bytes(),
+                format!("Not found: {}", path).into_bytes(),
                 "text/plain; charset=utf-8".to_string(),
             ),
         };
@@ -275,14 +300,18 @@ pub fn build_wallet_webview(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
 ) -> Result<WebView> {
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
-        let path = request.uri().path();
-        let (body, mime) = match path {
+        let path = normalized_app_path(request.uri());
+        let (body, mime) = match path.as_str() {
             "/" | "/index.html" | "/wallet.html" => (
                 WALLET_HTML.as_bytes().to_vec(),
                 "text/html; charset=utf-8".to_string(),
             ),
+            "/wallet.js" => (
+                WALLET_JS.as_bytes().to_vec(),
+                "application/javascript; charset=utf-8".to_string(),
+            ),
             _ => (
-                format!("Not found: {path}").into_bytes(),
+                format!("Not found: {}", path).into_bytes(),
                 "text/plain; charset=utf-8".to_string(),
             ),
         };

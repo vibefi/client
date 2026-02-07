@@ -7,7 +7,7 @@ mod walletconnect;
 mod webview;
 mod webview_manager;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::{
     env,
     path::PathBuf,
@@ -24,8 +24,8 @@ use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use reqwest::blocking::Client as HttpClient;
 
-use bundle::{build_bundle, verify_manifest, BundleConfig};
-use devnet::{load_devnet, DevnetConfig, DevnetContext};
+use bundle::{BundleConfig, build_bundle, verify_manifest};
+use devnet::{DevnetConfig, DevnetContext, load_devnet};
 use ipc::{handle_ipc, handle_walletconnect_connect_result};
 use state::{AppState, Chain, LauncherConfig, TabAction, UserEvent, WalletBackend, WalletState};
 use walletconnect::{WalletConnectBridge, WalletConnectConfig};
@@ -36,6 +36,8 @@ static INDEX_HTML: &str = include_str!("../assets/index.html");
 static LAUNCHER_HTML: &str = include_str!("../assets/launcher.html");
 static TAB_BAR_HTML: &str = include_str!("../assets/tabbar.html");
 static WALLET_HTML: &str = include_str!("../assets/wallet.html");
+static LAUNCHER_JS: &str = include_str!("../assets/react/launcher.js");
+static WALLET_JS: &str = include_str!("../assets/react/wallet.js");
 
 /// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
 /// This matches a common dev key used across many tutorials.
@@ -90,13 +92,10 @@ fn main() -> Result<()> {
         }
     };
 
-    let initial_chain_id = devnet.as_ref().map(|cfg| cfg.chainId).unwrap_or_else(|| {
-        if launcher.is_some() {
-            31337
-        } else {
-            1
-        }
-    });
+    let initial_chain_id = devnet
+        .as_ref()
+        .map(|cfg| cfg.chainId)
+        .unwrap_or_else(|| if launcher.is_some() { 31337 } else { 1 });
     // --- Window + event loop ---
     let mut event_loop = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
@@ -190,7 +189,11 @@ fn main() -> Result<()> {
             Event::UserEvent(UserEvent::HideWalletOverlay) => {
                 manager.hide_wallet_overlay();
             }
-            Event::UserEvent(UserEvent::WalletConnectResult { webview_id, ipc_id, result }) => {
+            Event::UserEvent(UserEvent::WalletConnectResult {
+                webview_id,
+                ipc_id,
+                result,
+            }) => {
                 // Try the specific webview first, fall back to active
                 let wv = manager
                     .webview_for_id(&webview_id)
@@ -208,7 +211,15 @@ fn main() -> Result<()> {
                             let size = w.inner_size();
                             let id = manager.next_app_id();
                             let bounds = manager.app_rect(size.width, size.height);
-                            match build_app_webview(w, &id, Some(dist_dir.clone()), false, &state, proxy.clone(), bounds) {
+                            match build_app_webview(
+                                w,
+                                &id,
+                                Some(dist_dir.clone()),
+                                false,
+                                &state,
+                                proxy.clone(),
+                                bounds,
+                            ) {
                                 Ok(wv) => {
                                     // Hide currently active before adding new
                                     if let Some(active) = manager.active_app_webview() {
@@ -253,7 +264,11 @@ fn main() -> Result<()> {
                     let h = size.height;
 
                     // 1. Build tab bar
-                    match build_tab_bar_webview(&window_handle, proxy.clone(), manager.tab_bar_rect(w)) {
+                    match build_tab_bar_webview(
+                        &window_handle,
+                        proxy.clone(),
+                        manager.tab_bar_rect(w),
+                    ) {
                         Ok(tb) => manager.tab_bar = Some(tb),
                         Err(e) => eprintln!("tab bar error: {e:?}"),
                     }
@@ -276,7 +291,15 @@ fn main() -> Result<()> {
                     };
                     let app_id = manager.next_app_id();
                     let bounds = manager.app_rect(w, h);
-                    match build_app_webview(&window_handle, &app_id, dist_dir.clone(), devnet_mode, &state, proxy.clone(), bounds) {
+                    match build_app_webview(
+                        &window_handle,
+                        &app_id,
+                        dist_dir.clone(),
+                        devnet_mode,
+                        &state,
+                        proxy.clone(),
+                        bounds,
+                    ) {
                         Ok(wv) => {
                             manager.apps.push(AppWebViewEntry {
                                 webview: wv,

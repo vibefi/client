@@ -1,0 +1,12 @@
+{
+  "name": "vibefi-internal-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./src/launcher.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/launcher.js && bun build ./src/wallet.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/wallet.js"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  }
+}

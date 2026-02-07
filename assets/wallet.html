@@ -1,59 +1,11 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-html,body { height:100%; overflow:hidden; background:rgba(2,6,23,0.96); color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif; font-size:12px; line-height:1.4; }
-#panel { padding:12px; height:100%; display:flex; flex-direction:column; }
-#header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
-#header strong { font-size:13px; }
-button { border:1px solid #475569; background:#0f172a; color:#e2e8f0; border-radius:8px; padding:4px 8px; cursor:pointer; font-size:12px; }
-button:hover { background:#1e293b; }
-#desc { opacity:0.9; margin-bottom:8px; }
-#qr { display:flex; justify-content:center; margin-bottom:8px; flex-shrink:0; }
-#qr svg { max-width:200px; max-height:200px; }
-#uri { width:100%; height:80px; background:#020617; color:#93c5fd; border:1px solid #1e293b; border-radius:8px; padding:8px; resize:none; font-family:ui-monospace,Menlo,Monaco,Consolas,monospace; font-size:11px; }
-#footer { display:flex; justify-content:flex-end; margin-top:8px; }
-#copy-btn { padding:6px 10px; }
-</style>
+  <meta charset="utf-8" />
+  <title>WalletConnect Pairing</title>
 </head>
 <body>
-<div id="panel">
-  <div id="header">
-    <strong>WalletConnect Pairing</strong>
-    <button id="hide-btn">Hide</button>
-  </div>
-  <div id="desc">Open a WalletConnect-compatible wallet and approve the session. You can copy the pairing URI below.</div>
-  <div id="qr"></div>
-  <textarea id="uri" readonly></textarea>
-  <div id="footer">
-    <button id="copy-btn">Copy URI</button>
-  </div>
-</div>
-<script>
-document.getElementById('hide-btn').addEventListener('click', function() {
-  window.ipc.postMessage(JSON.stringify({ providerId:'vibefi-wallet', method:'hideOverlay', params:[] }));
-});
-document.getElementById('copy-btn').addEventListener('click', async function() {
-  var value = document.getElementById('uri').value || '';
-  if (!value) return;
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(value);
-      return;
-    }
-  } catch(_) {}
-  try {
-    var el = document.getElementById('uri');
-    el.focus(); el.select();
-    document.execCommand('copy');
-  } catch(_) {}
-});
-window.showPairing = function(uri, qrSvg) {
-  document.getElementById('uri').value = uri;
-  if (qrSvg) document.getElementById('qr').innerHTML = qrSvg;
-};
-</script>
+  <div id="root"></div>
+  <script src="app://wallet.js"></script>
 </body>
 </html>

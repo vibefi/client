@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use wry::{dpi::PhysicalPosition, dpi::PhysicalSize, Rect, WebView};
+use wry::{Rect, WebView, dpi::PhysicalPosition, dpi::PhysicalSize};
 
 /// On macOS, bring a child webview to the front of the window's view hierarchy.
 /// Walk up from the WKWebView until we find a view whose superview is the
@@ -253,11 +253,13 @@ impl WebViewManager {
             Some(wv) => wv,
             None => return,
         };
-        let uri_json = serde_json::to_string(uri).unwrap_or_else(|_| "\"\"".to_string());
-        let qr_json = serde_json::to_string(qr_svg).unwrap_or_else(|_| "\"\"".to_string());
+        let detail = serde_json::json!({
+            "uri": uri,
+            "qrSvg": qr_svg,
+        });
         let js = format!(
-            "if(typeof window.showPairing==='function')window.showPairing({},{});",
-            uri_json, qr_json
+            "window.dispatchEvent(new CustomEvent('vibefi:walletconnect-pairing', {{ detail: {} }}));",
+            detail
         );
         let _ = wv.evaluate_script(&js);
     }
