@@ -26,6 +26,7 @@ impl Default for Chain {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IpcRequest {
+    #[serde(default)]
     pub id: u64,
     #[serde(default)]
     pub provider_id: Option<String>,
@@ -36,12 +37,22 @@ pub struct IpcRequest {
 
 #[derive(Debug, Clone)]
 pub enum UserEvent {
-    Ipc(String),
+    Ipc { webview_id: String, msg: String },
     WalletConnectOverlay { uri: String, qr_svg: String },
     WalletConnectResult {
+        webview_id: String,
         ipc_id: u64,
         result: Result<WalletConnectSession, String>,
     },
+    HideWalletOverlay,
+    TabAction(TabAction),
+}
+
+#[derive(Debug, Clone)]
+pub enum TabAction {
+    SwitchTab(usize),
+    CloseTab(usize),
+    OpenApp { name: String, dist_dir: PathBuf },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +87,6 @@ pub struct AppState {
     pub signer: Option<Arc<PrivateKeySigner>>,
     pub walletconnect: Option<Arc<Mutex<WalletConnectBridge>>>,
     pub devnet: Option<DevnetContext>,
-    pub current_bundle: Arc<Mutex<Option<PathBuf>>>,
     pub proxy: EventLoopProxy<UserEvent>,
 }
 

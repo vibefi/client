@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use std::fs;
+use std::path::PathBuf;
 use wry::{
     http::{header::CONTENT_TYPE, Response},
-    WebView, WebViewBuilder,
+    Rect, WebView, WebViewBuilder,
 };
 
-use crate::bundle::BundleConfig;
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
-use crate::{INDEX_HTML, LAUNCHER_HTML};
+use crate::{INDEX_HTML, LAUNCHER_HTML, TAB_BAR_HTML, WALLET_HTML};
 
 pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     // A minimal EIP-1193 provider shim.
@@ -37,88 +37,11 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     set.delete(handler);
   }
   function emit(event, ...args) {
-    // Built-in WalletConnect pairing UX:
-    // show a lightweight overlay as soon as Rust forwards a `walletconnect_uri` message.
-    const first = args[0];
-    if (event === 'message' && first && first.type === 'walletconnect_uri' && typeof first.data === 'string') {
-      showWalletConnectOverlay(first.data, first.qrSvg || '');
-    }
-    if (event === 'accountsChanged' && Array.isArray(first) && first.length > 0) {
-      hideWalletConnectOverlay();
-    }
-
     const set = listeners.get(event);
     if (!set) return;
     for (const h of Array.from(set)) {
       try { h(...args); } catch (_) {}
     }
-  }
-
-  let wcOverlay = null;
-  let wcUriEl = null;
-  function ensureWalletConnectOverlay() {
-    if (wcOverlay) return;
-    const panel = document.createElement('div');
-    panel.style.position = 'fixed';
-    panel.style.right = '12px';
-    panel.style.bottom = '12px';
-    panel.style.width = 'min(560px, calc(100vw - 24px))';
-    panel.style.background = 'rgba(2, 6, 23, 0.96)';
-    panel.style.color = '#e2e8f0';
-    panel.style.border = '1px solid rgba(148, 163, 184, 0.35)';
-    panel.style.borderRadius = '12px';
-    panel.style.padding = '12px';
-    panel.style.fontSize = '12px';
-    panel.style.lineHeight = '1.4';
-    panel.style.zIndex = '2147483647';
-    panel.style.boxShadow = '0 20px 40px rgba(0, 0, 0, 0.4)';
-    panel.style.display = 'none';
-    panel.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
-        <strong>WalletConnect Pairing</strong>
-        <button id="__vibefi_wc_close" style="border:1px solid #475569;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:4px 8px;cursor:pointer;">Hide</button>
-      </div>
-      <div style="opacity:0.9;margin-bottom:8px;">Open a WalletConnect-compatible wallet and approve the session. You can copy the pairing URI below.</div>
-      <div id="__vibefi_wc_qr" style="display:flex;justify-content:center;margin-bottom:8px;"></div>
-      <textarea id="__vibefi_wc_uri" readonly style="width:100%;height:92px;background:#020617;color:#93c5fd;border:1px solid #1e293b;border-radius:8px;padding:8px;resize:vertical;font-family:ui-monospace, Menlo, Monaco, Consolas, monospace;"></textarea>
-      <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-        <button id="__vibefi_wc_copy" style="border:1px solid #475569;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer;">Copy URI</button>
-      </div>
-    `;
-    document.body.appendChild(panel);
-
-    wcOverlay = panel;
-    wcUriEl = panel.querySelector('#__vibefi_wc_uri');
-    const closeBtn = panel.querySelector('#__vibefi_wc_close');
-    const copyBtn = panel.querySelector('#__vibefi_wc_copy');
-    closeBtn?.addEventListener('click', () => hideWalletConnectOverlay());
-    copyBtn?.addEventListener('click', async () => {
-      const value = wcUriEl?.value ?? '';
-      if (!value) return;
-      try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(value);
-          return;
-        }
-      } catch (_) {}
-      try {
-        wcUriEl?.focus();
-        wcUriEl?.select();
-        document.execCommand('copy');
-      } catch (_) {}
-    });
-  }
-
-  function showWalletConnectOverlay(uri, qrSvg) {
-    ensureWalletConnectOverlay();
-    if (wcUriEl) wcUriEl.value = uri;
-    var qrEl = wcOverlay && wcOverlay.querySelector('#__vibefi_wc_qr');
-    if (qrEl && qrSvg) qrEl.innerHTML = qrSvg;
-    if (wcOverlay) wcOverlay.style.display = 'block';
-  }
-
-  function hideWalletConnectOverlay() {
-    if (wcOverlay) wcOverlay.style.display = 'none';
   }
 
   // Expose a controlled hook for Rust -> JS event emission.
@@ -204,107 +127,101 @@ pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
     .to_string()
 });
 
-pub fn build_webview(
-    window: &tao::window::Window,
-    state: AppState,
-    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
-    bundle: Option<BundleConfig>,
-    devnet_mode: bool,
-) -> Result<WebView> {
-    let wallet_state = state.wallet.clone();
-    let current_bundle = state.current_bundle.clone();
+fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
+    let rel = path.trim_start_matches('/');
+    let mut file_path = if rel.is_empty() {
+        dist_dir.join("index.html")
+    } else {
+        dist_dir.join(rel)
+    };
+    if file_path.is_dir() {
+        file_path = file_path.join("index.html");
+    }
+    if !file_path.exists() {
+        (
+            format!("Not found: {path}").into_bytes(),
+            "text/plain; charset=utf-8".to_string(),
+        )
+    } else {
+        let data = fs::read(&file_path).unwrap_or_else(|_| Vec::new());
+        let guess = mime_guess::MimeGuess::from_path(&file_path)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_string();
+        (data, guess)
+    }
+}
 
-    // Serve only our embedded assets.
-    let protocol_bundle = bundle.clone();
+fn csp_response(body: Vec<u8>, mime: String) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+    Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, mime.as_str())
+        .header(
+            "Content-Security-Policy",
+            "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' 'unsafe-inline' app:; connect-src 'none'; frame-src 'none'",
+        )
+        .body(std::borrow::Cow::Owned(body))
+        .unwrap()
+}
+
+pub fn build_app_webview(
+    window: &tao::window::Window,
+    id: &str,
+    dist_dir: Option<PathBuf>,
+    devnet_mode: bool,
+    state: &AppState,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    bounds: Rect,
+) -> Result<WebView> {
+    let protocol_dist = dist_dir.clone();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
         let path = request.uri().path();
-        let active_bundle = current_bundle
-            .lock()
-            .unwrap()
-            .clone()
-            .or_else(|| protocol_bundle.as_ref().map(|cfg| cfg.dist_dir.clone()));
-        let (body, mime) = if let Some(dist_dir) = active_bundle {
-            let rel = path.trim_start_matches('/');
-            let mut file_path = if rel.is_empty() {
-                dist_dir.join("index.html")
-            } else {
-                dist_dir.join(rel)
-            };
-            if file_path.is_dir() {
-                file_path = file_path.join("index.html");
-            }
-            if !file_path.exists() {
-                (
-                    format!("Not found: {path}").into_bytes(),
-                    "text/plain; charset=utf-8".to_string(),
-                )
-            } else {
-                let data = fs::read(&file_path).unwrap_or_else(|_| Vec::new());
-                let guess = mime_guess::MimeGuess::from_path(&file_path)
-                    .first_or_octet_stream()
-                    .essence_str()
-                    .to_string();
-                (data, guess)
-            }
+        if let Some(ref dist) = protocol_dist {
+            let (body, mime) = serve_file(dist, path);
+            csp_response(body, mime)
         } else {
             match path {
                 "/" | "/index.html" => {
-                    if devnet_mode {
-                        (
-                            LAUNCHER_HTML.as_bytes().to_vec(),
-                            "text/html; charset=utf-8".to_string(),
-                        )
-                    } else {
-                        (
-                            INDEX_HTML.as_bytes().to_vec(),
-                            "text/html; charset=utf-8".to_string(),
-                        )
-                    }
+                    let html = if devnet_mode { LAUNCHER_HTML } else { INDEX_HTML };
+                    csp_response(
+                        html.as_bytes().to_vec(),
+                        "text/html; charset=utf-8".to_string(),
+                    )
                 }
-                _ => (
+                _ => csp_response(
                     format!("Not found: {path}").into_bytes(),
                     "text/plain; charset=utf-8".to_string(),
                 ),
             }
-        };
-
-        Response::builder()
-            .status(200)
-            .header(CONTENT_TYPE, mime.as_str())
-            // harden: disallow loading remote resources via CSP.
-            .header(
-                "Content-Security-Policy",
-                "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' 'unsafe-inline' app:; connect-src 'none'; frame-src 'none'",
-            )
-            .body(std::borrow::Cow::Owned(body)).unwrap()
+        }
     };
 
     let navigation_handler = |url: String| {
-        // HARD BLOCK: no http/https/file navigation.
-        // Allow only our custom scheme + a couple of benign internal URLs.
         url.starts_with("app://") || url == "about:blank"
     };
 
-    let proxy = proxy;
-
+    let webview_id = id.to_string();
     let webview = WebViewBuilder::new()
+        .with_id(id)
+        .with_bounds(bounds)
         .with_initialization_script((*INIT_SCRIPT).clone())
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://index.html")
         .with_navigation_handler(navigation_handler)
         .with_ipc_handler(move |req: wry::http::Request<String>| {
-            // Forward to the main event loop so we can respond using the WebView handle.
-            let _ = proxy.send_event(UserEvent::Ipc(req.body().clone()));
+            let _ = proxy.send_event(UserEvent::Ipc {
+                webview_id: webview_id.clone(),
+                msg: req.body().clone(),
+            });
         })
-        .build(window)
-        .context("failed to build webview")?;
+        .build_as_child(window)
+        .context("failed to build app webview")?;
 
     // Emit initial chain/accounts state after load.
-    // Some dapps rely on accountsChanged/chainChanged events.
     let addr = state.account();
     let chain_hex = state.chain_id_hex();
     {
-        let ws = wallet_state.lock().unwrap();
+        let ws = state.wallet.lock().unwrap();
         if ws.authorized {
             if let Some(addr) = addr {
                 emit_accounts_changed(&webview, vec![addr]);
@@ -312,6 +229,84 @@ pub fn build_webview(
         }
     }
     emit_chain_changed(&webview, chain_hex);
+
+    Ok(webview)
+}
+
+pub fn build_tab_bar_webview(
+    window: &tao::window::Window,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    bounds: Rect,
+) -> Result<WebView> {
+    let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
+        let path = request.uri().path();
+        let (body, mime) = match path {
+            "/" | "/index.html" | "/tabbar.html" => (
+                TAB_BAR_HTML.as_bytes().to_vec(),
+                "text/html; charset=utf-8".to_string(),
+            ),
+            _ => (
+                format!("Not found: {path}").into_bytes(),
+                "text/plain; charset=utf-8".to_string(),
+            ),
+        };
+        csp_response(body, mime)
+    };
+
+    let webview = WebViewBuilder::new()
+        .with_id("tab-bar")
+        .with_bounds(bounds)
+        .with_custom_protocol("app".into(), protocol)
+        .with_url("app://tabbar.html")
+        .with_ipc_handler(move |req: wry::http::Request<String>| {
+            let _ = proxy.send_event(UserEvent::Ipc {
+                webview_id: "tab-bar".to_string(),
+                msg: req.body().clone(),
+            });
+        })
+        .build_as_child(window)
+        .context("failed to build tab bar webview")?;
+
+    Ok(webview)
+}
+
+pub fn build_wallet_webview(
+    window: &tao::window::Window,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+) -> Result<WebView> {
+    let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
+        let path = request.uri().path();
+        let (body, mime) = match path {
+            "/" | "/index.html" | "/wallet.html" => (
+                WALLET_HTML.as_bytes().to_vec(),
+                "text/html; charset=utf-8".to_string(),
+            ),
+            _ => (
+                format!("Not found: {path}").into_bytes(),
+                "text/plain; charset=utf-8".to_string(),
+            ),
+        };
+        csp_response(body, mime)
+    };
+
+    let bounds = crate::webview_manager::WebViewManager::wallet_rect();
+
+    let webview = WebViewBuilder::new()
+        .with_id("wallet")
+        .with_bounds(bounds)
+        .with_focused(false)
+        .with_custom_protocol("app".into(), protocol)
+        .with_url("app://wallet.html")
+        .with_ipc_handler(move |req: wry::http::Request<String>| {
+            let _ = proxy.send_event(UserEvent::Ipc {
+                webview_id: "wallet".to_string(),
+                msg: req.body().clone(),
+            });
+        })
+        .build_as_child(window)
+        .context("failed to build wallet webview")?;
+
+    let _ = webview.set_visible(false);
 
     Ok(webview)
 }
