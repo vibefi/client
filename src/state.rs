@@ -1,4 +1,3 @@
-use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use serde::Serialize;
 use std::{
@@ -9,6 +8,7 @@ use std::{
 use tao::event_loop::EventLoopProxy;
 
 use crate::devnet::DevnetContext;
+use crate::hardware::HardwareDevice;
 use crate::walletconnect::{WalletConnectBridge, WalletConnectSession};
 
 #[derive(Debug, Clone, Copy)]
@@ -38,13 +38,22 @@ pub struct IpcRequest {
 #[derive(Debug, Clone)]
 pub enum UserEvent {
     Ipc { webview_id: String, msg: String },
-    WalletConnectOverlay { uri: String, qr_svg: String },
+    OpenWalletSelector,
+    WalletConnectPairing {
+        uri: String,
+        qr_svg: String,
+    },
     WalletConnectResult {
         webview_id: String,
         ipc_id: u64,
         result: Result<WalletConnectSession, String>,
     },
-    HideWalletOverlay,
+    HardwareSignResult {
+        webview_id: String,
+        ipc_id: u64,
+        result: Result<String, String>,
+    },
+    CloseWalletSelector,
     TabAction(TabAction),
 }
 
@@ -59,6 +68,7 @@ pub enum TabAction {
 pub enum WalletBackend {
     Local,
     WalletConnect,
+    Hardware,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,23 +90,41 @@ pub struct WalletState {
     pub walletconnect_uri: Option<String>,
 }
 
+/// Tracks a pending `eth_requestAccounts` that is waiting for the user to
+/// pick a wallet backend in the selector tab.
+#[derive(Debug, Clone)]
+pub struct PendingConnect {
+    pub webview_id: String,
+    pub ipc_id: u64,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub wallet: Arc<Mutex<WalletState>>,
-    pub wallet_backend: WalletBackend,
-    pub signer: Option<Arc<PrivateKeySigner>>,
-    pub walletconnect: Option<Arc<Mutex<WalletConnectBridge>>>,
+    pub wallet_backend: Arc<Mutex<Option<WalletBackend>>>,
+    pub signer: Arc<Mutex<Option<Arc<PrivateKeySigner>>>>,
+    pub walletconnect: Arc<Mutex<Option<Arc<Mutex<WalletConnectBridge>>>>>,
+    pub hardware_signer: Arc<Mutex<Option<HardwareDevice>>>,
     pub devnet: Option<DevnetContext>,
     pub proxy: EventLoopProxy<UserEvent>,
+    pub pending_connect: Arc<Mutex<Option<PendingConnect>>>,
+    /// WalletConnect project ID, kept for lazy init.
+    pub wc_project_id: Option<String>,
+    /// WalletConnect relay URL, kept for lazy init.
+    pub wc_relay_url: Option<String>,
+    /// Webview ID of the wallet selector tab, if open.
+    pub selector_webview_id: Arc<Mutex<Option<String>>>,
 }
 
 impl AppState {
     pub fn local_signer(&self) -> Option<Arc<PrivateKeySigner>> {
-        self.signer.as_ref().cloned()
+        self.signer.lock().unwrap().as_ref().cloned()
     }
 
     pub fn local_signer_address(&self) -> Option<String> {
         self.signer
+            .lock()
+            .unwrap()
             .as_ref()
             .map(|signer| format!("0x{:x}", signer.address()))
     }
@@ -114,6 +142,10 @@ impl AppState {
         let chain_id = self.wallet.lock().unwrap().chain.chain_id;
         format!("0x{:x}", chain_id)
     }
+
+    pub fn get_wallet_backend(&self) -> Option<WalletBackend> {
+        *self.wallet_backend.lock().unwrap()
+    }
 }
 
 pub struct LauncherConfig {
@@ -122,7 +154,4 @@ pub struct LauncherConfig {
     pub ipfs_api: String,
     pub ipfs_gateway: String,
     pub cache_dir: PathBuf,
-    pub wallet_backend: WalletBackend,
-    pub wc_project_id: Option<String>,
-    pub wc_relay_url: Option<String>,
 }

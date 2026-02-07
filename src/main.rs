@@ -1,5 +1,6 @@
 mod bundle;
 mod devnet;
+mod hardware;
 mod ipc;
 mod menu;
 mod state;
@@ -7,7 +8,7 @@ mod walletconnect;
 mod webview;
 mod webview_manager;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use std::{
     env,
     path::PathBuf,
@@ -20,28 +21,25 @@ use tao::{
     window::WindowBuilder,
 };
 
-use alloy_signer::SignerSync;
-use alloy_signer_local::PrivateKeySigner;
 use reqwest::blocking::Client as HttpClient;
 
 use bundle::{BundleConfig, build_bundle, verify_manifest};
 use devnet::{DevnetConfig, DevnetContext, load_devnet};
 use ipc::{handle_ipc, handle_walletconnect_connect_result};
-use state::{AppState, Chain, LauncherConfig, TabAction, UserEvent, WalletBackend, WalletState};
-use walletconnect::{WalletConnectBridge, WalletConnectConfig};
-use webview::{build_app_webview, build_tab_bar_webview, build_wallet_webview};
+use state::{AppState, Chain, LauncherConfig, TabAction, UserEvent, WalletState};
+use webview::{build_app_webview, build_tab_bar_webview, EmbeddedContent};
 use webview_manager::{AppWebViewEntry, WebViewManager};
 
 static INDEX_HTML: &str = include_str!("../assets/index.html");
 static LAUNCHER_HTML: &str = include_str!("../assets/launcher.html");
 static TAB_BAR_HTML: &str = include_str!("../assets/tabbar.html");
-static WALLET_HTML: &str = include_str!("../assets/wallet.html");
+static WALLET_SELECTOR_HTML: &str = include_str!("../assets/wallet-selector.html");
 static LAUNCHER_JS: &str = include_str!("../assets/react/launcher.js");
-static WALLET_JS: &str = include_str!("../assets/react/wallet.js");
+static WALLET_SELECTOR_JS: &str = include_str!("../assets/react/wallet-selector.js");
 
 /// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
 /// This matches a common dev key used across many tutorials.
-static DEMO_PRIVKEY_HEX: &str =
+pub(crate) static DEMO_PRIVKEY_HEX: &str =
     "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
 
 fn main() -> Result<()> {
@@ -54,48 +52,11 @@ fn main() -> Result<()> {
         .and_then(|cfg| cfg.devnet_path.as_ref())
         .and_then(|path| load_devnet(path).ok());
 
-    let wallet_backend = args.wallet_backend;
-    let (signer, walletconnect, initial_account) = match wallet_backend {
-        WalletBackend::Local => {
-            eprintln!("[wallet] backend=local");
-            let signer_hex = devnet
-                .as_ref()
-                .and_then(|cfg| cfg.developerPrivateKey.clone())
-                .unwrap_or_else(|| DEMO_PRIVKEY_HEX.to_string());
-            let signer: PrivateKeySigner = signer_hex
-                .parse()
-                .context("failed to parse signing private key")?;
-            let account = format!("0x{:x}", signer.address());
-            (Some(Arc::new(signer)), None, Some(account))
-        }
-        WalletBackend::WalletConnect => {
-            eprintln!("[wallet] backend=walletconnect");
-            let project_id = args
-                .wc_project_id
-                .or_else(|| env::var("VIBEFI_WC_PROJECT_ID").ok())
-                .or_else(|| env::var("WC_PROJECT_ID").ok())
-                .ok_or_else(|| {
-                    anyhow!(
-                        "WalletConnect backend requires --wc-project-id or VIBEFI_WC_PROJECT_ID"
-                    )
-                })?;
-            let relay_url = args
-                .wc_relay_url
-                .or_else(|| env::var("VIBEFI_WC_RELAY_URL").ok())
-                .or_else(|| env::var("WC_RELAY_URL").ok());
-            let bridge = WalletConnectBridge::spawn(WalletConnectConfig {
-                project_id,
-                relay_url,
-            })
-            .context("failed to initialize WalletConnect bridge")?;
-            (None, Some(Arc::new(Mutex::new(bridge))), None)
-        }
-    };
-
     let initial_chain_id = devnet
         .as_ref()
         .map(|cfg| cfg.chainId)
         .unwrap_or_else(|| if launcher.is_some() { 31337 } else { 1 });
+
     // --- Window + event loop ---
     let mut event_loop = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
@@ -115,12 +76,13 @@ fn main() -> Result<()> {
             chain: Chain {
                 chain_id: initial_chain_id,
             },
-            account: initial_account,
+            account: None,
             walletconnect_uri: None,
         })),
-        wallet_backend,
-        signer,
-        walletconnect,
+        wallet_backend: Arc::new(Mutex::new(None)),
+        signer: Arc::new(Mutex::new(None)),
+        walletconnect: Arc::new(Mutex::new(None)),
+        hardware_signer: Arc::new(Mutex::new(None)),
         devnet: launcher.as_ref().map(|cfg| DevnetContext {
             config: devnet.clone().unwrap_or(DevnetConfig {
                 chainId: 31337,
@@ -135,6 +97,10 @@ fn main() -> Result<()> {
             http: HttpClient::new(),
         }),
         proxy: proxy.clone(),
+        pending_connect: Arc::new(Mutex::new(None)),
+        wc_project_id: args.wc_project_id,
+        wc_relay_url: args.wc_relay_url,
+        selector_webview_id: Arc::new(Mutex::new(None)),
     };
     let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
@@ -162,32 +128,76 @@ fn main() -> Result<()> {
                             }
                         }
                     }
-                } else if webview_id == "wallet" {
-                    // Handle wallet webview IPC (e.g. hide overlay button)
-                    if let Ok(req) = serde_json::from_str::<state::IpcRequest>(&msg) {
-                        if req.provider_id.as_deref() == Some("vibefi-wallet") {
-                            if req.method == "hideOverlay" {
-                                manager.hide_wallet_overlay();
-                            }
-                        }
-                    }
                 } else if let Some(wv) = manager.webview_for_id(&webview_id) {
                     if let Err(e) = handle_ipc(wv, &state, &webview_id, msg) {
                         eprintln!("ipc error: {e:?}");
                     }
                 }
             }
-            Event::UserEvent(UserEvent::WalletConnectOverlay { uri, qr_svg }) => {
-                // Show the wallet overlay first (resize + bring to front),
-                // then update content so the page is visible when JS runs.
+            Event::UserEvent(UserEvent::OpenWalletSelector) => {
+                // Only open one selector at a time.
+                {
+                    let sel = state.selector_webview_id.lock().unwrap();
+                    if sel.is_some() {
+                        // Already open — just switch to it
+                        if let Some(idx) = manager.index_of_label("Connect Wallet") {
+                            manager.switch_to(idx);
+                        }
+                        return;
+                    }
+                }
                 if let Some(w) = window.as_ref() {
                     let size = w.inner_size();
-                    manager.show_wallet_overlay(size.width, size.height);
+                    let id = manager.next_app_id();
+                    let bounds = manager.app_rect(size.width, size.height);
+                    match build_app_webview(
+                        w,
+                        &id,
+                        None,
+                        EmbeddedContent::WalletSelector,
+                        &state,
+                        proxy.clone(),
+                        bounds,
+                    ) {
+                        Ok(wv) => {
+                            // Hide currently active before adding new
+                            if let Some(active) = manager.active_app_webview() {
+                                let _ = active.set_visible(false);
+                            }
+                            let idx = manager.apps.len();
+                            {
+                                let mut sel = state.selector_webview_id.lock().unwrap();
+                                *sel = Some(id.clone());
+                            }
+                            manager.apps.push(AppWebViewEntry {
+                                webview: wv,
+                                id,
+                                label: "Connect Wallet".to_string(),
+                                dist_dir: None,
+                            });
+                            manager.active_app_index = Some(idx);
+                            manager.update_tab_bar();
+                        }
+                        Err(e) => eprintln!("failed to open wallet selector tab: {e:?}"),
+                    }
                 }
-                manager.update_wallet_pairing(&uri, &qr_svg);
             }
-            Event::UserEvent(UserEvent::HideWalletOverlay) => {
-                manager.hide_wallet_overlay();
+            Event::UserEvent(UserEvent::WalletConnectPairing { uri, qr_svg }) => {
+                // Send pairing data to the wallet selector tab (if open).
+                let sel_id = state.selector_webview_id.lock().unwrap().clone();
+                if let Some(sel_id) = sel_id {
+                    if let Some(wv) = manager.webview_for_id(&sel_id) {
+                        let detail = serde_json::json!({
+                            "uri": uri,
+                            "qrSvg": qr_svg,
+                        });
+                        let js = format!(
+                            "window.dispatchEvent(new CustomEvent('vibefi:walletconnect-pairing', {{ detail: {} }}));",
+                            detail
+                        );
+                        let _ = wv.evaluate_script(&js);
+                    }
+                }
             }
             Event::UserEvent(UserEvent::WalletConnectResult {
                 webview_id,
@@ -199,8 +209,58 @@ fn main() -> Result<()> {
                     .webview_for_id(&webview_id)
                     .or_else(|| manager.active_app_webview());
                 if let Some(wv) = wv {
-                    handle_walletconnect_connect_result(wv, &state, ipc_id, result);
+                    handle_walletconnect_connect_result(wv, &state, ipc_id, result.clone());
                 }
+
+                // If there is a pending eth_requestAccounts from a dapp,
+                // resolve it now that the wallet is connected.
+                if let Ok(ref session) = result {
+                    let pending = state.pending_connect.lock().unwrap().take();
+                    if let Some(pc) = pending {
+                        if pc.webview_id != webview_id {
+                            if let Some(dapp_wv) = manager.webview_for_id(&pc.webview_id) {
+                                let accounts: Vec<serde_json::Value> = session
+                                    .accounts
+                                    .iter()
+                                    .map(|a| serde_json::Value::String(a.clone()))
+                                    .collect();
+                                let _ = ipc::respond_ok(
+                                    dapp_wv,
+                                    pc.ipc_id,
+                                    serde_json::Value::Array(accounts),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::HardwareSignResult {
+                webview_id,
+                ipc_id,
+                result,
+            }) => {
+                if let Some(wv) = manager.webview_for_id(&webview_id) {
+                    match result {
+                        Ok(value) => {
+                            let json_val: serde_json::Value = serde_json::Value::String(value);
+                            if let Err(e) = ipc::respond_ok(wv, ipc_id, json_val) {
+                                eprintln!("[hardware] failed to send ok response: {e}");
+                            }
+                        }
+                        Err(msg) => {
+                            if let Err(e) = ipc::respond_err(wv, ipc_id, &msg) {
+                                eprintln!("[hardware] failed to send error response: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::CloseWalletSelector) => {
+                {
+                    let mut sel = state.selector_webview_id.lock().unwrap();
+                    *sel = None;
+                }
+                manager.close_by_label("Connect Wallet");
             }
             Event::UserEvent(UserEvent::TabAction(action)) => {
                 match action {
@@ -215,7 +275,7 @@ fn main() -> Result<()> {
                                 w,
                                 &id,
                                 Some(dist_dir.clone()),
-                                false,
+                                EmbeddedContent::Default,
                                 &state,
                                 proxy.clone(),
                                 bounds,
@@ -273,15 +333,16 @@ fn main() -> Result<()> {
                         Err(e) => eprintln!("tab bar error: {e:?}"),
                     }
 
-                    // 2. Build wallet (hidden)
-                    match build_wallet_webview(&window_handle, proxy.clone()) {
-                        Ok(wv) => manager.wallet = Some(wv),
-                        Err(e) => eprintln!("wallet webview error: {e:?}"),
-                    }
-
-                    // 3. Build initial app webview
+                    // 2. Build initial app webview
                     let devnet_mode = launcher.is_some();
                     let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
+                    let embedded = if dist_dir.is_some() {
+                        EmbeddedContent::Default
+                    } else if devnet_mode {
+                        EmbeddedContent::Launcher
+                    } else {
+                        EmbeddedContent::Default
+                    };
                     let label = if dist_dir.is_some() {
                         "App".to_string()
                     } else if devnet_mode {
@@ -295,7 +356,7 @@ fn main() -> Result<()> {
                         &window_handle,
                         &app_id,
                         dist_dir.clone(),
-                        devnet_mode,
+                        embedded,
                         &state,
                         proxy.clone(),
                         bounds,
@@ -343,7 +404,6 @@ fn main() -> Result<()> {
 struct CliArgs {
     bundle: Option<BundleConfig>,
     launcher: Option<LauncherConfig>,
-    wallet_backend: WalletBackend,
     wc_project_id: Option<String>,
     wc_relay_url: Option<String>,
 }
@@ -357,12 +417,6 @@ fn parse_args() -> Result<CliArgs> {
     let mut ipfs_api: Option<String> = None;
     let mut ipfs_gateway: Option<String> = None;
     let mut cache_dir: Option<PathBuf> = None;
-    let mut wallet_backend = env::var("VIBEFI_WALLET_BACKEND")
-        .ok()
-        .as_deref()
-        .map(parse_wallet_backend)
-        .transpose()?
-        .unwrap_or(WalletBackend::Local);
     let mut wc_project_id: Option<String> = env::var("VIBEFI_WC_PROJECT_ID")
         .ok()
         .or_else(|| env::var("WC_PROJECT_ID").ok());
@@ -388,13 +442,6 @@ fn parse_args() -> Result<CliArgs> {
             "--ipfs-api" => ipfs_api = args.next(),
             "--ipfs-gateway" => ipfs_gateway = args.next(),
             "--cache-dir" => cache_dir = args.next().map(PathBuf::from),
-            "--wallet" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--wallet requires one of: local, walletconnect"))?;
-                wallet_backend = parse_wallet_backend(&value)?;
-            }
-            "--walletconnect" => wallet_backend = WalletBackend::WalletConnect,
             "--wc-project-id" => wc_project_id = args.next(),
             "--wc-relay-url" => wc_relay_url = args.next(),
             "--no-build" => no_build = true,
@@ -421,9 +468,6 @@ fn parse_args() -> Result<CliArgs> {
             ipfs_api: ipfs_api.unwrap_or_else(|| "http://127.0.0.1:5001".to_string()),
             ipfs_gateway: ipfs_gateway.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
             cache_dir: cache_dir.unwrap_or_else(|| PathBuf::from("client/.vibefi/cache")),
-            wallet_backend,
-            wc_project_id: wc_project_id.clone(),
-            wc_relay_url: wc_relay_url.clone(),
         }
     };
 
@@ -442,7 +486,6 @@ fn parse_args() -> Result<CliArgs> {
         return Ok(CliArgs {
             bundle: None,
             launcher,
-            wallet_backend,
             wc_project_id,
             wc_relay_url,
         });
@@ -474,19 +517,7 @@ fn parse_args() -> Result<CliArgs> {
             dist_dir,
         }),
         launcher,
-        wallet_backend,
         wc_project_id,
         wc_relay_url,
     })
-}
-
-fn parse_wallet_backend(value: &str) -> Result<WalletBackend> {
-    match value {
-        "local" => Ok(WalletBackend::Local),
-        "walletconnect" | "wc" => Ok(WalletBackend::WalletConnect),
-        _ => bail!(
-            "unsupported wallet backend '{}'; expected local|walletconnect",
-            value
-        ),
-    }
 }

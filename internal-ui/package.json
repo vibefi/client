@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build ./src/launcher.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/launcher.js && bun build ./src/wallet.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/wallet.js"
+    "build": "bun build ./src/launcher.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/launcher.js && bun build ./src/wallet-selector.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/wallet-selector.js"
   },
   "dependencies": {
     "react": "19.2.0",
