@@ -5,30 +5,43 @@ use alloy_primitives::{Address, B256, Signature};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use wry::WebView;
 
 use crate::devnet::handle_launcher_ipc;
 use crate::state::{AppState, IpcRequest, PendingConnect, ProviderInfo, UserEvent, WalletBackend};
-use crate::walletconnect::{HelperEvent, WalletConnectBridge, WalletConnectConfig, WalletConnectSession};
+use crate::ui_bridge;
+use crate::walletconnect::{
+    HelperEvent, WalletConnectBridge, WalletConnectConfig, WalletConnectSession,
+};
 
 /// Emit accountsChanged to all app webviews via the manager.
-pub fn broadcast_accounts_changed(manager: &crate::webview_manager::WebViewManager, addrs: Vec<String>) {
-    let arr: Vec<serde_json::Value> = addrs.into_iter().map(serde_json::Value::String).collect();
-    let payload = serde_json::Value::Array(arr);
-    let js = format!("window.__WryEthereumEmit('accountsChanged', {});", payload);
-    manager.broadcast_to_apps(&js);
+pub fn broadcast_accounts_changed(
+    manager: &crate::webview_manager::WebViewManager,
+    addrs: Vec<String>,
+) {
+    for entry in &manager.apps {
+        ui_bridge::emit_accounts_changed(&entry.webview, addrs.clone());
+    }
 }
 
 /// Emit chainChanged to all app webviews via the manager.
-pub fn broadcast_chain_changed(manager: &crate::webview_manager::WebViewManager, chain_id_hex: String) {
-    let payload = serde_json::Value::String(chain_id_hex);
-    let js = format!("window.__WryEthereumEmit('chainChanged', {});", payload);
-    manager.broadcast_to_apps(&js);
+pub fn broadcast_chain_changed(
+    manager: &crate::webview_manager::WebViewManager,
+    chain_id_hex: String,
+) {
+    for entry in &manager.apps {
+        ui_bridge::emit_chain_changed(&entry.webview, chain_id_hex.clone());
+    }
 }
 
-pub fn handle_ipc(webview: &WebView, state: &AppState, webview_id: &str, msg: String) -> Result<()> {
+pub fn handle_ipc(
+    webview: &WebView,
+    state: &AppState,
+    webview_id: &str,
+    msg: String,
+) -> Result<()> {
     let req: IpcRequest = serde_json::from_str(&msg).context("invalid IPC JSON")?;
 
     // Handle vibefi-wallet IPC from the wallet selector tab.
@@ -73,7 +86,9 @@ pub fn handle_ipc(webview: &WebView, state: &AppState, webview_id: &str, msg: St
 
     let result = match backend {
         Some(WalletBackend::Local) => handle_local_ipc(webview, state, &req).map(Some),
-        Some(WalletBackend::WalletConnect) => handle_walletconnect_ipc(webview, state, webview_id, &req),
+        Some(WalletBackend::WalletConnect) => {
+            handle_walletconnect_ipc(webview, state, webview_id, &req)
+        }
         Some(WalletBackend::Hardware) => handle_hardware_ipc(state, webview_id, &req),
         None => {
             // For methods other than eth_requestAccounts when no wallet is selected,
@@ -99,7 +114,9 @@ pub fn handle_ipc(webview: &WebView, state: &AppState, webview_id: &str, msg: St
                     if state.devnet.is_some() && is_rpc_passthrough(req.method.as_str()) {
                         proxy_rpc(state, &req).map(Some)
                     } else {
-                        Err(anyhow!("No wallet connected. Call eth_requestAccounts first."))
+                        Err(anyhow!(
+                            "No wallet connected. Call eth_requestAccounts first."
+                        ))
                     }
                 }
             }
@@ -239,7 +256,10 @@ fn handle_wallet_selector_ipc(
             let chain_id_hex = state.chain_id_hex();
 
             std::thread::spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt,
                     Err(e) => {
                         eprintln!("[hardware] failed to create tokio runtime: {e}");
@@ -642,7 +662,10 @@ fn handle_hardware_ipc(
             let wv_id = webview_id.to_string();
 
             std::thread::spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt,
                     Err(e) => {
                         let _ = proxy.send_event(UserEvent::HardwareSignResult {
@@ -692,7 +715,10 @@ fn handle_hardware_ipc(
             let wv_id = webview_id.to_string();
 
             std::thread::spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt,
                     Err(e) => {
                         let _ = proxy.send_event(UserEvent::HardwareSignResult {
@@ -752,7 +778,10 @@ fn handle_hardware_ipc(
             let wv_id = webview_id.to_string();
 
             std::thread::spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt,
                     Err(e) => {
                         let _ = proxy.send_event(UserEvent::HardwareSignResult {
@@ -933,32 +962,19 @@ pub fn handle_walletconnect_connect_result(
 }
 
 pub fn respond_ok(webview: &WebView, id: u64, value: Value) -> Result<()> {
-    let js = format!("window.__WryEthereumResolve({}, {}, null);", id, value);
-    webview.evaluate_script(&js)?;
-    Ok(())
+    ui_bridge::respond_ok(webview, id, value)
 }
 
 pub fn respond_err(webview: &WebView, id: u64, message: &str) -> Result<()> {
-    let err = serde_json::json!({
-        "code": -32601,
-        "message": message,
-    });
-    let js = format!("window.__WryEthereumResolve({}, null, {});", id, err);
-    webview.evaluate_script(&js)?;
-    Ok(())
+    ui_bridge::respond_err(webview, id, message)
 }
 
 pub fn emit_accounts_changed(webview: &WebView, addrs: Vec<String>) {
-    let arr = addrs.into_iter().map(Value::String).collect::<Vec<_>>();
-    let payload = Value::Array(arr);
-    let js = format!("window.__WryEthereumEmit('accountsChanged', {});", payload);
-    let _ = webview.evaluate_script(&js);
+    ui_bridge::emit_accounts_changed(webview, addrs);
 }
 
 pub fn emit_chain_changed(webview: &WebView, chain_id_hex: String) {
-    let payload = Value::String(chain_id_hex);
-    let js = format!("window.__WryEthereumEmit('chainChanged', {});", payload);
-    let _ = webview.evaluate_script(&js);
+    ui_bridge::emit_chain_changed(webview, chain_id_hex);
 }
 
 fn is_rpc_passthrough(method: &str) -> bool {
@@ -1103,7 +1119,8 @@ fn build_filled_tx_request(state: &AppState, tx_obj: Value) -> Result<Transactio
     }
 
     if tx.gas.is_none() {
-        let estimate_obj = serde_json::to_value(&tx).context("failed to encode tx for estimateGas")?;
+        let estimate_obj =
+            serde_json::to_value(&tx).context("failed to encode tx for estimateGas")?;
         tx.gas = Some(rpc_quantity_u64(
             state,
             "eth_estimateGas",
@@ -1128,8 +1145,9 @@ fn build_filled_tx_request(state: &AppState, tx_obj: Value) -> Result<Transactio
         }
         if tx.max_priority_fee_per_gas.is_none() {
             let gas_price = tx.max_fee_per_gas.unwrap_or(0);
-            let priority = rpc_quantity_u128(state, "eth_maxPriorityFeePerGas", Value::Array(vec![]))
-                .unwrap_or(gas_price);
+            let priority =
+                rpc_quantity_u128(state, "eth_maxPriorityFeePerGas", Value::Array(vec![]))
+                    .unwrap_or(gas_price);
             tx.max_priority_fee_per_gas = Some(priority.min(gas_price));
         }
         // Avoid conflicting legacy + 1559 fee fields.

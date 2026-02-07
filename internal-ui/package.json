@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build ./src/launcher.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/launcher.js && bun build ./src/wallet-selector.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ../assets/react/wallet-selector.js"
+    "build": "mkdir -p ./dist && bun build ./src/preload-app.ts --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/preload-app.js && bun build ./src/preload-wallet-selector.ts --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/preload-wallet-selector.js && bun build ./src/preload-tabbar.ts --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/preload-tabbar.js && bun build ./src/home.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/home.js && bun build ./src/launcher.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/launcher.js && bun build ./src/wallet-selector.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/wallet-selector.js && bun build ./src/tabbar.tsx --bundle --target=browser --format=iife --minify --define process.env.NODE_ENV='\"production\"' --outfile ./dist/tabbar.js"
   },
   "dependencies": {
     "react": "19.2.0",

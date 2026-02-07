@@ -1,7 +1,7 @@
 use alloy_consensus::SignableTransaction;
 use alloy_primitives::{B256, Signature};
 use alloy_signer::Signer;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 /// Wraps either a Ledger or Trezor hardware signer.
 pub enum HardwareDevice {
@@ -33,7 +33,10 @@ pub async fn detect_and_connect(chain_id: u64) -> Result<HardwareDevice> {
     .await
     {
         Ok(signer) => {
-            eprintln!("[hardware] Ledger detected, address: 0x{:x}", signer.address());
+            eprintln!(
+                "[hardware] Ledger detected, address: 0x{:x}",
+                signer.address()
+            );
             return Ok(HardwareDevice::Ledger(signer));
         }
         Err(e) => {
@@ -49,7 +52,10 @@ pub async fn detect_and_connect(chain_id: u64) -> Result<HardwareDevice> {
     .await
     {
         Ok(signer) => {
-            eprintln!("[hardware] Trezor detected, address: 0x{:x}", signer.address());
+            eprintln!(
+                "[hardware] Trezor detected, address: 0x{:x}",
+                signer.address()
+            );
             return Ok(HardwareDevice::Trezor(signer));
         }
         Err(e) => {

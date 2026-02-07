@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
 use std::fs;
 use std::path::PathBuf;
 use wry::{
@@ -9,7 +8,10 @@ use wry::{
 
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
-use crate::{INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, TAB_BAR_HTML, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS};
+use crate::{
+    HOME_JS, INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, PRELOAD_APP_JS, PRELOAD_TAB_BAR_JS,
+    PRELOAD_WALLET_SELECTOR_JS, TAB_BAR_HTML, TAB_BAR_JS, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS,
+};
 
 /// What embedded content to serve when `dist_dir` is `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,135 +23,6 @@ pub enum EmbeddedContent {
     /// The runtime wallet-selector tab.
     WalletSelector,
 }
-
-pub static INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
-    // A minimal EIP-1193 provider shim.
-    // - ethereum.request({method, params}) -> Promise
-    // - events: on/off/removeListener
-    // - emits connect, chainChanged, accountsChanged
-    // - no outbound network; requests go to Rust via IPC
-    r#"
-(() => {
-  const PROVIDER_ID = 'vibefi-provider';
-  const callbacks = new Map();
-  let nextId = 1;
-
-  // Lightweight event emitter
-  const listeners = new Map();
-  function on(event, handler) {
-    if (typeof handler !== 'function') return;
-    const set = listeners.get(event) ?? new Set();
-    set.add(handler);
-    listeners.set(event, set);
-  }
-  function off(event, handler) {
-    const set = listeners.get(event);
-    if (!set) return;
-    set.delete(handler);
-  }
-  function emit(event, ...args) {
-    const set = listeners.get(event);
-    if (!set) return;
-    for (const h of Array.from(set)) {
-      try { h(...args); } catch (_) {}
-    }
-  }
-
-  // Expose a controlled hook for Rust -> JS event emission.
-  // NOTE: Do not expose this on window directly in production.
-  window.__WryEthereumEmit = (event, payload) => {
-    emit(event, payload);
-  };
-
-  async function request({ method, params }) {
-    return new Promise((resolve, reject) => {
-      const id = nextId++;
-      callbacks.set(id, { resolve, reject });
-      window.ipc.postMessage(JSON.stringify({
-        id,
-        providerId: PROVIDER_ID,
-        method,
-        params: params ?? []
-      }));
-    });
-  }
-
-  function handleResponse(id, result, error) {
-    const cb = callbacks.get(id);
-    if (!cb) return;
-    callbacks.delete(id);
-    if (error) cb.reject(error);
-    else cb.resolve(result);
-  }
-
-  // Rust calls this to resolve/reject pending requests.
-  window.__WryEthereumResolve = (id, result, error) => {
-    handleResponse(id, result ?? null, error ?? null);
-  };
-
-  // EIP-1193-ish provider object
-  const ethereum = {
-    isWry: true,
-    isMetaMask: false,
-    // EIP-1193
-    request,
-    // event api (common wallet compat)
-    on,
-    removeListener: off,
-    off,
-    // legacy-ish compatibility
-    enable: () => request({ method: 'eth_requestAccounts', params: [] }),
-  };
-
-  // define it early
-  if (!window.ethereum) {
-    Object.defineProperty(window, 'ethereum', {
-      value: ethereum,
-      configurable: false,
-      enumerable: true,
-      writable: false
-    });
-  }
-
-  // Minimal vibefi launcher API for non-provider UI actions.
-  window.vibefi = {
-    request: ({ method, params }) => new Promise((resolve, reject) => {
-      const id = nextId++;
-      callbacks.set(id, { resolve, reject });
-      window.ipc.postMessage(JSON.stringify({
-        id,
-        providerId: 'vibefi-launcher',
-        method,
-        params: params ?? []
-      }));
-    })
-  };
-
-  // Signal a connect event once the page is ready.
-  // Wallets often emit connect as soon as injected.
-  Promise.resolve().then(async () => {
-    try {
-      const chainId = await request({ method: 'eth_chainId', params: [] });
-      emit('connect', { chainId });
-    } catch (_) {}
-  });
-})();
-"#
-    .to_string()
-});
-
-/// Minimal init script for the wallet-selector tab.
-/// The selector React app defines __WryEthereumResolve itself; this stub
-/// prevents errors if Rust tries to call it before the page JS loads.
-pub static WALLET_SELECTOR_INIT_SCRIPT: Lazy<String> = Lazy::new(|| {
-    r#"
-(() => {
-  window.__WryEthereumResolve = window.__WryEthereumResolve || function() {};
-  window.__WryEthereumEmit = window.__WryEthereumEmit || function() {};
-})();
-"#
-    .to_string()
-});
 
 fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
     let rel = path.trim_start_matches('/');
@@ -239,6 +112,10 @@ pub fn build_app_webview(
                     LAUNCHER_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
                 ),
+                (EmbeddedContent::Default, "/home.js") => csp_response(
+                    HOME_JS.as_bytes().to_vec(),
+                    "application/javascript; charset=utf-8".to_string(),
+                ),
                 (EmbeddedContent::WalletSelector, "/wallet-selector.js") => csp_response(
                     WALLET_SELECTOR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
@@ -254,9 +131,9 @@ pub fn build_app_webview(
     let navigation_handler = |url: String| url.starts_with("app://") || url == "about:blank";
 
     let init_script = if embedded == EmbeddedContent::WalletSelector {
-        (*WALLET_SELECTOR_INIT_SCRIPT).clone()
+        PRELOAD_WALLET_SELECTOR_JS.to_string()
     } else {
-        (*INIT_SCRIPT).clone()
+        PRELOAD_APP_JS.to_string()
     };
 
     let webview_id = id.to_string();
@@ -306,6 +183,10 @@ pub fn build_tab_bar_webview(
                 TAB_BAR_HTML.as_bytes().to_vec(),
                 "text/html; charset=utf-8".to_string(),
             ),
+            "/tabbar.js" => (
+                TAB_BAR_JS.as_bytes().to_vec(),
+                "application/javascript; charset=utf-8".to_string(),
+            ),
             _ => (
                 format!("Not found: {}", path).into_bytes(),
                 "text/plain; charset=utf-8".to_string(),
@@ -317,6 +198,7 @@ pub fn build_tab_bar_webview(
     let webview = WebViewBuilder::new()
         .with_id("tab-bar")
         .with_bounds(bounds)
+        .with_initialization_script(PRELOAD_TAB_BAR_JS.to_string())
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://tabbar.html")
         .with_ipc_handler(move |req: wry::http::Request<String>| {
