@@ -29,15 +29,32 @@ fn main() {
     emit_rerun_for_dir(&internal_ui.join("src"));
     emit_rerun_for_dir(&internal_ui.join("static"));
 
-    let status = Command::new("bun")
+    println!("cargo:warning=[internal-ui] running: bun run build");
+    let output = Command::new("bun")
         .arg("run")
         .arg("build")
         .current_dir(internal_ui)
-        .status();
+        .output();
 
-    match status {
-        Ok(status) if status.success() => {}
-        Ok(status) => panic!("internal-ui build failed with status: {status}"),
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                println!("cargo:warning=[internal-ui][stdout] {line}");
+            }
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for line in stderr.lines() {
+                println!("cargo:warning=[internal-ui][stderr] {line}");
+            }
+
+            if !output.status.success() {
+                panic!(
+                    "internal-ui build failed with status: {}",
+                    output.status
+                );
+            }
+        }
         Err(error) => panic!("failed to execute bun for internal-ui build: {error}"),
     }
 }
