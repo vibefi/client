@@ -1,10 +1,11 @@
 mod bundle;
-mod devnet;
+mod config;
 mod events;
 mod hardware;
 mod ipc;
 mod ipc_contract;
 mod menu;
+mod registry;
 mod state;
 mod ui_bridge;
 mod walletconnect;
@@ -24,11 +25,9 @@ use tao::{
     window::WindowBuilder,
 };
 
-use reqwest::blocking::Client as HttpClient;
-
 use bundle::{BundleConfig, build_bundle, verify_manifest};
-use devnet::{DevnetConfig, DevnetContext, load_devnet};
-use state::{AppState, Chain, LauncherConfig, UserEvent, WalletState};
+use config::{build_network_context, load_config};
+use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, WebViewManager};
 
@@ -53,17 +52,21 @@ pub(crate) static DEMO_PRIVKEY_HEX: &str =
 fn main() -> Result<()> {
     let args = parse_args()?;
     let bundle = args.bundle;
-    let launcher = args.launcher;
+    let config_path = args.config_path;
 
-    let devnet = launcher
-        .as_ref()
-        .and_then(|cfg| cfg.devnet_path.as_ref())
-        .and_then(|path| load_devnet(path).ok());
+    let network = match config_path.as_ref().map(|p| (p, load_config(p))) {
+        Some((_, Ok(cfg))) => Some(build_network_context(cfg)),
+        Some((path, Err(e))) => {
+            eprintln!("warning: failed to load config {:?}: {:#}", path, e);
+            None
+        }
+        None => None,
+    };
 
-    let initial_chain_id = devnet
+    let initial_chain_id = network
         .as_ref()
-        .map(|cfg| cfg.chainId)
-        .unwrap_or_else(|| if launcher.is_some() { 31337 } else { 1 });
+        .map(|n| n.config.chainId)
+        .unwrap_or(1);
 
     // --- Window + event loop ---
     let mut event_loop = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -91,23 +94,9 @@ fn main() -> Result<()> {
         signer: Arc::new(Mutex::new(None)),
         walletconnect: Arc::new(Mutex::new(None)),
         hardware_signer: Arc::new(Mutex::new(None)),
-        devnet: launcher.as_ref().map(|cfg| DevnetContext {
-            config: devnet.clone().unwrap_or(DevnetConfig {
-                chainId: 31337,
-                deployBlock: None,
-                dappRegistry: String::new(),
-                developerPrivateKey: None,
-            }),
-            rpc_url: cfg.rpc_url.clone(),
-            ipfs_api: cfg.ipfs_api.clone(),
-            ipfs_gateway: cfg.ipfs_gateway.clone(),
-            cache_dir: cfg.cache_dir.clone(),
-            http: HttpClient::new(),
-        }),
+        network,
         proxy: proxy.clone(),
         pending_connect: Arc::new(Mutex::new(None)),
-        wc_project_id: args.wc_project_id,
-        wc_relay_url: args.wc_relay_url,
         selector_webview_id: Arc::new(Mutex::new(None)),
     };
     let mut manager = WebViewManager::new(1.0);
@@ -197,18 +186,20 @@ fn main() -> Result<()> {
                     }
 
                     // 2. Build initial app webview
-                    let devnet_mode = launcher.is_some();
+                    let has_registry = state.network.as_ref()
+                        .map(|n| !n.config.dappRegistry.is_empty())
+                        .unwrap_or(false);
                     let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
                     let embedded = if dist_dir.is_some() {
                         EmbeddedContent::Default
-                    } else if devnet_mode {
+                    } else if has_registry {
                         EmbeddedContent::Launcher
                     } else {
                         EmbeddedContent::Default
                     };
                     let label = if dist_dir.is_some() {
                         "App".to_string()
-                    } else if devnet_mode {
+                    } else if has_registry {
                         "Launcher".to_string()
                     } else {
                         "Home".to_string()
@@ -266,26 +257,13 @@ fn main() -> Result<()> {
 
 struct CliArgs {
     bundle: Option<BundleConfig>,
-    launcher: Option<LauncherConfig>,
-    wc_project_id: Option<String>,
-    wc_relay_url: Option<String>,
+    config_path: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<CliArgs> {
     let mut args = env::args().skip(1).peekable();
     let mut bundle_dir: Option<PathBuf> = None;
-    let mut devnet_path: Option<PathBuf> = None;
-    let mut devnet_mode = false;
-    let mut rpc_url: Option<String> = None;
-    let mut ipfs_api: Option<String> = None;
-    let mut ipfs_gateway: Option<String> = None;
-    let mut cache_dir: Option<PathBuf> = None;
-    let mut wc_project_id: Option<String> = env::var("VIBEFI_WC_PROJECT_ID")
-        .ok()
-        .or_else(|| env::var("WC_PROJECT_ID").ok());
-    let mut wc_relay_url: Option<String> = env::var("VIBEFI_WC_RELAY_URL")
-        .ok()
-        .or_else(|| env::var("WC_RELAY_URL").ok());
+    let mut config_path: Option<PathBuf> = None;
     let mut no_build = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -295,62 +273,21 @@ fn parse_args() -> Result<CliArgs> {
                     .ok_or_else(|| anyhow!("--bundle requires a path"))?;
                 bundle_dir = Some(PathBuf::from(value));
             }
-            "--devnet" => {
-                devnet_mode = true;
-                if let Some(next) = args.next_if(|s| !s.starts_with("--")) {
-                    devnet_path = Some(PathBuf::from(next));
-                }
+            "--config" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--config requires a path"))?;
+                config_path = Some(PathBuf::from(value));
             }
-            "--rpc" => rpc_url = args.next(),
-            "--ipfs-api" => ipfs_api = args.next(),
-            "--ipfs-gateway" => ipfs_gateway = args.next(),
-            "--cache-dir" => cache_dir = args.next().map(PathBuf::from),
-            "--wc-project-id" => wc_project_id = args.next(),
-            "--wc-relay-url" => wc_relay_url = args.next(),
             "--no-build" => no_build = true,
             _ => {}
         }
     }
 
-    let make_launcher = |devnet_path: Option<PathBuf>,
-                         rpc_url: Option<String>,
-                         ipfs_api: Option<String>,
-                         ipfs_gateway: Option<String>,
-                         cache_dir: Option<PathBuf>| {
-        let default_devnet = PathBuf::from("contracts/.devnet/devnet.json");
-        let resolved = devnet_path.or_else(|| {
-            if default_devnet.exists() {
-                Some(default_devnet)
-            } else {
-                None
-            }
-        });
-        LauncherConfig {
-            devnet_path: resolved,
-            rpc_url: rpc_url.unwrap_or_else(|| "http://127.0.0.1:8546".to_string()),
-            ipfs_api: ipfs_api.unwrap_or_else(|| "http://127.0.0.1:5001".to_string()),
-            ipfs_gateway: ipfs_gateway.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
-            cache_dir: cache_dir.unwrap_or_else(|| PathBuf::from("client/.vibefi/cache")),
-        }
-    };
-
     let Some(source_dir) = bundle_dir else {
-        let launcher = if devnet_mode {
-            Some(make_launcher(
-                devnet_path,
-                rpc_url,
-                ipfs_api,
-                ipfs_gateway,
-                cache_dir,
-            ))
-        } else {
-            None
-        };
         return Ok(CliArgs {
             bundle: None,
-            launcher,
-            wc_project_id,
-            wc_relay_url,
+            config_path,
         });
     };
     let source_dir = source_dir
@@ -363,24 +300,11 @@ fn parse_args() -> Result<CliArgs> {
         build_bundle(&source_dir, &dist_dir)?;
     }
 
-    let launcher = if devnet_mode {
-        Some(make_launcher(
-            devnet_path,
-            rpc_url,
-            ipfs_api,
-            ipfs_gateway,
-            cache_dir,
-        ))
-    } else {
-        None
-    };
     Ok(CliArgs {
         bundle: Some(BundleConfig {
             source_dir,
             dist_dir,
         }),
-        launcher,
-        wc_project_id,
-        wc_relay_url,
+        config_path,
     })
 }

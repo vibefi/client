@@ -24,10 +24,21 @@ pub(super) fn handle_wallet_selector_ipc(
     match req.wallet_selector_method() {
         Some(WalletSelectorMethod::ConnectLocal) => {
             eprintln!("[wallet-selector] connecting local signer");
-            let devnet = state.devnet.as_ref();
-            let signer_hex = devnet
-                .and_then(|ctx| ctx.config.developerPrivateKey.clone())
-                .unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string());
+            let network = state.network.as_ref();
+            let is_local = network
+                .map(|n| n.config.localNetwork)
+                .unwrap_or(false);
+            let explicit_key = network
+                .and_then(|n| n.config.developerPrivateKey.clone());
+            let signer_hex = if is_local {
+                explicit_key.unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string())
+            } else if let Some(key) = explicit_key {
+                key
+            } else {
+                return Err(anyhow!(
+                    "Local wallet requires either localNetwork: true or an explicit developerPrivateKey in config"
+                ));
+            };
             let signer: alloy_signer_local::PrivateKeySigner = signer_hex
                 .parse()
                 .context("failed to parse signing private key")?;
@@ -60,17 +71,21 @@ pub(super) fn handle_wallet_selector_ipc(
         }
         Some(WalletSelectorMethod::ConnectWalletConnect) => {
             eprintln!("[wallet-selector] connecting walletconnect");
-            let project_id = state
-                .wc_project_id
-                .clone()
+            let wc_config = state
+                .network
+                .as_ref()
+                .and_then(|n| n.config.walletConnect.clone());
+            let project_id = wc_config
+                .as_ref()
+                .and_then(|wc| wc.projectId.clone())
                 .or_else(|| std::env::var("VIBEFI_WC_PROJECT_ID").ok())
                 .or_else(|| std::env::var("WC_PROJECT_ID").ok())
                 .ok_or_else(|| {
-                    anyhow!("WalletConnect requires --wc-project-id or VIBEFI_WC_PROJECT_ID")
+                    anyhow!("WalletConnect requires walletConnect.projectId in config or VIBEFI_WC_PROJECT_ID env var")
                 })?;
-            let relay_url = state
-                .wc_relay_url
-                .clone()
+            let relay_url = wc_config
+                .as_ref()
+                .and_then(|wc| wc.relayUrl.clone())
                 .or_else(|| std::env::var("VIBEFI_WC_RELAY_URL").ok())
                 .or_else(|| std::env::var("WC_RELAY_URL").ok());
 

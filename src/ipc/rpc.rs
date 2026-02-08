@@ -31,10 +31,10 @@ pub(super) fn is_rpc_passthrough(method: &str) -> bool {
 }
 
 pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
-    let devnet = state
-        .devnet
+    let network = state
+        .network
         .as_ref()
-        .ok_or_else(|| anyhow!("Devnet not configured"))?;
+        .ok_or_else(|| anyhow!("No RPC endpoint configured. Provide a config file with rpcUrl."))?;
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -48,9 +48,9 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         serde_json::to_string(&req.params).unwrap_or_default()
     );
 
-    let res = devnet
+    let res = network
         .http
-        .post(&devnet.rpc_url)
+        .post(&network.rpc_url)
         .json(&payload)
         .send()
         .context("rpc request failed")?;
@@ -78,8 +78,8 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
 }
 
 fn rpc_request(state: &AppState, method: &str, params: Value) -> Result<Value> {
-    if state.devnet.is_none() {
-        bail!("RPC backend unavailable. Run with --devnet to send transactions.");
+    if state.network.is_none() {
+        bail!("No RPC endpoint configured. Provide a config file with rpcUrl.");
     }
 
     let req = IpcRequest {

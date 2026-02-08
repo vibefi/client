@@ -7,7 +7,7 @@ use std::{
 
 use tao::event_loop::EventLoopProxy;
 
-use crate::devnet::DevnetContext;
+use crate::config::NetworkContext;
 use crate::hardware::HardwareDevice;
 use crate::walletconnect::{WalletConnectBridge, WalletConnectSession};
 
@@ -96,13 +96,9 @@ pub struct AppState {
     pub signer: Arc<Mutex<Option<Arc<PrivateKeySigner>>>>,
     pub walletconnect: Arc<Mutex<Option<Arc<Mutex<WalletConnectBridge>>>>>,
     pub hardware_signer: Arc<Mutex<Option<HardwareDevice>>>,
-    pub devnet: Option<DevnetContext>,
+    pub network: Option<NetworkContext>,
     pub proxy: EventLoopProxy<UserEvent>,
     pub pending_connect: Arc<Mutex<Option<PendingConnect>>>,
-    /// WalletConnect project ID, kept for lazy init.
-    pub wc_project_id: Option<String>,
-    /// WalletConnect relay URL, kept for lazy init.
-    pub wc_relay_url: Option<String>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
 }
@@ -139,10 +135,3 @@ impl AppState {
     }
 }
 
-pub struct LauncherConfig {
-    pub devnet_path: Option<PathBuf>,
-    pub rpc_url: String,
-    pub ipfs_api: String,
-    pub ipfs_gateway: String,
-    pub cache_dir: PathBuf,
-}

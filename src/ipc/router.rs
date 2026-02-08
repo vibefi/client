@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use wry::WebView;
 
-use crate::devnet::handle_launcher_ipc;
+use crate::registry::handle_launcher_ipc;
 use crate::ipc_contract::{IpcRequest, KnownProviderId};
 use crate::state::{AppState, PendingConnect, ProviderInfo, UserEvent, WalletBackend};
 
@@ -83,7 +83,7 @@ pub fn handle_ipc(
                     Ok(Some(serde_json::to_value(info)?))
                 }
                 _ => {
-                    if state.devnet.is_some() && rpc::is_rpc_passthrough(req.method.as_str()) {
+                    if state.network.is_some() && rpc::is_rpc_passthrough(req.method.as_str()) {
                         rpc::proxy_rpc(state, &req).map(Some)
                     } else {
                         Err(anyhow!(
