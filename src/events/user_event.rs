@@ -25,7 +25,17 @@ pub fn handle_ipc_event(
                     }
                     Some(TabbarMethod::CloseTab) => {
                         if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
-                            manager.close_app(idx as usize);
+                            let idx = idx as usize;
+                            if let Some(entry) = manager.apps.get(idx) {
+                                if entry.label == "Settings" {
+                                    let mut sel = state.settings_webview_id.lock().unwrap();
+                                    *sel = None;
+                                } else if entry.label == "Connect Wallet" {
+                                    let mut sel = state.selector_webview_id.lock().unwrap();
+                                    *sel = None;
+                                }
+                            }
+                            manager.close_app(idx);
                         }
                     }
                     None => {}
@@ -173,12 +183,14 @@ pub fn handle_open_settings(
 ) {
     // Only open one settings tab at a time.
     {
-        let sel = state.settings_webview_id.lock().unwrap();
+        let mut sel = state.settings_webview_id.lock().unwrap();
         if sel.is_some() {
             if let Some(idx) = manager.index_of_label("Settings") {
                 manager.switch_to(idx);
+                return;
             }
-            return;
+            // Stale ID (tab was closed). Clear and continue to open a new tab.
+            *sel = None;
         }
     }
     if let Some(w) = window {
@@ -234,7 +246,18 @@ pub fn handle_tab_action(
 ) {
     match action {
         TabAction::SwitchTab(i) => manager.switch_to(i),
-        TabAction::CloseTab(i) => manager.close_app(i),
+        TabAction::CloseTab(i) => {
+            if let Some(entry) = manager.apps.get(i) {
+                if entry.label == "Settings" {
+                    let mut sel = state.settings_webview_id.lock().unwrap();
+                    *sel = None;
+                } else if entry.label == "Connect Wallet" {
+                    let mut sel = state.selector_webview_id.lock().unwrap();
+                    *sel = None;
+                }
+            }
+            manager.close_app(i)
+        }
         TabAction::OpenApp { name, dist_dir } => {
             if let Some(w) = window {
                 let size = w.inner_size();
