@@ -9,8 +9,9 @@ use wry::{
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
 use crate::{
-    HOME_JS, INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, PRELOAD_APP_JS, PRELOAD_TAB_BAR_JS,
-    PRELOAD_WALLET_SELECTOR_JS, TAB_BAR_HTML, TAB_BAR_JS, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS,
+    HOME_JS, INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, PRELOAD_APP_JS, PRELOAD_SETTINGS_JS,
+    PRELOAD_TAB_BAR_JS, PRELOAD_WALLET_SELECTOR_JS, SETTINGS_HTML, SETTINGS_JS, TAB_BAR_HTML,
+    TAB_BAR_JS, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS,
 };
 
 /// What embedded content to serve when `dist_dir` is `None`.
@@ -22,6 +23,8 @@ pub enum EmbeddedContent {
     Launcher,
     /// The runtime wallet-selector tab.
     WalletSelector,
+    /// The settings tab.
+    Settings,
 }
 
 fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
@@ -102,6 +105,7 @@ pub fn build_app_webview(
                         EmbeddedContent::Default => INDEX_HTML,
                         EmbeddedContent::Launcher => LAUNCHER_HTML,
                         EmbeddedContent::WalletSelector => WALLET_SELECTOR_HTML,
+                        EmbeddedContent::Settings => SETTINGS_HTML,
                     };
                     csp_response(
                         html.as_bytes().to_vec(),
@@ -120,6 +124,10 @@ pub fn build_app_webview(
                     WALLET_SELECTOR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
                 ),
+                (EmbeddedContent::Settings, "/settings.js") => csp_response(
+                    SETTINGS_JS.as_bytes().to_vec(),
+                    "application/javascript; charset=utf-8".to_string(),
+                ),
                 _ => csp_response(
                     format!("Not found: {}", path).into_bytes(),
                     "text/plain; charset=utf-8".to_string(),
@@ -130,10 +138,10 @@ pub fn build_app_webview(
 
     let navigation_handler = |url: String| url.starts_with("app://") || url == "about:blank";
 
-    let init_script = if embedded == EmbeddedContent::WalletSelector {
-        PRELOAD_WALLET_SELECTOR_JS.to_string()
-    } else {
-        PRELOAD_APP_JS.to_string()
+    let init_script = match embedded {
+        EmbeddedContent::WalletSelector => PRELOAD_WALLET_SELECTOR_JS.to_string(),
+        EmbeddedContent::Settings => PRELOAD_SETTINGS_JS.to_string(),
+        _ => PRELOAD_APP_JS.to_string(),
     };
 
     let webview_id = id.to_string();
@@ -153,8 +161,8 @@ pub fn build_app_webview(
         .build_as_child(window)
         .context("failed to build app webview")?;
 
-    // Emit initial chain/accounts state after load (skip for selector tab).
-    if embedded != EmbeddedContent::WalletSelector {
+    // Emit initial chain/accounts state after load (skip for selector and settings tabs).
+    if embedded != EmbeddedContent::WalletSelector && embedded != EmbeddedContent::Settings {
         let addr = state.account();
         let chain_hex = state.chain_id_hex();
         {

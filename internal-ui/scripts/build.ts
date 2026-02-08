@@ -9,6 +9,11 @@ const entries: Array<{ entry: string; outfile: string }> = [
   { entry: "./src/launcher.tsx", outfile: "./dist/launcher.js" },
   { entry: "./src/wallet-selector.tsx", outfile: "./dist/wallet-selector.js" },
   { entry: "./src/tabbar.tsx", outfile: "./dist/tabbar.js" },
+  {
+    entry: "./src/preload-settings.ts",
+    outfile: "./dist/preload-settings.js",
+  },
+  { entry: "./src/settings.tsx", outfile: "./dist/settings.js" },
 ];
 
 await Bun.$`mkdir -p ./dist`;

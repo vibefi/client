@@ -3,6 +3,7 @@ mod local;
 mod router;
 mod rpc;
 mod selector;
+mod settings;
 mod walletconnect;
 
 use anyhow::Result;
