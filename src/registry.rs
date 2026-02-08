@@ -3,26 +3,22 @@ use alloy_sol_types::{SolEvent, sol};
 use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-    str::FromStr,
-};
+use std::{collections::HashMap, fs, path::Path, str::FromStr};
 
 use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
 use crate::config::NetworkContext;
 use crate::state::{AppState, TabAction, UserEvent};
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DappInfo {
-    pub dappId: String,
-    pub versionId: String,
+    pub dapp_id: String,
+    pub version_id: String,
     pub name: String,
     pub version: String,
     pub description: String,
     pub status: String,
-    pub rootCid: String,
+    pub root_cid: String,
 }
 
 sol! {
@@ -41,14 +37,15 @@ sol! {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RpcLog {
     address: String,
     data: String,
     topics: Vec<String>,
     #[serde(default)]
-    blockNumber: Option<String>,
+    block_number: Option<String>,
     #[serde(default)]
-    logIndex: Option<String>,
+    log_index: Option<String>,
 }
 
 struct LogEntry {
@@ -87,7 +84,6 @@ pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
 
     #[derive(Debug)]
     struct Version {
-        version_id: u64,
         root_cid: Option<String>,
         name: Option<String>,
         version: Option<String>,
@@ -111,7 +107,6 @@ pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
                 versions: HashMap::new(),
             });
             dapp.versions.entry($version_id).or_insert_with(|| Version {
-                version_id: $version_id,
                 root_cid: None,
                 name: None,
                 version: None,
@@ -184,8 +179,8 @@ pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
         if let Some(dapp) = dapps.get(&key) {
             let latest = dapp.versions.get(&dapp.latest_version_id);
             result.push(DappInfo {
-                dappId: dapp.dapp_id.to_string(),
-                versionId: dapp.latest_version_id.to_string(),
+                dapp_id: dapp.dapp_id.to_string(),
+                version_id: dapp.latest_version_id.to_string(),
                 name: latest.and_then(|v| v.name.clone()).unwrap_or_default(),
                 version: latest.and_then(|v| v.version.clone()).unwrap_or_default(),
                 description: latest
@@ -194,7 +189,7 @@ pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
                 status: latest
                     .and_then(|v| v.status.clone())
                     .unwrap_or_else(|| "Unknown".to_string()),
-                rootCid: latest.and_then(|v| v.root_cid.clone()).unwrap_or_default(),
+                root_cid: latest.and_then(|v| v.root_cid.clone()).unwrap_or_default(),
             });
         }
     }
@@ -252,8 +247,8 @@ fn rpc_log_to_entry(rpc_log: RpcLog) -> Result<LogEntry> {
     let log = Log::new_unchecked(address, topics, data);
     let kind = event_kind(&log)?;
     Ok(LogEntry {
-        block_number: parse_hex_u64_opt(rpc_log.blockNumber.as_deref()).unwrap_or(0),
-        log_index: parse_hex_u64_opt(rpc_log.logIndex.as_deref()).unwrap_or(0),
+        block_number: parse_hex_u64_opt(rpc_log.block_number.as_deref()).unwrap_or(0),
+        log_index: parse_hex_u64_opt(rpc_log.log_index.as_deref()).unwrap_or(0),
         kind,
         log,
     })
@@ -482,4 +477,54 @@ fn parse_hex_u64(s: &str) -> Option<u64> {
 
 fn u256_to_u64(value: U256) -> Result<u64> {
     value.try_into().map_err(|_| anyhow!("u256 out of range"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DappInfo, RpcLog};
+    use serde_json::json;
+
+    #[test]
+    fn dapp_info_serializes_with_camel_case_keys() {
+        let dapp = DappInfo {
+            dapp_id: "1".to_string(),
+            version_id: "2".to_string(),
+            name: "Name".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Desc".to_string(),
+            status: "Published".to_string(),
+            root_cid: "bafy...".to_string(),
+        };
+        let value = serde_json::to_value(dapp).expect("serialize DappInfo");
+        assert_eq!(value.get("dappId"), Some(&json!("1")));
+        assert_eq!(value.get("versionId"), Some(&json!("2")));
+        assert_eq!(value.get("rootCid"), Some(&json!("bafy...")));
+        assert!(value.get("dapp_id").is_none());
+        assert!(value.get("version_id").is_none());
+        assert!(value.get("root_cid").is_none());
+    }
+
+    #[test]
+    fn rpc_log_deserializes_camel_case_and_defaults_missing_fields() {
+        let value = json!({
+            "address": "0x0000000000000000000000000000000000000000",
+            "data": "0x",
+            "topics": [],
+            "blockNumber": "0x10",
+            "logIndex": "0x1"
+        });
+        let parsed: RpcLog = serde_json::from_value(value).expect("deserialize RpcLog");
+        assert_eq!(parsed.block_number.as_deref(), Some("0x10"));
+        assert_eq!(parsed.log_index.as_deref(), Some("0x1"));
+
+        let missing = json!({
+            "address": "0x0000000000000000000000000000000000000000",
+            "data": "0x",
+            "topics": []
+        });
+        let parsed_missing: RpcLog =
+            serde_json::from_value(missing).expect("deserialize RpcLog defaults");
+        assert!(parsed_missing.block_number.is_none());
+        assert!(parsed_missing.log_index.is_none());
+    }
 }

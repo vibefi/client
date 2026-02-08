@@ -13,26 +13,6 @@ use wry::WebView;
 pub use router::handle_ipc;
 pub use walletconnect::handle_walletconnect_connect_result;
 
-/// Emit accountsChanged to all app webviews via the manager.
-pub fn broadcast_accounts_changed(
-    manager: &crate::webview_manager::WebViewManager,
-    addrs: Vec<String>,
-) {
-    for entry in &manager.apps {
-        emit_accounts_changed(&entry.webview, addrs.clone());
-    }
-}
-
-/// Emit chainChanged to all app webviews via the manager.
-pub fn broadcast_chain_changed(
-    manager: &crate::webview_manager::WebViewManager,
-    chain_id_hex: String,
-) {
-    for entry in &manager.apps {
-        emit_chain_changed(&entry.webview, chain_id_hex.clone());
-    }
-}
-
 pub fn respond_ok(webview: &WebView, id: u64, value: Value) -> Result<()> {
     crate::ui_bridge::respond_ok(webview, id, value)
 }

@@ -52,8 +52,6 @@ pub enum UserEvent {
 
 #[derive(Debug, Clone)]
 pub enum TabAction {
-    SwitchTab(usize),
-    CloseTab(usize),
     OpenApp { name: String, dist_dir: PathBuf },
 }
 
@@ -139,4 +137,3 @@ impl AppState {
         *self.wallet_backend.lock().unwrap()
     }
 }
-

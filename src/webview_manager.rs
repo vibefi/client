@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use wry::{Rect, WebView, dpi::PhysicalPosition, dpi::PhysicalSize};
 
 /// On macOS, bring a child webview to the front of the window's view hierarchy.
@@ -48,7 +47,6 @@ pub struct AppWebViewEntry {
     pub webview: WebView,
     pub id: String,
     pub label: String,
-    pub dist_dir: Option<PathBuf>,
 }
 
 pub struct WebViewManager {
