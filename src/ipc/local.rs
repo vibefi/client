@@ -58,10 +58,6 @@ pub(super) fn handle_local_ipc(
                 .ok_or_else(|| anyhow!("invalid params for wallet_switchEthereumChain"))?;
             let chain_id = parse_hex_u64(chain_id_hex).ok_or_else(|| anyhow!("invalid chainId"))?;
 
-            if !matches!(chain_id, 1 | 11155111 | 31337) {
-                return Err(anyhow!("Unsupported chainId in local demo wallet"));
-            }
-
             {
                 let mut ws = state.wallet.lock().unwrap();
                 ws.chain.chain_id = chain_id;
@@ -141,7 +137,7 @@ pub(super) fn handle_local_ipc(
             Ok(serde_json::to_value(info)?)
         }
         _ => {
-            if state.devnet.is_some() && is_rpc_passthrough(req.method.as_str()) {
+            if state.network.is_some() && is_rpc_passthrough(req.method.as_str()) {
                 proxy_rpc(state, req)
             } else {
                 Err(anyhow!("Unsupported method: {}", req.method))

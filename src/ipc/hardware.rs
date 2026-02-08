@@ -229,7 +229,7 @@ pub(super) fn handle_hardware_ipc(
             Ok(None) // deferred
         }
         _ => {
-            if state.devnet.is_some() && is_rpc_passthrough(req.method.as_str()) {
+            if state.network.is_some() && is_rpc_passthrough(req.method.as_str()) {
                 proxy_rpc(state, req).map(Some)
             } else {
                 Err(anyhow!("Unsupported method: {}", req.method))

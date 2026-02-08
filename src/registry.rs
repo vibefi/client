@@ -6,30 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     str::FromStr,
 };
 
 use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
+use crate::config::NetworkContext;
 use crate::state::{AppState, TabAction, UserEvent};
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct DevnetConfig {
-    pub chainId: u64,
-    pub deployBlock: Option<u64>,
-    pub dappRegistry: String,
-    pub developerPrivateKey: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DevnetContext {
-    pub config: DevnetConfig,
-    pub rpc_url: String,
-    pub ipfs_api: String,
-    pub ipfs_gateway: String,
-    pub cache_dir: PathBuf,
-    pub http: HttpClient,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DappInfo {
@@ -40,12 +23,6 @@ pub struct DappInfo {
     pub description: String,
     pub status: String,
     pub rootCid: String,
-}
-
-pub fn load_devnet(path: &Path) -> Result<DevnetConfig> {
-    let raw = fs::read_to_string(path).context("read devnet.json")?;
-    let cfg: DevnetConfig = serde_json::from_str(&raw).context("parse devnet.json")?;
-    Ok(cfg)
 }
 
 sol! {
@@ -81,9 +58,9 @@ struct LogEntry {
     log: Log,
 }
 
-pub fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
+pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
     if devnet.config.dappRegistry.is_empty() {
-        return Err(anyhow!("devnet.json missing dappRegistry"));
+        return Err(anyhow!("config missing dappRegistry"));
     }
     let address = devnet.config.dappRegistry.clone();
     let published = rpc_get_logs(devnet, &address, DappPublished::SIGNATURE_HASH)?;
@@ -224,7 +201,7 @@ pub fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
     Ok(result)
 }
 
-fn rpc_get_logs(devnet: &DevnetContext, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
+fn rpc_get_logs(devnet: &NetworkContext, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
     let topics = vec![format!("0x{}", hex::encode(topic0))];
     let from_block = devnet
         .config
@@ -311,9 +288,9 @@ pub fn handle_launcher_ipc(
     req: &crate::ipc_contract::IpcRequest,
 ) -> Result<serde_json::Value> {
     let devnet = state
-        .devnet
+        .network
         .as_ref()
-        .ok_or_else(|| anyhow!("Devnet not enabled"))?;
+        .ok_or_else(|| anyhow!("Network not configured"))?;
     match req.method.as_str() {
         "vibefi_listDapps" => {
             println!("launcher: fetching dapp list from logs");
@@ -360,7 +337,7 @@ pub fn handle_launcher_ipc(
     }
 }
 
-fn ensure_bundle_cached(devnet: &DevnetContext, root_cid: &str, bundle_dir: &Path) -> Result<()> {
+fn ensure_bundle_cached(devnet: &NetworkContext, root_cid: &str, bundle_dir: &Path) -> Result<()> {
     if bundle_dir.join("manifest.json").exists() {
         return Ok(());
     }
@@ -372,7 +349,7 @@ fn ensure_bundle_cached(devnet: &DevnetContext, root_cid: &str, bundle_dir: &Pat
 }
 
 fn fetch_dapp_manifest(
-    devnet: &DevnetContext,
+    devnet: &NetworkContext,
     root_cid: &str,
 ) -> Result<(BundleManifest, Vec<u8>)> {
     let gateway = normalize_gateway(&devnet.ipfs_gateway);
@@ -391,7 +368,7 @@ fn fetch_dapp_manifest(
 }
 
 fn download_dapp_bundle(
-    devnet: &DevnetContext,
+    devnet: &NetworkContext,
     root_cid: &str,
     out_dir: &Path,
     manifest: &BundleManifest,
