@@ -82,10 +82,7 @@ impl RpcEndpointManager {
     }
 
     pub fn get_endpoints(&self) -> Vec<RpcEndpoint> {
-        self.endpoints
-            .iter()
-            .map(|h| h.endpoint.clone())
-            .collect()
+        self.endpoints.iter().map(|h| h.endpoint.clone()).collect()
     }
 
     pub fn set_endpoints(&mut self, endpoints: Vec<RpcEndpoint>) {
@@ -119,12 +116,7 @@ impl RpcEndpointManager {
         }
 
         // All in backoff — find earliest backoff expiry and sleep
-        if let Some(earliest) = self
-            .endpoints
-            .iter()
-            .filter_map(|h| h.backoff_until)
-            .min()
-        {
+        if let Some(earliest) = self.endpoints.iter().filter_map(|h| h.backoff_until).min() {
             if earliest > now {
                 std::thread::sleep(earliest - now);
             }

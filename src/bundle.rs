@@ -7,7 +7,6 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct BundleConfig {
-    pub source_dir: PathBuf,
     pub dist_dir: PathBuf,
 }
 

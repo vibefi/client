@@ -93,7 +93,6 @@ pub fn handle_open_wallet_selector(
                     webview: wv,
                     id,
                     label: "Connect Wallet".to_string(),
-                    dist_dir: None,
                 });
                 manager.active_app_index = Some(idx);
                 manager.update_tab_bar();
@@ -219,7 +218,6 @@ pub fn handle_open_settings(
                     webview: wv,
                     id,
                     label: "Settings".to_string(),
-                    dist_dir: None,
                 });
                 manager.active_app_index = Some(idx);
                 manager.update_tab_bar();
@@ -245,19 +243,6 @@ pub fn handle_tab_action(
     action: TabAction,
 ) {
     match action {
-        TabAction::SwitchTab(i) => manager.switch_to(i),
-        TabAction::CloseTab(i) => {
-            if let Some(entry) = manager.apps.get(i) {
-                if entry.label == "Settings" {
-                    let mut sel = state.settings_webview_id.lock().unwrap();
-                    *sel = None;
-                } else if entry.label == "Connect Wallet" {
-                    let mut sel = state.selector_webview_id.lock().unwrap();
-                    *sel = None;
-                }
-            }
-            manager.close_app(i)
-        }
         TabAction::OpenApp { name, dist_dir } => {
             if let Some(w) = window {
                 let size = w.inner_size();
@@ -282,7 +267,6 @@ pub fn handle_tab_action(
                             webview: wv,
                             id,
                             label: name,
-                            dist_dir: Some(dist_dir),
                         });
                         manager.active_app_index = Some(idx);
                         manager.update_tab_bar();

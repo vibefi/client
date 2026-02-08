@@ -69,10 +69,7 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    let initial_chain_id = network
-        .as_ref()
-        .map(|n| n.config.chainId)
-        .unwrap_or(1);
+    let initial_chain_id = network.as_ref().map(|n| n.config.chainId).unwrap_or(1);
 
     // --- Load user settings + build RPC manager ---
     let rpc_manager = if let Some(ref net) = network {
@@ -222,7 +219,9 @@ fn main() -> Result<()> {
                     }
 
                     // 2. Build initial app webview
-                    let has_registry = state.network.as_ref()
+                    let has_registry = state
+                        .network
+                        .as_ref()
                         .map(|n| !n.config.dappRegistry.is_empty())
                         .unwrap_or(false);
                     let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
@@ -256,7 +255,6 @@ fn main() -> Result<()> {
                                 webview: wv,
                                 id: app_id,
                                 label,
-                                dist_dir,
                             });
                             manager.active_app_index = Some(0);
                             manager.update_tab_bar();
@@ -286,9 +284,7 @@ fn main() -> Result<()> {
             }
             _ => {}
         }
-    });
-
-    Ok(())
+    })
 }
 
 struct CliArgs {
@@ -337,10 +333,7 @@ fn parse_args() -> Result<CliArgs> {
     }
 
     Ok(CliArgs {
-        bundle: Some(BundleConfig {
-            source_dir,
-            dist_dir,
-        }),
+        bundle: Some(BundleConfig { dist_dir }),
         config_path,
     })
 }

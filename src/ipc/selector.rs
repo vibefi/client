@@ -25,11 +25,8 @@ pub(super) fn handle_wallet_selector_ipc(
         Some(WalletSelectorMethod::ConnectLocal) => {
             eprintln!("[wallet-selector] connecting local signer");
             let network = state.network.as_ref();
-            let is_local = network
-                .map(|n| n.config.localNetwork)
-                .unwrap_or(false);
-            let explicit_key = network
-                .and_then(|n| n.config.developerPrivateKey.clone());
+            let is_local = network.map(|n| n.config.localNetwork).unwrap_or(false);
+            let explicit_key = network.and_then(|n| n.config.developerPrivateKey.clone());
             let signer_hex = if is_local {
                 explicit_key.unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string())
             } else if let Some(key) = explicit_key {

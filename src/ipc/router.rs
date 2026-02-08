@@ -2,8 +2,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use wry::WebView;
 
-use crate::registry::handle_launcher_ipc;
 use crate::ipc_contract::{IpcRequest, KnownProviderId};
+use crate::registry::handle_launcher_ipc;
 use crate::state::{AppState, PendingConnect, ProviderInfo, UserEvent, WalletBackend};
 
 use super::{hardware, local, respond_err, respond_ok, rpc, selector, walletconnect};

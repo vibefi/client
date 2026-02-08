@@ -1,6 +1,7 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn emit_rerun_for_path(path: &Path) {
     if let Some(s) = path.to_str() {
@@ -22,6 +23,20 @@ fn emit_rerun_for_dir(dir: &Path) {
     }
 }
 
+fn try_open_console() -> Option<std::fs::File> {
+    #[cfg(unix)]
+    let console_path = "/dev/tty";
+    #[cfg(windows)]
+    let console_path = "CONOUT$";
+    OpenOptions::new().write(true).open(console_path).ok()
+}
+
+fn print_console_line(line: &str) {
+    if let Some(mut console) = try_open_console() {
+        let _ = writeln!(console, "{line}");
+    }
+}
+
 fn main() {
     let internal_ui = Path::new("internal-ui");
     emit_rerun_for_path(&internal_ui.join("package.json"));
@@ -30,29 +45,38 @@ fn main() {
     emit_rerun_for_dir(&internal_ui.join("scripts"));
     emit_rerun_for_dir(&internal_ui.join("static"));
 
-    println!("cargo:warning=[internal-ui] running: bun run build");
-    let output = Command::new("bun")
-        .arg("run")
-        .arg("build")
-        .current_dir(internal_ui)
-        .output();
+    print_console_line("[internal-ui] running: bun run build");
 
-    match output {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                println!("cargo:warning=[internal-ui][stdout] {line}");
-            }
+    let mut cmd = Command::new("bun");
+    cmd.arg("run").arg("build").current_dir(internal_ui);
 
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            for line in stderr.lines() {
-                println!("cargo:warning=[internal-ui][stderr] {line}");
-            }
+    if let Some(console) = try_open_console() {
+        let stdout_console = console
+            .try_clone()
+            .expect("failed to clone console handle for bun stdout");
+        cmd.stdout(Stdio::from(stdout_console));
+        cmd.stderr(Stdio::from(console));
 
-            if !output.status.success() {
-                panic!("internal-ui build failed with status: {}", output.status);
-            }
+        let status = cmd
+            .status()
+            .expect("failed to execute bun for internal-ui build");
+        if !status.success() {
+            panic!("internal-ui build failed with status: {status}");
         }
-        Err(error) => panic!("failed to execute bun for internal-ui build: {error}"),
+        print_console_line("[internal-ui] bun build completed successfully");
+        return;
+    }
+
+    // Fallback when no console is available (e.g., some CI/non-interactive environments).
+    let output = cmd
+        .output()
+        .expect("failed to execute bun for internal-ui build");
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!(
+            "internal-ui build failed with status: {}.\nstdout:\n{}\nstderr:\n{}",
+            output.status, stdout, stderr
+        );
     }
 }
