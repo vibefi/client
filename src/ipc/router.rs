@@ -72,7 +72,7 @@ pub fn handle_ipc(
     }
 
     let result = match backend {
-        Some(WalletBackend::Local) => local::handle_local_ipc(webview, state, &req).map(Some),
+        Some(WalletBackend::Local) => local::handle_local_ipc(webview, state, webview_id, &req),
         Some(WalletBackend::WalletConnect) => {
             walletconnect::handle_walletconnect_ipc(webview, state, webview_id, &req)
         }
@@ -99,7 +99,28 @@ pub fn handle_ipc(
                 }
                 _ => {
                     if state.network.is_some() && rpc::is_rpc_passthrough(req.method.as_str()) {
-                        rpc::proxy_rpc(state, &req).map(Some)
+                        let proxy = state.proxy.clone();
+                        let state_clone = state.clone();
+                        let ipc_id = req.id;
+                        let method = req.method.clone();
+                        let params = req.params.clone();
+                        let wv_id = webview_id.to_string();
+                        std::thread::spawn(move || {
+                            let req = crate::ipc_contract::IpcRequest {
+                                id: ipc_id,
+                                provider_id: None,
+                                method,
+                                params,
+                            };
+                            let result = rpc::proxy_rpc(&state_clone, &req)
+                                .map_err(|e| e.to_string());
+                            let _ = proxy.send_event(UserEvent::RpcResult {
+                                webview_id: wv_id,
+                                ipc_id,
+                                result,
+                            });
+                        });
+                        Ok(None)
                     } else {
                         Err(anyhow!(
                             "No wallet connected. Call eth_requestAccounts first."

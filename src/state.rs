@@ -46,6 +46,11 @@ pub enum UserEvent {
         ipc_id: u64,
         result: Result<String, String>,
     },
+    RpcResult {
+        webview_id: String,
+        ipc_id: u64,
+        result: Result<serde_json::Value, String>,
+    },
     CloseWalletSelector,
     TabAction(TabAction),
 }

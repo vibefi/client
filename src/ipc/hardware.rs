@@ -167,8 +167,6 @@ pub(super) fn handle_hardware_ipc(
                 .get(0)
                 .cloned()
                 .ok_or_else(|| anyhow!("invalid params for eth_sendTransaction"))?;
-            let tx_request = build_filled_tx_request(state, tx_obj)?;
-            let mut tx = build_typed_tx(tx_request)?;
 
             // Sign and broadcast the typed transaction via the connected hardware device.
             let proxy = state.proxy.clone();
@@ -178,6 +176,31 @@ pub(super) fn handle_hardware_ipc(
             let wv_id = webview_id.to_string();
 
             std::thread::spawn(move || {
+                // Build and fill the tx request inside the thread to avoid blocking
+                // the main event loop with the 4-5 sequential RPC fill calls.
+                let tx_request = match build_filled_tx_request(&state_for_rpc, tx_obj) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
+                            webview_id: wv_id,
+                            ipc_id,
+                            result: Err(e.to_string()),
+                        });
+                        return;
+                    }
+                };
+                let mut tx = match build_typed_tx(tx_request) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
+                            webview_id: wv_id,
+                            ipc_id,
+                            result: Err(e.to_string()),
+                        });
+                        return;
+                    }
+                };
+
                 let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -230,7 +253,27 @@ pub(super) fn handle_hardware_ipc(
         }
         _ => {
             if state.network.is_some() && is_rpc_passthrough(req.method.as_str()) {
-                proxy_rpc(state, req).map(Some)
+                let proxy = state.proxy.clone();
+                let state_clone = state.clone();
+                let ipc_id = req.id;
+                let method = req.method.clone();
+                let params = req.params.clone();
+                let wv_id = webview_id.to_string();
+                std::thread::spawn(move || {
+                    let req = crate::ipc_contract::IpcRequest {
+                        id: ipc_id,
+                        provider_id: None,
+                        method,
+                        params,
+                    };
+                    let result = proxy_rpc(&state_clone, &req).map_err(|e| e.to_string());
+                    let _ = proxy.send_event(UserEvent::RpcResult {
+                        webview_id: wv_id,
+                        ipc_id,
+                        result,
+                    });
+                });
+                Ok(None)
             } else {
                 Err(anyhow!("Unsupported method: {}", req.method))
             }

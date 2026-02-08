@@ -227,6 +227,28 @@ pub fn handle_open_settings(
     }
 }
 
+pub fn handle_rpc_result(
+    manager: &WebViewManager,
+    webview_id: String,
+    ipc_id: u64,
+    result: Result<serde_json::Value, String>,
+) {
+    if let Some(wv) = manager.webview_for_id(&webview_id) {
+        match result {
+            Ok(value) => {
+                if let Err(e) = ipc::respond_ok(wv, ipc_id, value) {
+                    eprintln!("[rpc] failed to send ok response: {e}");
+                }
+            }
+            Err(msg) => {
+                if let Err(e) = ipc::respond_err(wv, ipc_id, &msg) {
+                    eprintln!("[rpc] failed to send error response: {e}");
+                }
+            }
+        }
+    }
+}
+
 pub fn handle_close_wallet_selector(state: &AppState, manager: &mut WebViewManager) {
     {
         let mut sel = state.selector_webview_id.lock().unwrap();
