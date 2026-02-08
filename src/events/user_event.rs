@@ -165,6 +165,58 @@ pub fn handle_hardware_sign_result(
     }
 }
 
+pub fn handle_open_settings(
+    window: Option<&Window>,
+    state: &AppState,
+    manager: &mut WebViewManager,
+    proxy: &EventLoopProxy<UserEvent>,
+) {
+    // Only open one settings tab at a time.
+    {
+        let sel = state.settings_webview_id.lock().unwrap();
+        if sel.is_some() {
+            if let Some(idx) = manager.index_of_label("Settings") {
+                manager.switch_to(idx);
+            }
+            return;
+        }
+    }
+    if let Some(w) = window {
+        let size = w.inner_size();
+        let id = manager.next_app_id();
+        let bounds = manager.app_rect(size.width, size.height);
+        match build_app_webview(
+            w,
+            &id,
+            None,
+            EmbeddedContent::Settings,
+            state,
+            proxy.clone(),
+            bounds,
+        ) {
+            Ok(wv) => {
+                if let Some(active) = manager.active_app_webview() {
+                    let _ = active.set_visible(false);
+                }
+                let idx = manager.apps.len();
+                {
+                    let mut sel = state.settings_webview_id.lock().unwrap();
+                    *sel = Some(id.clone());
+                }
+                manager.apps.push(AppWebViewEntry {
+                    webview: wv,
+                    id,
+                    label: "Settings".to_string(),
+                    dist_dir: None,
+                });
+                manager.active_app_index = Some(idx);
+                manager.update_tab_bar();
+            }
+            Err(e) => eprintln!("failed to open settings tab: {e:?}"),
+        }
+    }
+}
+
 pub fn handle_close_wallet_selector(state: &AppState, manager: &mut WebViewManager) {
     {
         let mut sel = state.selector_webview_id.lock().unwrap();

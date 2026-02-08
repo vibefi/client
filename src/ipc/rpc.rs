@@ -31,10 +31,6 @@ pub(super) fn is_rpc_passthrough(method: &str) -> bool {
 }
 
 pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
-    let network = state
-        .network
-        .as_ref()
-        .ok_or_else(|| anyhow!("No RPC endpoint configured. Provide a config file with rpcUrl."))?;
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -48,13 +44,25 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         serde_json::to_string(&req.params).unwrap_or_default()
     );
 
-    let res = network
-        .http
-        .post(&network.rpc_url)
-        .json(&payload)
-        .send()
-        .context("rpc request failed")?;
-    let v: Value = res.json().context("rpc decode failed")?;
+    // Try RpcEndpointManager first (supports failover)
+    let v = {
+        let mut mgr = state.rpc_manager.lock().unwrap();
+        if let Some(m) = mgr.as_mut() {
+            m.send_rpc(&payload)?
+        } else {
+            // Fallback: use network.rpc_url directly
+            let network = state.network.as_ref().ok_or_else(|| {
+                anyhow!("No RPC endpoint configured. Provide a config file with rpcUrl.")
+            })?;
+            let res = network
+                .http
+                .post(&network.rpc_url)
+                .json(&payload)
+                .send()
+                .context("rpc request failed")?;
+            res.json().context("rpc decode failed")?
+        }
+    };
 
     let result_str = v
         .get("result")

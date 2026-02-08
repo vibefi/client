@@ -3,6 +3,7 @@ export const PROVIDER_IDS = {
   wallet: "vibefi-wallet",
   launcher: "vibefi-launcher",
   tabbar: "vibefi-tabbar",
+  settings: "vibefi-settings",
 } as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[keyof typeof PROVIDER_IDS];

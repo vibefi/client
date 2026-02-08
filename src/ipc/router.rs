@@ -27,6 +27,15 @@ pub fn handle_ipc(
         return Ok(());
     }
 
+    if req.provider() == Some(KnownProviderId::Settings) {
+        let result = super::settings::handle_settings_ipc(state, &req);
+        match result {
+            Ok(v) => respond_ok(webview, req.id, v)?,
+            Err(e) => respond_err(webview, req.id, &e.to_string())?,
+        }
+        return Ok(());
+    }
+
     if req.provider() == Some(KnownProviderId::Launcher) {
         if webview_id != "app-0" {
             bail!("launcher IPC is only available to the launcher webview");

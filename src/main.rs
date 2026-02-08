@@ -6,6 +6,8 @@ mod ipc;
 mod ipc_contract;
 mod menu;
 mod registry;
+mod rpc_manager;
+mod settings;
 mod state;
 mod ui_bridge;
 mod walletconnect;
@@ -27,6 +29,7 @@ use tao::{
 
 use bundle::{BundleConfig, build_bundle, verify_manifest};
 use config::{build_network_context, load_config};
+use rpc_manager::{RpcEndpoint, RpcEndpointManager};
 use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, WebViewManager};
@@ -43,6 +46,9 @@ static PRELOAD_APP_JS: &str = include_str!("../internal-ui/dist/preload-app.js")
 static PRELOAD_WALLET_SELECTOR_JS: &str =
     include_str!("../internal-ui/dist/preload-wallet-selector.js");
 static PRELOAD_TAB_BAR_JS: &str = include_str!("../internal-ui/dist/preload-tabbar.js");
+static SETTINGS_HTML: &str = include_str!("../internal-ui/static/settings.html");
+static SETTINGS_JS: &str = include_str!("../internal-ui/dist/settings.js");
+static PRELOAD_SETTINGS_JS: &str = include_str!("../internal-ui/dist/preload-settings.js");
 
 /// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
 /// This matches a common dev key used across many tutorials.
@@ -67,6 +73,25 @@ fn main() -> Result<()> {
         .as_ref()
         .map(|n| n.config.chainId)
         .unwrap_or(1);
+
+    // --- Load user settings + build RPC manager ---
+    let rpc_manager = if let Some(ref net) = network {
+        let user_settings = config_path
+            .as_ref()
+            .map(|p| settings::load_settings(p))
+            .unwrap_or_default();
+        let endpoints = if user_settings.rpc_endpoints.is_empty() {
+            vec![RpcEndpoint {
+                url: net.rpc_url.clone(),
+                label: Some("Default".to_string()),
+            }]
+        } else {
+            user_settings.rpc_endpoints
+        };
+        Some(RpcEndpointManager::new(endpoints, net.http.clone()))
+    } else {
+        None
+    };
 
     // --- Window + event loop ---
     let mut event_loop = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -98,6 +123,9 @@ fn main() -> Result<()> {
         proxy: proxy.clone(),
         pending_connect: Arc::new(Mutex::new(None)),
         selector_webview_id: Arc::new(Mutex::new(None)),
+        rpc_manager: Arc::new(Mutex::new(rpc_manager)),
+        config_path: config_path.clone(),
+        settings_webview_id: Arc::new(Mutex::new(None)),
     };
     let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
@@ -110,6 +138,14 @@ fn main() -> Result<()> {
             }
             Event::UserEvent(UserEvent::OpenWalletSelector) => {
                 events::user_event::handle_open_wallet_selector(
+                    window.as_ref(),
+                    &state,
+                    &mut manager,
+                    &proxy,
+                );
+            }
+            Event::UserEvent(UserEvent::OpenSettings) => {
+                events::user_event::handle_open_settings(
                     window.as_ref(),
                     &state,
                     &mut manager,

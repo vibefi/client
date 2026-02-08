@@ -333,6 +333,10 @@ pub fn handle_launcher_ipc(
                 }));
             Ok(serde_json::Value::Bool(true))
         }
+        "vibefi_openSettings" => {
+            let _ = state.proxy.send_event(UserEvent::OpenSettings);
+            Ok(serde_json::Value::Bool(true))
+        }
         _ => Err(anyhow!("Unsupported launcher method: {}", req.method)),
     }
 }

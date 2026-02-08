@@ -150,6 +150,7 @@ function App() {
         <div className="row">
           <button onClick={() => void refresh()} disabled={busy}>Refresh list</button>
           <button className="primary" onClick={() => void launch()} disabled={busy || !selectedItem}>Launch selected</button>
+          <button onClick={() => void vibefiRequest("vibefi_openSettings")}>Settings</button>
         </div>
 
         <table>

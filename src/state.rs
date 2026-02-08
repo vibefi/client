@@ -9,6 +9,7 @@ use tao::event_loop::EventLoopProxy;
 
 use crate::config::NetworkContext;
 use crate::hardware::HardwareDevice;
+use crate::rpc_manager::RpcEndpointManager;
 use crate::walletconnect::{WalletConnectBridge, WalletConnectSession};
 
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +31,7 @@ pub enum UserEvent {
         msg: String,
     },
     OpenWalletSelector,
+    OpenSettings,
     WalletConnectPairing {
         uri: String,
         qr_svg: String,
@@ -101,6 +103,9 @@ pub struct AppState {
     pub pending_connect: Arc<Mutex<Option<PendingConnect>>>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
+    pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,
+    pub config_path: Option<PathBuf>,
+    pub settings_webview_id: Arc<Mutex<Option<String>>>,
 }
 
 impl AppState {

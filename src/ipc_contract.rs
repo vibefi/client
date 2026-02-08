@@ -5,6 +5,7 @@ pub const PROVIDER_ID_WALLET: &str = "vibefi-wallet";
 pub const PROVIDER_ID_LAUNCHER: &str = "vibefi-launcher";
 pub const PROVIDER_ID_TABBAR: &str = "vibefi-tabbar";
 pub const PROVIDER_ID_PROVIDER: &str = "vibefi-provider";
+pub const PROVIDER_ID_SETTINGS: &str = "vibefi-settings";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnownProviderId {
@@ -12,6 +13,7 @@ pub enum KnownProviderId {
     Wallet,
     Launcher,
     Tabbar,
+    Settings,
 }
 
 impl KnownProviderId {
@@ -21,6 +23,7 @@ impl KnownProviderId {
             PROVIDER_ID_WALLET => Some(Self::Wallet),
             PROVIDER_ID_LAUNCHER => Some(Self::Launcher),
             PROVIDER_ID_TABBAR => Some(Self::Tabbar),
+            PROVIDER_ID_SETTINGS => Some(Self::Settings),
             _ => None,
         }
     }
