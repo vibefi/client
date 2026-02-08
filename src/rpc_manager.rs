@@ -115,14 +115,8 @@ impl RpcEndpointManager {
             }
         }
 
-        // All in backoff — find earliest backoff expiry and sleep
-        if let Some(earliest) = self.endpoints.iter().filter_map(|h| h.backoff_until).min() {
-            if earliest > now {
-                std::thread::sleep(earliest - now);
-            }
-        }
-
-        // Return active index after sleeping
+        // All in backoff — return active index; send_rpc will retry
+        // and the backoff window will naturally pass on the next call.
         self.active_index
     }
 
