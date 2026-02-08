@@ -28,6 +28,12 @@ pub fn handle_ipc(
     }
 
     if req.provider() == Some(KnownProviderId::Settings) {
+        if req.method == "vibefi_setEndpoints" {
+            let settings_id = state.settings_webview_id.lock().unwrap();
+            if settings_id.as_deref() != Some(webview_id) {
+                bail!("vibefi_setEndpoints is only available to the settings webview");
+            }
+        }
         let result = super::settings::handle_settings_ipc(state, &req);
         match result {
             Ok(v) => respond_ok(webview, req.id, v)?,
