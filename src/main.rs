@@ -99,7 +99,7 @@ fn main() -> Result<()> {
         event_loop.set_activation_policy(ActivationPolicy::Regular);
         event_loop.set_dock_visibility(true);
         event_loop.set_activate_ignoring_other_apps(true);
-        menu::setup_macos_app_menu("Wry EIP-1193 demo");
+        menu::setup_macos_app_menu("VibeFi");
     }
     let proxy = event_loop.create_proxy();
 
