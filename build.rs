@@ -88,6 +88,7 @@ fn run_with_console_handling(
     }
 }
 
+
 fn main() {
     let internal_ui = Path::new("internal-ui");
     emit_rerun_for_path(&internal_ui.join("package.json"));
