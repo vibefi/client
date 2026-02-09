@@ -1,5 +1,5 @@
 [package]
-name = "wry_eip1193_example"
+name = "vibefi-client"
 version = "0.1.0"
 edition = "2024"
 
