@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -7,7 +7,6 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct BundleConfig {
-    pub source_dir: PathBuf,
     pub dist_dir: PathBuf,
 }
 
@@ -57,10 +56,12 @@ const STANDARD_PACKAGE_JSON: &str = r#"{
     "react-dom": "19.2.4",
     "wagmi": "3.4.1",
     "viem": "2.45.0",
-    "shadcn": "3.7.0"
+    "shadcn": "3.7.0",
+    "@tanstack/react-query": "5.90.20"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "5.1.2",
+    "@types/react": "19.2.4",
     "typescript": "5.9.3",
     "vite": "7.2.4"
   }

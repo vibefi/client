@@ -1,6 +1,6 @@
 #[cfg(target_os = "macos")]
 pub fn setup_macos_app_menu(app_name: &str) {
-    use objc2::{sel, MainThreadOnly};
+    use objc2::{MainThreadOnly, sel};
     use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
     use objc2_foundation::{MainThreadMarker, NSString};
 
@@ -67,7 +67,8 @@ pub fn setup_macos_app_menu(app_name: &str) {
             &NSString::from_str("Z"),
         )
     };
-    redo_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command | NSEventModifierFlags::Shift);
+    redo_item
+        .setKeyEquivalentModifierMask(NSEventModifierFlags::Command | NSEventModifierFlags::Shift);
     edit_menu.addItem(&redo_item);
 
     edit_menu.addItem(&NSMenuItem::separatorItem(mtm));
