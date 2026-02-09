@@ -1,11 +1,20 @@
 mod bundle;
-mod devnet;
+mod config;
+mod events;
+mod hardware;
 mod ipc;
+mod ipc_contract;
 mod menu;
+mod registry;
+mod rpc_manager;
+mod settings;
 mod state;
+mod ui_bridge;
+mod walletconnect;
 mod webview;
+mod webview_manager;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::{
     env,
     path::PathBuf,
@@ -18,69 +27,71 @@ use tao::{
     window::WindowBuilder,
 };
 
-use alloy_signer_local::PrivateKeySigner;
-use reqwest::blocking::Client as HttpClient;
+use bundle::{BundleConfig, build_bundle, verify_manifest};
+use config::{build_network_context, load_config};
+use rpc_manager::{RpcEndpoint, RpcEndpointManager};
+use state::{AppState, Chain, UserEvent, WalletState};
+use webview::{EmbeddedContent, build_app_webview, build_tab_bar_webview};
+use webview_manager::{AppWebViewEntry, WebViewManager};
 
-use bundle::{build_bundle, verify_manifest, BundleConfig};
-use devnet::{load_devnet, DevnetConfig, DevnetContext};
-use ipc::handle_ipc;
-use state::{AppState, Chain, LauncherConfig, UserEvent, WalletState};
-use webview::build_webview;
-
-static INDEX_HTML: &str = include_str!("../assets/index.html");
-static LAUNCHER_HTML: &str = include_str!("../assets/launcher.html");
+static INDEX_HTML: &str = include_str!("../internal-ui/static/home.html");
+static LAUNCHER_HTML: &str = include_str!("../internal-ui/static/launcher.html");
+static TAB_BAR_HTML: &str = include_str!("../internal-ui/static/tabbar.html");
+static WALLET_SELECTOR_HTML: &str = include_str!("../internal-ui/static/wallet-selector.html");
+static HOME_JS: &str = include_str!("../internal-ui/dist/home.js");
+static LAUNCHER_JS: &str = include_str!("../internal-ui/dist/launcher.js");
+static TAB_BAR_JS: &str = include_str!("../internal-ui/dist/tabbar.js");
+static WALLET_SELECTOR_JS: &str = include_str!("../internal-ui/dist/wallet-selector.js");
+static PRELOAD_APP_JS: &str = include_str!("../internal-ui/dist/preload-app.js");
+static PRELOAD_WALLET_SELECTOR_JS: &str =
+    include_str!("../internal-ui/dist/preload-wallet-selector.js");
+static PRELOAD_TAB_BAR_JS: &str = include_str!("../internal-ui/dist/preload-tabbar.js");
+static SETTINGS_HTML: &str = include_str!("../internal-ui/static/settings.html");
+static SETTINGS_JS: &str = include_str!("../internal-ui/dist/settings.js");
+static PRELOAD_SETTINGS_JS: &str = include_str!("../internal-ui/dist/preload-settings.js");
 
 /// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
 /// This matches a common dev key used across many tutorials.
-static DEMO_PRIVKEY_HEX: &str = "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
+pub(crate) static DEMO_PRIVKEY_HEX: &str =
+    "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
 
 fn main() -> Result<()> {
-    let (bundle, launcher) = parse_args()?;
+    let args = parse_args()?;
+    let bundle = args.bundle;
+    let config_path = args.config_path;
 
-    // --- Build signing wallet (Alloy) ---
-    let devnet = launcher
-        .as_ref()
-        .and_then(|cfg| cfg.devnet_path.as_ref())
-        .and_then(|path| load_devnet(path).ok());
-    let signer_hex = devnet
-        .as_ref()
-        .and_then(|cfg| cfg.developerPrivateKey.clone())
-        .unwrap_or_else(|| DEMO_PRIVKEY_HEX.to_string());
-    let signer: PrivateKeySigner = signer_hex
-        .parse()
-        .context("failed to parse signing private key")?;
+    let network = match config_path.as_ref().map(|p| (p, load_config(p))) {
+        Some((_, Ok(cfg))) => Some(build_network_context(cfg)),
+        Some((path, Err(e))) => {
+            eprintln!("warning: failed to load config {:?}: {:#}", path, e);
+            None
+        }
+        None => None,
+    };
 
-    let initial_chain_id = devnet
-        .as_ref()
-        .map(|cfg| cfg.chainId)
-        .unwrap_or_else(|| if launcher.is_some() { 31337 } else { 1 });
-    let state = AppState {
-        wallet: Arc::new(Mutex::new(WalletState {
-            authorized: false,
-            chain: Chain {
-                chain_id: initial_chain_id,
-            },
-        })),
-        signer: Arc::new(signer),
-        devnet: launcher.as_ref().map(|cfg| DevnetContext {
-            config: devnet.clone().unwrap_or(DevnetConfig {
-                chainId: 31337,
-                deployBlock: None,
-                dappRegistry: String::new(),
-                developerPrivateKey: None,
-            }),
-            rpc_url: cfg.rpc_url.clone(),
-            ipfs_api: cfg.ipfs_api.clone(),
-            ipfs_gateway: cfg.ipfs_gateway.clone(),
-            cache_dir: cfg.cache_dir.clone(),
-            http: HttpClient::new(),
-        }),
-        current_bundle: Arc::new(Mutex::new(bundle.as_ref().map(|cfg| cfg.dist_dir.clone()))),
+    let initial_chain_id = network.as_ref().map(|n| n.config.chainId).unwrap_or(1);
+
+    // --- Load user settings + build RPC manager ---
+    let rpc_manager = if let Some(ref net) = network {
+        let user_settings = config_path
+            .as_ref()
+            .map(|p| settings::load_settings(p))
+            .unwrap_or_default();
+        let endpoints = if user_settings.rpc_endpoints.is_empty() {
+            vec![RpcEndpoint {
+                url: net.rpc_url.clone(),
+                label: Some("Default".to_string()),
+            }]
+        } else {
+            user_settings.rpc_endpoints
+        };
+        Some(RpcEndpointManager::new(endpoints, net.http.clone()))
+    } else {
+        None
     };
 
     // --- Window + event loop ---
-    let mut event_loop =
-        tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let mut event_loop = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
     {
         use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
@@ -88,25 +99,103 @@ fn main() -> Result<()> {
         event_loop.set_activation_policy(ActivationPolicy::Regular);
         event_loop.set_dock_visibility(true);
         event_loop.set_activate_ignoring_other_apps(true);
-        menu::setup_macos_app_menu("Wry EIP-1193 demo");
+        menu::setup_macos_app_menu("VibeFi");
     }
     let proxy = event_loop.create_proxy();
-    let mut webview: Option<wry::WebView> = None;
+
+    let state = AppState {
+        wallet: Arc::new(Mutex::new(WalletState {
+            authorized: false,
+            chain: Chain {
+                chain_id: initial_chain_id,
+            },
+            account: None,
+            walletconnect_uri: None,
+        })),
+        wallet_backend: Arc::new(Mutex::new(None)),
+        signer: Arc::new(Mutex::new(None)),
+        walletconnect: Arc::new(Mutex::new(None)),
+        hardware_signer: Arc::new(Mutex::new(None)),
+        network,
+        proxy: proxy.clone(),
+        pending_connect: Arc::new(Mutex::new(None)),
+        selector_webview_id: Arc::new(Mutex::new(None)),
+        rpc_manager: Arc::new(Mutex::new(rpc_manager)),
+        config_path: config_path.clone(),
+        settings_webview_id: Arc::new(Mutex::new(None)),
+    };
+    let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
 
     event_loop.run(move |event, event_loop_window_target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(UserEvent::Ipc(msg)) => {
-                if let Some(webview) = webview.as_ref() {
-                    if let Err(e) = handle_ipc(webview, &state, msg) {
-                        eprintln!("ipc error: {e:?}");
-                    }
-                }
+            Event::UserEvent(UserEvent::Ipc { webview_id, msg }) => {
+                events::user_event::handle_ipc_event(&state, &mut manager, &webview_id, msg);
+            }
+            Event::UserEvent(UserEvent::OpenWalletSelector) => {
+                events::user_event::handle_open_wallet_selector(
+                    window.as_ref(),
+                    &state,
+                    &mut manager,
+                    &proxy,
+                );
+            }
+            Event::UserEvent(UserEvent::OpenSettings) => {
+                events::user_event::handle_open_settings(
+                    window.as_ref(),
+                    &state,
+                    &mut manager,
+                    &proxy,
+                );
+            }
+            Event::UserEvent(UserEvent::WalletConnectPairing { uri, qr_svg }) => {
+                events::user_event::handle_walletconnect_pairing(&state, &manager, uri, qr_svg);
+            }
+            Event::UserEvent(UserEvent::WalletConnectResult {
+                webview_id,
+                ipc_id,
+                result,
+            }) => {
+                events::user_event::handle_walletconnect_result(
+                    &state,
+                    &mut manager,
+                    webview_id,
+                    ipc_id,
+                    result,
+                );
+            }
+            Event::UserEvent(UserEvent::HardwareSignResult {
+                webview_id,
+                ipc_id,
+                result,
+            }) => {
+                events::user_event::handle_hardware_sign_result(
+                    &manager, webview_id, ipc_id, result,
+                );
+            }
+            Event::UserEvent(UserEvent::RpcResult {
+                webview_id,
+                ipc_id,
+                result,
+            }) => {
+                events::user_event::handle_rpc_result(&manager, webview_id, ipc_id, result);
+            }
+            Event::UserEvent(UserEvent::CloseWalletSelector) => {
+                events::user_event::handle_close_wallet_selector(&state, &mut manager);
+            }
+            Event::UserEvent(UserEvent::TabAction(action)) => {
+                events::user_event::handle_tab_action(
+                    window.as_ref(),
+                    &state,
+                    &mut manager,
+                    &proxy,
+                    action,
+                );
             }
 
             Event::NewEvents(StartCause::Init) => {
-                if webview.is_none() {
+                if window.is_none() {
                     let built = WindowBuilder::new()
                         .with_title("VibeFi")
                         .with_inner_size(LogicalSize::new(1280.0, 720.0))
@@ -121,24 +210,70 @@ fn main() -> Result<()> {
                         }
                     };
 
-                    let built = build_webview(
+                    manager.set_scale_factor(window_handle.scale_factor());
+                    let size = window_handle.inner_size();
+                    let w = size.width;
+                    let h = size.height;
+
+                    // 1. Build tab bar
+                    match build_tab_bar_webview(
                         &window_handle,
-                        state.clone(),
                         proxy.clone(),
-                        bundle.clone(),
-                        launcher.is_some(),
-                    );
-                    let webview_handle = match built {
-                        Ok(webview) => webview,
+                        manager.tab_bar_rect(w),
+                    ) {
+                        Ok(tb) => manager.tab_bar = Some(tb),
+                        Err(e) => eprintln!("tab bar error: {e:?}"),
+                    }
+
+                    // 2. Build initial app webview
+                    let has_registry = state
+                        .network
+                        .as_ref()
+                        .map(|n| !n.config.dappRegistry.is_empty())
+                        .unwrap_or(false);
+                    let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
+                    let embedded = if dist_dir.is_some() {
+                        EmbeddedContent::Default
+                    } else if has_registry {
+                        EmbeddedContent::Launcher
+                    } else {
+                        EmbeddedContent::Default
+                    };
+                    let label = if dist_dir.is_some() {
+                        "App".to_string()
+                    } else if has_registry {
+                        "Launcher".to_string()
+                    } else {
+                        "Home".to_string()
+                    };
+                    let app_id = manager.next_app_id();
+                    let bounds = manager.app_rect(w, h);
+                    match build_app_webview(
+                        &window_handle,
+                        &app_id,
+                        dist_dir.clone(),
+                        embedded,
+                        &state,
+                        proxy.clone(),
+                        bounds,
+                    ) {
+                        Ok(wv) => {
+                            manager.apps.push(AppWebViewEntry {
+                                webview: wv,
+                                id: app_id,
+                                label,
+                            });
+                            manager.active_app_index = Some(0);
+                            manager.update_tab_bar();
+                        }
                         Err(e) => {
                             eprintln!("webview error: {e:?}");
                             *control_flow = ControlFlow::Exit;
                             return;
                         }
-                    };
+                    }
 
                     window = Some(window_handle);
-                    webview = Some(webview_handle);
                 }
             }
 
@@ -148,73 +283,51 @@ fn main() -> Result<()> {
             } => {
                 *control_flow = ControlFlow::Exit;
             }
+            Event::WindowEvent {
+                event: WindowEvent::Resized(size),
+                ..
+            } => {
+                manager.relayout(size.width, size.height);
+            }
             _ => {}
         }
-    });
-
-    Ok(())
+    })
 }
 
-fn parse_args() -> Result<(Option<BundleConfig>, Option<LauncherConfig>)> {
+struct CliArgs {
+    bundle: Option<BundleConfig>,
+    config_path: Option<PathBuf>,
+}
+
+fn parse_args() -> Result<CliArgs> {
     let mut args = env::args().skip(1).peekable();
     let mut bundle_dir: Option<PathBuf> = None;
-    let mut devnet_path: Option<PathBuf> = None;
-    let mut devnet_mode = false;
-    let mut rpc_url: Option<String> = None;
-    let mut ipfs_api: Option<String> = None;
-    let mut ipfs_gateway: Option<String> = None;
-    let mut cache_dir: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
     let mut no_build = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bundle" => {
-                let value = args.next().ok_or_else(|| anyhow!("--bundle requires a path"))?;
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--bundle requires a path"))?;
                 bundle_dir = Some(PathBuf::from(value));
             }
-            "--devnet" => {
-                devnet_mode = true;
-                if let Some(next) = args.next_if(|s| !s.starts_with("--")) {
-                    devnet_path = Some(PathBuf::from(next));
-                }
+            "--config" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--config requires a path"))?;
+                config_path = Some(PathBuf::from(value));
             }
-            "--rpc" => rpc_url = args.next(),
-            "--ipfs-api" => ipfs_api = args.next(),
-            "--ipfs-gateway" => ipfs_gateway = args.next(),
-            "--cache-dir" => cache_dir = args.next().map(PathBuf::from),
             "--no-build" => no_build = true,
             _ => {}
         }
     }
 
-    let make_launcher = |devnet_path: Option<PathBuf>,
-                         rpc_url: Option<String>,
-                         ipfs_api: Option<String>,
-                         ipfs_gateway: Option<String>,
-                         cache_dir: Option<PathBuf>| {
-        let default_devnet = PathBuf::from("contracts/.devnet/devnet.json");
-        let resolved = devnet_path.or_else(|| {
-            if default_devnet.exists() {
-                Some(default_devnet)
-            } else {
-                None
-            }
-        });
-        LauncherConfig {
-            devnet_path: resolved,
-            rpc_url: rpc_url.unwrap_or_else(|| "http://127.0.0.1:8546".to_string()),
-            ipfs_api: ipfs_api.unwrap_or_else(|| "http://127.0.0.1:5001".to_string()),
-            ipfs_gateway: ipfs_gateway.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
-            cache_dir: cache_dir.unwrap_or_else(|| PathBuf::from("client/.vibefi/cache")),
-        }
-    };
-
     let Some(source_dir) = bundle_dir else {
-        let launcher = if devnet_mode {
-            Some(make_launcher(devnet_path, rpc_url, ipfs_api, ipfs_gateway, cache_dir))
-        } else {
-            None
-        };
-        return Ok((None, launcher));
+        return Ok(CliArgs {
+            bundle: None,
+            config_path,
+        });
     };
     let source_dir = source_dir
         .canonicalize()
@@ -226,10 +339,8 @@ fn parse_args() -> Result<(Option<BundleConfig>, Option<LauncherConfig>)> {
         build_bundle(&source_dir, &dist_dir)?;
     }
 
-    let launcher = if devnet_mode {
-        Some(make_launcher(devnet_path, rpc_url, ipfs_api, ipfs_gateway, cache_dir))
-    } else {
-        None
-    };
-    Ok((Some(BundleConfig { source_dir, dist_dir }), launcher))
+    Ok(CliArgs {
+        bundle: Some(BundleConfig { dist_dir }),
+        config_path,
+    })
 }

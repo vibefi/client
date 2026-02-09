@@ -1,0 +1,88 @@
+use anyhow::Result;
+use serde::Serialize;
+use serde_json::Value;
+use wry::WebView;
+
+use crate::ipc_contract::{
+    HostDispatchEnvelope, HostDispatchKind, ProviderEventPayload, RpcResponseError,
+    RpcResponsePayload, TabbarUpdatePayload, WalletconnectPairingPayload,
+};
+
+fn dispatch<T: Serialize>(webview: &WebView, kind: HostDispatchKind, payload: T) -> Result<()> {
+    let envelope = HostDispatchEnvelope { kind, payload };
+    let script = format!(
+        "window.__VibefiHostDispatch({});",
+        serde_json::to_string(&envelope)?
+    );
+    webview.evaluate_script(&script)?;
+    Ok(())
+}
+
+pub fn respond_ok(webview: &WebView, id: u64, value: Value) -> Result<()> {
+    dispatch(
+        webview,
+        HostDispatchKind::RpcResponse,
+        RpcResponsePayload {
+            id,
+            result: value,
+            error: None,
+        },
+    )
+}
+
+pub fn respond_err(webview: &WebView, id: u64, message: &str) -> Result<()> {
+    dispatch(
+        webview,
+        HostDispatchKind::RpcResponse,
+        RpcResponsePayload {
+            id,
+            result: Value::Null,
+            error: Some(RpcResponseError {
+                code: -32601,
+                message: message.to_string(),
+            }),
+        },
+    )
+}
+
+pub fn emit_accounts_changed(webview: &WebView, addrs: Vec<String>) {
+    let payload = Value::Array(addrs.into_iter().map(Value::String).collect());
+    let _ = dispatch(
+        webview,
+        HostDispatchKind::ProviderEvent,
+        ProviderEventPayload {
+            event: "accountsChanged".to_string(),
+            value: payload,
+        },
+    );
+}
+
+pub fn emit_chain_changed(webview: &WebView, chain_id_hex: String) {
+    let _ = dispatch(
+        webview,
+        HostDispatchKind::ProviderEvent,
+        ProviderEventPayload {
+            event: "chainChanged".to_string(),
+            value: Value::String(chain_id_hex),
+        },
+    );
+}
+
+pub fn emit_walletconnect_pairing(webview: &WebView, uri: &str, qr_svg: &str) {
+    let _ = dispatch(
+        webview,
+        HostDispatchKind::WalletconnectPairing,
+        WalletconnectPairingPayload {
+            uri: uri.to_string(),
+            qr_svg: qr_svg.to_string(),
+        },
+    );
+}
+
+pub fn update_tabs(webview: &WebView, tabs: Vec<Value>, active_index: usize) -> Result<()> {
+    dispatch(
+        webview,
+        HostDispatchKind::TabbarUpdate,
+        TabbarUpdatePayload { tabs, active_index },
+    )
+}

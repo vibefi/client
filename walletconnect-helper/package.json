@@ -1,0 +1,9 @@
+{
+  "name": "vibefi-walletconnect-helper",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@walletconnect/ethereum-provider": "^2.23.1",
+    "qrcode": "^1.5.4"
+  }
+}

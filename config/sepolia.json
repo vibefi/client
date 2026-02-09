@@ -1,0 +1,12 @@
+{
+  "chainId": 11155111,
+  "rpcUrl": "https://0xrpc.io/sep",
+  "localNetwork": false,
+  "dappRegistry": "",
+  "deployBlock": null,
+  "developerPrivateKey": null,
+  "ipfsApi": null,
+  "ipfsGateway": null,
+  "cacheDir": null,
+  "walletConnect": null
+}

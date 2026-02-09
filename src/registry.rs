@@ -1,51 +1,24 @@
 use alloy_primitives::{Address, B256, Bytes, Log, U256};
-use alloy_sol_types::{sol, SolEvent};
-use anyhow::{anyhow, Context, Result};
+use alloy_sol_types::{SolEvent, sol};
+use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{collections::HashMap, fs, path::Path, str::FromStr};
 
-use crate::bundle::{build_bundle, verify_manifest, BundleManifest};
-use crate::state::AppState;
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct DevnetConfig {
-    pub chainId: u64,
-    pub deployBlock: Option<u64>,
-    pub dappRegistry: String,
-    pub developerPrivateKey: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DevnetContext {
-    pub config: DevnetConfig,
-    pub rpc_url: String,
-    pub ipfs_api: String,
-    pub ipfs_gateway: String,
-    pub cache_dir: PathBuf,
-    pub http: HttpClient,
-}
+use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
+use crate::config::NetworkContext;
+use crate::state::{AppState, TabAction, UserEvent};
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DappInfo {
-    pub dappId: String,
-    pub versionId: String,
+    pub dapp_id: String,
+    pub version_id: String,
     pub name: String,
     pub version: String,
     pub description: String,
     pub status: String,
-    pub rootCid: String,
-}
-
-pub fn load_devnet(path: &Path) -> Result<DevnetConfig> {
-    let raw = fs::read_to_string(path).context("read devnet.json")?;
-    let cfg: DevnetConfig = serde_json::from_str(&raw).context("parse devnet.json")?;
-    Ok(cfg)
+    pub root_cid: String,
 }
 
 sol! {
@@ -64,14 +37,15 @@ sol! {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RpcLog {
     address: String,
     data: String,
     topics: Vec<String>,
     #[serde(default)]
-    blockNumber: Option<String>,
+    block_number: Option<String>,
     #[serde(default)]
-    logIndex: Option<String>,
+    log_index: Option<String>,
 }
 
 struct LogEntry {
@@ -81,9 +55,9 @@ struct LogEntry {
     log: Log,
 }
 
-pub fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
+pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
     if devnet.config.dappRegistry.is_empty() {
-        return Err(anyhow!("devnet.json missing dappRegistry"));
+        return Err(anyhow!("config missing dappRegistry"));
     }
     let address = devnet.config.dappRegistry.clone();
     let published = rpc_get_logs(devnet, &address, DappPublished::SIGNATURE_HASH)?;
@@ -110,7 +84,6 @@ pub fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
 
     #[derive(Debug)]
     struct Version {
-        version_id: u64,
         root_cid: Option<String>,
         name: Option<String>,
         version: Option<String>,
@@ -134,7 +107,6 @@ pub fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
                 versions: HashMap::new(),
             });
             dapp.versions.entry($version_id).or_insert_with(|| Version {
-                version_id: $version_id,
                 root_cid: None,
                 name: None,
                 version: None,
@@ -207,20 +179,24 @@ pub fn list_dapps(devnet: &DevnetContext) -> Result<Vec<DappInfo>> {
         if let Some(dapp) = dapps.get(&key) {
             let latest = dapp.versions.get(&dapp.latest_version_id);
             result.push(DappInfo {
-                dappId: dapp.dapp_id.to_string(),
-                versionId: dapp.latest_version_id.to_string(),
+                dapp_id: dapp.dapp_id.to_string(),
+                version_id: dapp.latest_version_id.to_string(),
                 name: latest.and_then(|v| v.name.clone()).unwrap_or_default(),
                 version: latest.and_then(|v| v.version.clone()).unwrap_or_default(),
-                description: latest.and_then(|v| v.description.clone()).unwrap_or_default(),
-                status: latest.and_then(|v| v.status.clone()).unwrap_or_else(|| "Unknown".to_string()),
-                rootCid: latest.and_then(|v| v.root_cid.clone()).unwrap_or_default(),
+                description: latest
+                    .and_then(|v| v.description.clone())
+                    .unwrap_or_default(),
+                status: latest
+                    .and_then(|v| v.status.clone())
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                root_cid: latest.and_then(|v| v.root_cid.clone()).unwrap_or_default(),
             });
         }
     }
     Ok(result)
 }
 
-fn rpc_get_logs(devnet: &DevnetContext, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
+fn rpc_get_logs(devnet: &NetworkContext, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
     let topics = vec![format!("0x{}", hex::encode(topic0))];
     let from_block = devnet
         .config
@@ -248,7 +224,10 @@ fn rpc_get_logs(devnet: &DevnetContext, address: &str, topic0: B256) -> Result<V
     if let Some(err) = v.get("error") {
         return Err(anyhow!("rpc getLogs error: {}", err));
     }
-    let logs_val = v.get("result").cloned().unwrap_or(serde_json::Value::Array(Vec::new()));
+    let logs_val = v
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new()));
     let logs: Vec<RpcLog> = serde_json::from_value(logs_val)?;
     let mut out = Vec::new();
     for log in logs {
@@ -268,8 +247,8 @@ fn rpc_log_to_entry(rpc_log: RpcLog) -> Result<LogEntry> {
     let log = Log::new_unchecked(address, topics, data);
     let kind = event_kind(&log)?;
     Ok(LogEntry {
-        block_number: parse_hex_u64_opt(rpc_log.blockNumber.as_deref()).unwrap_or(0),
-        log_index: parse_hex_u64_opt(rpc_log.logIndex.as_deref()).unwrap_or(0),
+        block_number: parse_hex_u64_opt(rpc_log.block_number.as_deref()).unwrap_or(0),
+        log_index: parse_hex_u64_opt(rpc_log.log_index.as_deref()).unwrap_or(0),
         kind,
         log,
     })
@@ -298,8 +277,15 @@ fn event_kind(log: &Log) -> Result<String> {
     }
 }
 
-pub fn handle_launcher_ipc(webview: &wry::WebView, state: &AppState, req: &crate::state::IpcRequest) -> Result<serde_json::Value> {
-    let devnet = state.devnet.as_ref().ok_or_else(|| anyhow!("Devnet not enabled"))?;
+pub fn handle_launcher_ipc(
+    _webview: &wry::WebView,
+    state: &AppState,
+    req: &crate::ipc_contract::IpcRequest,
+) -> Result<serde_json::Value> {
+    let devnet = state
+        .network
+        .as_ref()
+        .ok_or_else(|| anyhow!("Network not configured"))?;
     match req.method.as_str() {
         "vibefi_listDapps" => {
             println!("launcher: fetching dapp list from logs");
@@ -312,6 +298,11 @@ pub fn handle_launcher_ipc(webview: &wry::WebView, state: &AppState, req: &crate
                 .get(0)
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("missing rootCid"))?;
+            let name = req
+                .params
+                .get(1)
+                .and_then(|v| v.as_str())
+                .unwrap_or(root_cid);
             println!("launcher: fetch bundle {root_cid}");
             let bundle_dir = devnet.cache_dir.join(root_cid);
             ensure_bundle_cached(devnet, root_cid, &bundle_dir)?;
@@ -329,18 +320,23 @@ pub fn handle_launcher_ipc(webview: &wry::WebView, state: &AppState, req: &crate
                 println!("launcher: build bundle");
                 build_bundle(&bundle_dir, &dist_dir)?;
             }
-            {
-                let mut current = state.current_bundle.lock().unwrap();
-                *current = Some(dist_dir);
-            }
-            webview.evaluate_script("window.location = 'app://index.html';")?;
+            let _ = state
+                .proxy
+                .send_event(UserEvent::TabAction(TabAction::OpenApp {
+                    name: name.to_string(),
+                    dist_dir,
+                }));
+            Ok(serde_json::Value::Bool(true))
+        }
+        "vibefi_openSettings" => {
+            let _ = state.proxy.send_event(UserEvent::OpenSettings);
             Ok(serde_json::Value::Bool(true))
         }
         _ => Err(anyhow!("Unsupported launcher method: {}", req.method)),
     }
 }
 
-fn ensure_bundle_cached(devnet: &DevnetContext, root_cid: &str, bundle_dir: &Path) -> Result<()> {
+fn ensure_bundle_cached(devnet: &NetworkContext, root_cid: &str, bundle_dir: &Path) -> Result<()> {
     if bundle_dir.join("manifest.json").exists() {
         return Ok(());
     }
@@ -351,7 +347,10 @@ fn ensure_bundle_cached(devnet: &DevnetContext, root_cid: &str, bundle_dir: &Pat
     Ok(())
 }
 
-fn fetch_dapp_manifest(devnet: &DevnetContext, root_cid: &str) -> Result<(BundleManifest, Vec<u8>)> {
+fn fetch_dapp_manifest(
+    devnet: &NetworkContext,
+    root_cid: &str,
+) -> Result<(BundleManifest, Vec<u8>)> {
     let gateway = normalize_gateway(&devnet.ipfs_gateway);
     let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
     let res = devnet.http.get(url).send().context("fetch manifest")?;
@@ -368,7 +367,7 @@ fn fetch_dapp_manifest(devnet: &DevnetContext, root_cid: &str) -> Result<(Bundle
 }
 
 fn download_dapp_bundle(
-    devnet: &DevnetContext,
+    devnet: &NetworkContext,
     root_cid: &str,
     out_dir: &Path,
     manifest: &BundleManifest,
@@ -397,7 +396,10 @@ fn compute_ipfs_cid(out_dir: &Path, ipfs_api: &str) -> Result<String> {
     let files = crate::bundle::walk_files(out_dir)?;
     let mut form = reqwest::blocking::multipart::Form::new();
     for file in files {
-        let rel = file.strip_prefix(out_dir)?.to_string_lossy().replace('\\', "/");
+        let rel = file
+            .strip_prefix(out_dir)?
+            .to_string_lossy()
+            .replace('\\', "/");
         let data = fs::read(&file)?;
         let part = reqwest::blocking::multipart::Part::bytes(data).file_name(rel);
         form = form.part("file", part);
@@ -425,7 +427,11 @@ fn compute_ipfs_cid(out_dir: &Path, ipfs_api: &str) -> Result<String> {
     if let Some(hash) = json.get("Hash").and_then(|v| v.as_str()) {
         return Ok(hash.to_string());
     }
-    if let Some(hash) = json.get("Cid").and_then(|v| v.get("/")).and_then(|v| v.as_str()) {
+    if let Some(hash) = json
+        .get("Cid")
+        .and_then(|v| v.get("/"))
+        .and_then(|v| v.as_str())
+    {
         return Ok(hash.to_string());
     }
     Err(anyhow!("IPFS add response missing CID"))
@@ -471,4 +477,54 @@ fn parse_hex_u64(s: &str) -> Option<u64> {
 
 fn u256_to_u64(value: U256) -> Result<u64> {
     value.try_into().map_err(|_| anyhow!("u256 out of range"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DappInfo, RpcLog};
+    use serde_json::json;
+
+    #[test]
+    fn dapp_info_serializes_with_camel_case_keys() {
+        let dapp = DappInfo {
+            dapp_id: "1".to_string(),
+            version_id: "2".to_string(),
+            name: "Name".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Desc".to_string(),
+            status: "Published".to_string(),
+            root_cid: "bafy...".to_string(),
+        };
+        let value = serde_json::to_value(dapp).expect("serialize DappInfo");
+        assert_eq!(value.get("dappId"), Some(&json!("1")));
+        assert_eq!(value.get("versionId"), Some(&json!("2")));
+        assert_eq!(value.get("rootCid"), Some(&json!("bafy...")));
+        assert!(value.get("dapp_id").is_none());
+        assert!(value.get("version_id").is_none());
+        assert!(value.get("root_cid").is_none());
+    }
+
+    #[test]
+    fn rpc_log_deserializes_camel_case_and_defaults_missing_fields() {
+        let value = json!({
+            "address": "0x0000000000000000000000000000000000000000",
+            "data": "0x",
+            "topics": [],
+            "blockNumber": "0x10",
+            "logIndex": "0x1"
+        });
+        let parsed: RpcLog = serde_json::from_value(value).expect("deserialize RpcLog");
+        assert_eq!(parsed.block_number.as_deref(), Some("0x10"));
+        assert_eq!(parsed.log_index.as_deref(), Some("0x1"));
+
+        let missing = json!({
+            "address": "0x0000000000000000000000000000000000000000",
+            "data": "0x",
+            "topics": []
+        });
+        let parsed_missing: RpcLog =
+            serde_json::from_value(missing).expect("deserialize RpcLog defaults");
+        assert!(parsed_missing.block_number.is_none());
+        assert!(parsed_missing.log_index.is_none());
+    }
 }
