@@ -82,7 +82,9 @@ pub fn resolve_wc_helper_script() -> Result<PathBuf> {
 
     // 2. Bundled script in app bundle (cargo-packager flattens file resources into Contents/Resources/)
     if let Some(contents) = macos_bundle_contents_dir() {
-        let bundled = contents.join("Resources").join("index.mjs");
+        let bundled = contents
+            .join("Resources")
+            .join("walletconnect-helper.mjs");
         if bundled.exists() {
             return Ok(bundled);
         }

@@ -11,16 +11,14 @@ icons = ["packaging/icons/vibefi.icns"]
 out-dir = "target/packager"
 
 resources = [
-  "walletconnect-helper/index.mjs",
-  "walletconnect-helper/package.json",
-  "walletconnect-helper/node_modules",
+  "walletconnect-helper/dist/walletconnect-helper.mjs",
   "config/mainnet.json",
   "config/sepolia.json",
 ]
 
 external-binaries = ["vendor/bun/bun"]
 
-before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile"
+before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile && cd walletconnect-helper && bun run build:dist"
 
 [package.metadata.packager.macos]
 minimum-system-version = "12.0"

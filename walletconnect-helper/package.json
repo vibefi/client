@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:dist": "echo 'WC helper runs directly with node_modules; no bundling needed'"
+    "build:dist": "bun build index.mjs --bundle --target=bun --conditions=module --outfile dist/walletconnect-helper.mjs"
   },
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.23.1",
