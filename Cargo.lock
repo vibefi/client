@@ -4908,6 +4908,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vibefi-client"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-network",
+ "alloy-primitives",
+ "alloy-rpc-types-eth",
+ "alloy-signer",
+ "alloy-signer-ledger",
+ "alloy-signer-local",
+ "alloy-signer-trezor",
+ "alloy-sol-types",
+ "anyhow",
+ "hex",
+ "mime_guess",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tao",
+ "tokio",
+ "wry",
+]
+
+[[package]]
 name = "wait-timeout"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5607,34 +5635,6 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-version",
  "x11-dl",
-]
-
-[[package]]
-name = "wry_eip1193_example"
-version = "0.1.0"
-dependencies = [
- "alloy-consensus",
- "alloy-eips",
- "alloy-network",
- "alloy-primitives",
- "alloy-rpc-types-eth",
- "alloy-signer",
- "alloy-signer-ledger",
- "alloy-signer-local",
- "alloy-signer-trezor",
- "alloy-sol-types",
- "anyhow",
- "hex",
- "mime_guess",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "reqwest",
- "serde",
- "serde_json",
- "tao",
- "tokio",
- "wry",
 ]
 
 [[package]]
