@@ -34,6 +34,15 @@ const styles = `
   h1 { margin: 0 0 8px; font-size: 26px; }
   p { margin: 0 0 16px; color: #475569; }
   .row { display: flex; gap: 8px; margin-bottom: 16px; }
+  .notice {
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    color: #9a3412;
+    font-size: 14px;
+  }
   button {
     padding: 10px 14px;
     border-radius: 10px;
@@ -58,10 +67,19 @@ const styles = `
   }
   th { background: #f1f5f9; color: #0f172a; font-weight: 600; }
   tr:hover td { background: #f8fafc; }
-  .status { font-weight: 600; }
-  .status.Published { color: #0f766e; }
-  .status.Paused { color: #b45309; }
-  .status.Deprecated { color: #b91c1c; }
+  .dapp-row.unavailable td { color: #64748b; }
+  .dapp-row.unavailable { opacity: 0.62; }
+  .pill {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 7px;
+    border-radius: 9999px;
+    font-size: 12px;
+    border: 1px solid #fed7aa;
+    background: #fff7ed;
+    color: #9a3412;
+    font-weight: 600;
+  }
   .log {
     margin-top: 16px;
     background: #0f172a;
@@ -93,6 +111,10 @@ function App() {
     if (selectedIndex === null) return null;
     return items[selectedIndex] ?? null;
   }, [items, selectedIndex]);
+  const pausedItems = useMemo(
+    () => items.filter((item) => item.status === "Paused"),
+    [items]
+  );
 
   const addLog = (line: string) => {
     setLogs((prev) => [...prev, line]);
@@ -124,6 +146,10 @@ function App() {
 
   const launch = async () => {
     if (!selectedItem) return;
+    if (selectedItem.status !== "Published") {
+      addLog(`Cannot launch ${selectedItem.name || selectedItem.rootCid}: app is ${selectedItem.status}.`);
+      return;
+    }
     setBusy(true);
     addLog(`Launching ${selectedItem.name || ""} ${selectedItem.version || ""} (${selectedItem.rootCid})`);
     try {
@@ -149,39 +175,49 @@ function App() {
 
         <div className="row">
           <button onClick={() => void refresh()} disabled={busy}>Refresh list</button>
-          <button className="primary" onClick={() => void launch()} disabled={busy || !selectedItem}>Launch selected</button>
+          <button
+            className="primary"
+            onClick={() => void launch()}
+            disabled={busy || !selectedItem || selectedItem.status !== "Published"}
+          >
+            Launch selected
+          </button>
           <button onClick={() => void vibefiRequest("vibefi_openSettings")}>Settings</button>
         </div>
-
         <table>
           <thead>
             <tr>
               <th></th>
               <th>Dapp</th>
               <th>Version</th>
-              <th>Status</th>
               <th>Root CID</th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan={5}>No dapps found.</td>
+                <td colSpan={4}>No dapps found.</td>
               </tr>
             ) : (
               items.map((item, idx) => (
-                <tr key={`${item.dappId}:${item.versionId}:${item.rootCid}`}>
+                <tr
+                  key={`${item.dappId}:${item.versionId}:${item.rootCid}`}
+                  className={`dapp-row ${item.status === "Published" ? "" : "unavailable"}`}
+                >
                   <td>
                     <input
                       type="radio"
                       name="select"
                       checked={selectedIndex === idx}
                       onChange={() => setSelectedIndex(idx)}
+                      disabled={item.status !== "Published"}
                     />
                   </td>
-                  <td>{item.name || "(unnamed)"} #{item.dappId}</td>
-                  <td>{item.version || ""} (v{item.versionId || ""})</td>
-                  <td className={`status ${item.status || ""}`}>{item.status || "Unknown"}</td>
+                  <td>
+                    {item.name || "(unnamed)"} #{item.dappId}
+                    {item.status === "Paused" && <span className="pill">Paused</span>}
+                  </td>
+                  <td>{item.version || `v${item.versionId || ""}`}</td>
                   <td>{item.rootCid || ""}</td>
                 </tr>
               ))
