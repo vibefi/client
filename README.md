@@ -15,6 +15,15 @@ This is a minimal example of:
 cargo run
 ```
 
+## Run (devnet)
+
+This assumes you've got the devnet running.
+
+```bash
+cargo run -- --config ../contracts/.devnet/devnet.json
+```
+
+
 ## Internal UI (React)
 
 Built-in UI pages and preload scripts are bundled from `internal-ui/src` to
