@@ -44,6 +44,12 @@ fn main() {
     emit_rerun_for_dir(&internal_ui.join("src"));
     emit_rerun_for_dir(&internal_ui.join("scripts"));
     emit_rerun_for_dir(&internal_ui.join("static"));
+    println!("cargo:rerun-if-env-changed=SKIP_UI_BUILD");
+
+    if std::env::var("SKIP_UI_BUILD").is_ok() {
+        print_console_line("[internal-ui] SKIP_UI_BUILD set, skipping bun build");
+        return;
+    }
 
     print_console_line("[internal-ui] running: bun run build");
 

@@ -1,7 +1,36 @@
 [package]
-name = "wry_eip1193_example"
+name = "vibefi"
 version = "0.1.0"
 edition = "2024"
+
+[package.metadata.packager]
+product-name = "VibeFi"
+identifier = "fi.vibefi.client"
+formats = ["app", "dmg"]
+icons = ["packaging/icons/vibefi.icns"]
+out-dir = "target/packager"
+
+resources = [
+  "walletconnect-helper/index.mjs",
+  "walletconnect-helper/package.json",
+  "walletconnect-helper/node_modules",
+  "config/mainnet.json",
+  "config/sepolia.json",
+]
+
+external-binaries = ["vendor/bun/bun"]
+
+before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile"
+
+[package.metadata.packager.macos]
+minimum-system-version = "12.0"
+entitlements = "packaging/macos/entitlements.plist"
+
+[package.metadata.packager.dmg]
+background = "packaging/macos/dmg-background.png"
+window-size = { width = 660, height = 420 }
+app-position = { x = 180, y = 220 }
+application-folder-position = { x = 480, y = 220 }
 
 [dependencies]
 anyhow = "1"
@@ -27,6 +56,7 @@ alloy-eips = "1.5"
 alloy-rpc-types-eth = "1.5"
 alloy-sol-types = "1.5"
 tokio = { version = "1", features = ["rt", "net", "time"] }
+dirs = "6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"
