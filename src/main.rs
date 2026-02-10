@@ -32,7 +32,7 @@ use bundle::{BundleConfig, build_bundle, verify_manifest};
 use config::{build_network_context, load_config};
 use rpc_manager::{RpcEndpoint, RpcEndpointManager};
 use state::{AppState, Chain, UserEvent, WalletState};
-use webview::{EmbeddedContent, build_app_webview, build_tab_bar_webview};
+use webview::{EmbeddedContent, WebViewHost, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, WebViewManager};
 
 static INDEX_HTML: &str = include_str!("../internal-ui/static/home.html");
@@ -127,6 +127,10 @@ fn main() -> Result<()> {
     };
     let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
+    #[cfg(target_os = "linux")]
+    let mut gtk_tab_bar_container: Option<gtk::Box> = None;
+    #[cfg(target_os = "linux")]
+    let mut gtk_app_container: Option<gtk::Box> = None;
 
     event_loop.run(move |event, event_loop_window_target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -135,16 +139,30 @@ fn main() -> Result<()> {
                 events::user_event::handle_ipc_event(&state, &mut manager, &webview_id, msg);
             }
             Event::UserEvent(UserEvent::OpenWalletSelector) => {
+                let host = window.as_ref().map(|w| WebViewHost {
+                    window: w,
+                    #[cfg(target_os = "linux")]
+                    tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                    #[cfg(target_os = "linux")]
+                    app_container: gtk_app_container.as_ref().unwrap(),
+                });
                 events::user_event::handle_open_wallet_selector(
-                    window.as_ref(),
+                    host.as_ref(),
                     &state,
                     &mut manager,
                     &proxy,
                 );
             }
             Event::UserEvent(UserEvent::OpenSettings) => {
+                let host = window.as_ref().map(|w| WebViewHost {
+                    window: w,
+                    #[cfg(target_os = "linux")]
+                    tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                    #[cfg(target_os = "linux")]
+                    app_container: gtk_app_container.as_ref().unwrap(),
+                });
                 events::user_event::handle_open_settings(
-                    window.as_ref(),
+                    host.as_ref(),
                     &state,
                     &mut manager,
                     &proxy,
@@ -186,8 +204,15 @@ fn main() -> Result<()> {
                 events::user_event::handle_close_wallet_selector(&state, &mut manager);
             }
             Event::UserEvent(UserEvent::TabAction(action)) => {
+                let host = window.as_ref().map(|w| WebViewHost {
+                    window: w,
+                    #[cfg(target_os = "linux")]
+                    tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                    #[cfg(target_os = "linux")]
+                    app_container: gtk_app_container.as_ref().unwrap(),
+                });
                 events::user_event::handle_tab_action(
-                    window.as_ref(),
+                    host.as_ref(),
                     &state,
                     &mut manager,
                     &proxy,
@@ -212,13 +237,40 @@ fn main() -> Result<()> {
                     };
 
                     manager.set_scale_factor(window_handle.scale_factor());
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        use crate::webview_manager::TAB_BAR_HEIGHT_LOGICAL;
+                        use gtk::prelude::*;
+                        use tao::platform::unix::WindowExtUnix;
+                        let vbox = window_handle
+                            .default_vbox()
+                            .expect("tao window missing default vbox on Linux");
+                        let tb = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                        tb.set_size_request(-1, TAB_BAR_HEIGHT_LOGICAL as i32);
+                        let app = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                        vbox.pack_start(&tb, false, true, 0);
+                        vbox.pack_start(&app, true, true, 0);
+                        vbox.show_all();
+                        gtk_tab_bar_container = Some(tb);
+                        gtk_app_container = Some(app);
+                    }
+
+                    let host = WebViewHost {
+                        window: &window_handle,
+                        #[cfg(target_os = "linux")]
+                        tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                        #[cfg(target_os = "linux")]
+                        app_container: gtk_app_container.as_ref().unwrap(),
+                    };
+
                     let size = window_handle.inner_size();
                     let w = size.width;
                     let h = size.height;
 
                     // 1. Build tab bar
                     match build_tab_bar_webview(
-                        &window_handle,
+                        &host,
                         proxy.clone(),
                         manager.tab_bar_rect(w),
                     ) {
@@ -250,7 +302,7 @@ fn main() -> Result<()> {
                     let app_id = manager.next_app_id();
                     let bounds = manager.app_rect(w, h);
                     match build_app_webview(
-                        &window_handle,
+                        &host,
                         &app_id,
                         dist_dir.clone(),
                         embedded,

@@ -5,6 +5,8 @@ use wry::{
     Rect, WebView, WebViewBuilder,
     http::{Response, header::CONTENT_TYPE},
 };
+#[cfg(target_os = "linux")]
+use wry::WebViewBuilderExtUnix;
 
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
@@ -13,6 +15,18 @@ use crate::{
     PRELOAD_TAB_BAR_JS, PRELOAD_WALLET_SELECTOR_JS, SETTINGS_HTML, SETTINGS_JS, TAB_BAR_HTML,
     TAB_BAR_JS, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS,
 };
+
+/// Platform-aware container for building child webviews.
+/// On Linux (Wayland), `build_as_child` is unsupported; we use `build_gtk` with
+/// `gtk::Box` containers that GTK lays out natively (avoiding CSD offset issues
+/// with `gtk::Fixed` + manual `set_bounds`).
+pub struct WebViewHost<'a> {
+    pub window: &'a tao::window::Window,
+    #[cfg(target_os = "linux")]
+    pub tab_bar_container: &'a gtk::Box,
+    #[cfg(target_os = "linux")]
+    pub app_container: &'a gtk::Box,
+}
 
 /// What embedded content to serve when `dist_dir` is `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +98,7 @@ fn csp_response(
 }
 
 pub fn build_app_webview(
-    window: &tao::window::Window,
+    host: &WebViewHost,
     id: &str,
     dist_dir: Option<PathBuf>,
     embedded: EmbeddedContent,
@@ -145,7 +159,7 @@ pub fn build_app_webview(
     };
 
     let webview_id = id.to_string();
-    let webview = WebViewBuilder::new()
+    let builder = WebViewBuilder::new()
         .with_id(id)
         .with_bounds(bounds)
         .with_initialization_script(init_script)
@@ -157,8 +171,15 @@ pub fn build_app_webview(
                 webview_id: webview_id.clone(),
                 msg: req.body().clone(),
             });
-        })
-        .build_as_child(window)
+        });
+
+    #[cfg(target_os = "linux")]
+    let webview = builder
+        .build_gtk(host.app_container)
+        .context("failed to build app webview")?;
+    #[cfg(not(target_os = "linux"))]
+    let webview = builder
+        .build_as_child(host.window)
         .context("failed to build app webview")?;
 
     // Emit initial chain/accounts state after load (skip for selector and settings tabs).
@@ -180,7 +201,7 @@ pub fn build_app_webview(
 }
 
 pub fn build_tab_bar_webview(
-    window: &tao::window::Window,
+    host: &WebViewHost,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
 ) -> Result<WebView> {
@@ -203,7 +224,7 @@ pub fn build_tab_bar_webview(
         csp_response(body, mime)
     };
 
-    let webview = WebViewBuilder::new()
+    let builder = WebViewBuilder::new()
         .with_id("tab-bar")
         .with_bounds(bounds)
         .with_initialization_script(PRELOAD_TAB_BAR_JS.to_string())
@@ -214,8 +235,15 @@ pub fn build_tab_bar_webview(
                 webview_id: "tab-bar".to_string(),
                 msg: req.body().clone(),
             });
-        })
-        .build_as_child(window)
+        });
+
+    #[cfg(target_os = "linux")]
+    let webview = builder
+        .build_gtk(host.tab_bar_container)
+        .context("failed to build tab bar webview")?;
+    #[cfg(not(target_os = "linux"))]
+    let webview = builder
+        .build_as_child(host.window)
         .context("failed to build tab bar webview")?;
 
     Ok(webview)

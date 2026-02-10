@@ -56,6 +56,9 @@ alloy-sol-types = "1.5"
 tokio = { version = "1", features = ["rt", "net", "time"] }
 dirs = "6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", features = ["NSMenu", "NSMenuItem", "NSEvent"] }
