@@ -52,11 +52,7 @@ fn run_bun_step(
     run_with_console_handling(cmd, success_message, step_label);
 }
 
-fn run_with_console_handling(
-    mut cmd: Command,
-    success_message: Option<&str>,
-    step_label: &str,
-) {
+fn run_with_console_handling(mut cmd: Command, success_message: Option<&str>, step_label: &str) {
     if let Some(console) = try_open_console() {
         let stdout_console = console
             .try_clone()
@@ -87,7 +83,6 @@ fn run_with_console_handling(
         }
     }
 }
-
 
 fn main() {
     let internal_ui = Path::new("internal-ui");

@@ -57,6 +57,8 @@ pub(crate) static DEMO_PRIVKEY_HEX: &str =
     "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
 
 fn main() -> Result<()> {
+    apply_linux_env_defaults();
+
     let args = parse_args()?;
     let bundle = args.bundle;
     let config_path = args.config_path;
@@ -269,11 +271,7 @@ fn main() -> Result<()> {
                     let h = size.height;
 
                     // 1. Build tab bar
-                    match build_tab_bar_webview(
-                        &host,
-                        proxy.clone(),
-                        manager.tab_bar_rect(w),
-                    ) {
+                    match build_tab_bar_webview(&host, proxy.clone(), manager.tab_bar_rect(w)) {
                         Ok(tb) => manager.tab_bar = Some(tb),
                         Err(e) => eprintln!("tab bar error: {e:?}"),
                     }
@@ -346,6 +344,19 @@ fn main() -> Result<()> {
         }
     })
 }
+
+#[cfg(target_os = "linux")]
+fn apply_linux_env_defaults() {
+    if env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // Safety: this runs at process startup before any threads are spawned.
+        unsafe {
+            env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_linux_env_defaults() {}
 
 struct CliArgs {
     bundle: Option<BundleConfig>,

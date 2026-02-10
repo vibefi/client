@@ -7,7 +7,7 @@ edition = "2024"
 product-name = "VibeFi"
 identifier = "fi.vibefi.client"
 formats = ["app", "dmg"]
-icons = ["packaging/icons/vibefi.icns"]
+icons = ["packaging/icons/vibefi.icns", "packaging/icons/vibefi.png"]
 out-dir = "target/packager"
 
 resources = [

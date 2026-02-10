@@ -5,6 +5,8 @@ use std::{
     process::Command,
 };
 
+use crate::runtime_paths::resolve_bun_binary;
+
 #[derive(Debug, Clone)]
 pub struct BundleConfig {
     pub dist_dir: PathBuf,
@@ -104,24 +106,27 @@ fn write_standard_build_files(bundle_dir: &Path) -> Result<()> {
 
 pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     write_standard_build_files(bundle_dir)?;
+    let bun_bin = resolve_bun_binary().context("resolve bun runtime")?;
 
     let node_modules = bundle_dir.join("node_modules");
     if !node_modules.exists() {
-        let status = Command::new("bun")
+        let status = Command::new(&bun_bin)
             .arg("install")
             .arg("--no-save")
             .current_dir(bundle_dir)
             .status()
-            .context("bun install failed")?;
+            .with_context(|| format!("bun install failed (runtime: {bun_bin})"))?;
         if !status.success() {
-            return Err(anyhow!("bun install failed"));
+            return Err(anyhow!(
+                "bun install failed with status {status} (runtime: {bun_bin})"
+            ));
         }
     }
 
     fs::create_dir_all(dist_dir).context("create dist dir")?;
     // Use relative path from bundle_dir for vite's outDir since vite runs in bundle_dir
     let relative_dist = PathBuf::from(".vibefi").join("dist");
-    let status = Command::new("bun")
+    let status = Command::new(&bun_bin)
         .arg("x")
         .arg("vite")
         .arg("build")
@@ -130,9 +135,11 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
         .arg(&relative_dist)
         .current_dir(bundle_dir)
         .status()
-        .context("bun vite build failed")?;
+        .with_context(|| format!("bun vite build failed (runtime: {bun_bin})"))?;
     if !status.success() {
-        return Err(anyhow!("bun vite build failed"));
+        return Err(anyhow!(
+            "bun vite build failed with status {status} (runtime: {bun_bin})"
+        ));
     }
     Ok(())
 }

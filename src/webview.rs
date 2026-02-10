@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use wry::WebViewBuilderExtUnix;
 use wry::{
     Rect, WebView, WebViewBuilder,
     http::{Response, header::CONTENT_TYPE},
 };
-#[cfg(target_os = "linux")]
-use wry::WebViewBuilderExtUnix;
 
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
