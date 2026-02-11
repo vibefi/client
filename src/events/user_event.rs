@@ -1,10 +1,10 @@
-use tao::{event_loop::EventLoopProxy, window::Window};
+use tao::event_loop::EventLoopProxy;
 
 use crate::ipc;
 use crate::ipc_contract::{IpcRequest, KnownProviderId, TabbarMethod};
 use crate::state::{AppState, TabAction, UserEvent};
 use crate::ui_bridge;
-use crate::webview::{EmbeddedContent, build_app_webview};
+use crate::webview::{EmbeddedContent, WebViewHost, build_app_webview};
 use crate::webview_manager::{AppWebViewEntry, WebViewManager};
 
 pub fn handle_ipc_event(
@@ -50,7 +50,7 @@ pub fn handle_ipc_event(
 }
 
 pub fn handle_open_wallet_selector(
-    window: Option<&Window>,
+    host: Option<&WebViewHost>,
     state: &AppState,
     manager: &mut WebViewManager,
     proxy: &EventLoopProxy<UserEvent>,
@@ -66,12 +66,12 @@ pub fn handle_open_wallet_selector(
             return;
         }
     }
-    if let Some(w) = window {
-        let size = w.inner_size();
+    if let Some(host) = host {
+        let size = host.window.inner_size();
         let id = manager.next_app_id();
         let bounds = manager.app_rect(size.width, size.height);
         match build_app_webview(
-            w,
+            host,
             &id,
             None,
             EmbeddedContent::WalletSelector,
@@ -175,7 +175,7 @@ pub fn handle_hardware_sign_result(
 }
 
 pub fn handle_open_settings(
-    window: Option<&Window>,
+    host: Option<&WebViewHost>,
     state: &AppState,
     manager: &mut WebViewManager,
     proxy: &EventLoopProxy<UserEvent>,
@@ -192,12 +192,12 @@ pub fn handle_open_settings(
             *sel = None;
         }
     }
-    if let Some(w) = window {
-        let size = w.inner_size();
+    if let Some(host) = host {
+        let size = host.window.inner_size();
         let id = manager.next_app_id();
         let bounds = manager.app_rect(size.width, size.height);
         match build_app_webview(
-            w,
+            host,
             &id,
             None,
             EmbeddedContent::Settings,
@@ -258,7 +258,7 @@ pub fn handle_close_wallet_selector(state: &AppState, manager: &mut WebViewManag
 }
 
 pub fn handle_tab_action(
-    window: Option<&Window>,
+    host: Option<&WebViewHost>,
     state: &AppState,
     manager: &mut WebViewManager,
     proxy: &EventLoopProxy<UserEvent>,
@@ -266,12 +266,12 @@ pub fn handle_tab_action(
 ) {
     match action {
         TabAction::OpenApp { name, dist_dir } => {
-            if let Some(w) = window {
-                let size = w.inner_size();
+            if let Some(host) = host {
+                let size = host.window.inner_size();
                 let id = manager.next_app_id();
                 let bounds = manager.app_rect(size.width, size.height);
                 match build_app_webview(
-                    w,
+                    host,
                     &id,
                     Some(dist_dir.clone()),
                     EmbeddedContent::Default,

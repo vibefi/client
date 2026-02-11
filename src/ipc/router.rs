@@ -112,8 +112,8 @@ pub fn handle_ipc(
                                 method,
                                 params,
                             };
-                            let result = rpc::proxy_rpc(&state_clone, &req)
-                                .map_err(|e| e.to_string());
+                            let result =
+                                rpc::proxy_rpc(&state_clone, &req).map_err(|e| e.to_string());
                             let _ = proxy.send_event(UserEvent::RpcResult {
                                 webview_id: wv_id,
                                 ipc_id,

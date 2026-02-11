@@ -108,3 +108,24 @@ The bundle build step uses `bun` and `vite` from the bundle's `package.json`.
 
 - `local` (default): hard-coded/demo private key fallback for local testing only.
 - `walletconnect`: remote signer via WalletConnect; `eth_requestAccounts` triggers pairing and logs a `wc:` URI.
+
+## Releases
+
+Release packages are automatically built and published when a version tag is pushed:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This triggers the release workflow which builds and uploads:
+
+**macOS:**
+- `.dmg` installer (Apple Silicon and Intel)
+- `.app` bundle archives (Apple Silicon and Intel)
+
+**Linux (x86_64):**
+- `.deb` package
+- `.AppImage` portable executable
+
+All artifacts are attached to the GitHub release and available for download.

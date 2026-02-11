@@ -52,11 +52,7 @@ fn run_bun_step(
     run_with_console_handling(cmd, success_message, step_label);
 }
 
-fn run_with_console_handling(
-    mut cmd: Command,
-    success_message: Option<&str>,
-    step_label: &str,
-) {
+fn run_with_console_handling(mut cmd: Command, success_message: Option<&str>, step_label: &str) {
     if let Some(console) = try_open_console() {
         let stdout_console = console
             .try_clone()
@@ -88,7 +84,6 @@ fn run_with_console_handling(
     }
 }
 
-
 fn main() {
     let internal_ui = Path::new("internal-ui");
     emit_rerun_for_path(&internal_ui.join("package.json"));
@@ -96,6 +91,12 @@ fn main() {
     emit_rerun_for_dir(&internal_ui.join("src"));
     emit_rerun_for_dir(&internal_ui.join("scripts"));
     emit_rerun_for_dir(&internal_ui.join("static"));
+    println!("cargo:rerun-if-env-changed=SKIP_UI_BUILD");
+
+    if std::env::var("SKIP_UI_BUILD").is_ok() {
+        print_console_line("[internal-ui] SKIP_UI_BUILD set, skipping bun build");
+        return;
+    }
 
     run_bun_step(
         &["install"],

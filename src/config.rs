@@ -82,7 +82,11 @@ pub fn build_network_context(config: AppConfig) -> NetworkContext {
         .cacheDir
         .as_ref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("client/.vibefi/cache"));
+        .unwrap_or_else(|| {
+            dirs::cache_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("VibeFi")
+        });
     NetworkContext {
         config,
         rpc_url,

@@ -2,6 +2,9 @@
   "name": "vibefi-walletconnect-helper",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build:dist": "bun build index.mjs --bundle --target=bun --conditions=module --outfile dist/walletconnect-helper.mjs"
+  },
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.23.1",
     "qrcode": "^1.5.4"
