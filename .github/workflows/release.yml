@@ -18,6 +18,7 @@ jobs:
   build-macos:
     name: Build macOS (${{ matrix.target }})
     runs-on: macos-latest
+    if: false  # Temporarily disabled
     strategy:
       matrix:
         target:
