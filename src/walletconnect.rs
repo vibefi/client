@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
-use std::env;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+
+use crate::runtime_paths;
 
 #[derive(Debug, Clone)]
 pub struct WalletConnectConfig {
@@ -66,17 +66,8 @@ impl WalletConnectBridge {
             bail!("WalletConnect project id missing");
         }
 
-        let helper_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("walletconnect-helper")
-            .join("index.mjs");
-        if !helper_script.exists() {
-            bail!(
-                "walletconnect helper script missing at {}",
-                helper_script.display()
-            );
-        }
-
-        let node_path = resolve_node_binary()?;
+        let helper_script = runtime_paths::resolve_wc_helper_script()?;
+        let node_path = runtime_paths::resolve_node_binary()?;
         let mut child = Command::new(&node_path)
             .arg(&helper_script)
             .env("VIBEFI_WC_PROJECT_ID", config.project_id)
@@ -255,30 +246,6 @@ fn parse_bridge_line(raw: &str) -> Result<BridgeMessage> {
     let response: HelperResponse =
         serde_json::from_value(value).context("invalid helper response payload")?;
     Ok(BridgeMessage::Response(response))
-}
-
-fn resolve_node_binary() -> Result<String> {
-    for candidate in ["node", "bun"] {
-        let status = Command::new(candidate)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if let Ok(status) = status {
-            if status.success() {
-                return Ok(candidate.to_string());
-            }
-        }
-    }
-    if let Ok(node_from_env) = env::var("VIBEFI_NODE_BIN") {
-        if !node_from_env.trim().is_empty() {
-            return Ok(node_from_env);
-        }
-    }
-    bail!(
-        "node runtime not found. install node or bun, or set VIBEFI_NODE_BIN to an executable path"
-    )
 }
 
 fn log_helper_event(event: &HelperEvent) {

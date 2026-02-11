@@ -85,7 +85,10 @@ pub(super) fn handle_local_ipc(
             let sig = signer
                 .sign_message_sync(&bytes)
                 .map_err(|e| anyhow!("sign_message failed: {e}"))?;
-            Ok(Some(Value::String(format!("0x{}", hex::encode(sig.as_bytes())))))
+            Ok(Some(Value::String(format!(
+                "0x{}",
+                hex::encode(sig.as_bytes())
+            ))))
         }
         "eth_signTypedData_v4" => {
             let typed_data_json = req
@@ -100,7 +103,10 @@ pub(super) fn handle_local_ipc(
             let sig = signer
                 .sign_hash_sync(&B256::from(hash))
                 .map_err(|e| anyhow!("sign_hash failed: {e}"))?;
-            Ok(Some(Value::String(format!("0x{}", hex::encode(sig.as_bytes())))))
+            Ok(Some(Value::String(format!(
+                "0x{}",
+                hex::encode(sig.as_bytes())
+            ))))
         }
         "eth_sendTransaction" => {
             let ws = state.wallet.lock().unwrap();
