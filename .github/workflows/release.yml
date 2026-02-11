@@ -58,14 +58,32 @@ jobs:
     - name: Prepare artifacts
       run: |
         mkdir -p artifacts
-        cp target/packager/*.dmg artifacts/ 2>/dev/null || true
+        # Check for DMG files
+        if ls target/packager/*.dmg 1> /dev/null 2>&1; then
+          cp target/packager/*.dmg artifacts/
+          echo "DMG files copied successfully"
+        else
+          echo "Warning: No DMG files found in target/packager/"
+        fi
         # Archive .app bundles as they are directories
         cd target/packager
+        found_app=false
         for app in *.app; do
           if [ -d "$app" ]; then
             tar -czf "../../artifacts/${app}.tar.gz" "$app"
+            echo "Archived $app"
+            found_app=true
           fi
         done
+        if [ "$found_app" = false ]; then
+          echo "Warning: No .app bundles found in target/packager/"
+        fi
+        cd ../..
+        # Verify we have at least some artifacts
+        if [ ! "$(ls -A artifacts)" ]; then
+          echo "Error: No artifacts were produced"
+          exit 1
+        fi
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -125,8 +143,25 @@ jobs:
     - name: Prepare artifacts
       run: |
         mkdir -p artifacts
-        cp target/packager/*.deb artifacts/ 2>/dev/null || true
-        cp target/packager/*.AppImage artifacts/ 2>/dev/null || true
+        # Check for DEB packages
+        if ls target/packager/*.deb 1> /dev/null 2>&1; then
+          cp target/packager/*.deb artifacts/
+          echo "DEB packages copied successfully"
+        else
+          echo "Warning: No DEB packages found in target/packager/"
+        fi
+        # Check for AppImage files
+        if ls target/packager/*.AppImage 1> /dev/null 2>&1; then
+          cp target/packager/*.AppImage artifacts/
+          echo "AppImage files copied successfully"
+        else
+          echo "Warning: No AppImage files found in target/packager/"
+        fi
+        # Verify we have at least some artifacts
+        if [ ! "$(ls -A artifacts)" ]; then
+          echo "Error: No artifacts were produced"
+          exit 1
+        fi
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
