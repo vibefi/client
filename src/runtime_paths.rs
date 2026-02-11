@@ -153,12 +153,16 @@ pub fn resolve_node_binary() -> Result<String> {
 pub fn resolve_wc_helper_script() -> Result<PathBuf> {
     // 1. Explicit env override
     if let Ok(path) = env::var("VIBEFI_WC_HELPER_SCRIPT") {
-        let p = PathBuf::from(&path);
-        if p.exists() {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            bail!("VIBEFI_WC_HELPER_SCRIPT is set but empty or whitespace");
+        }
+        let p = PathBuf::from(trimmed);
+        if p.is_file() {
             return Ok(p);
         }
         bail!(
-            "VIBEFI_WC_HELPER_SCRIPT is set to {:?} but the file does not exist",
+            "VIBEFI_WC_HELPER_SCRIPT is set to {:?} but the file does not exist or is not a regular file",
             path
         );
     }
