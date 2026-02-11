@@ -3,10 +3,16 @@ use alloy_sol_types::{SolEvent, sol};
 use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, path::Path, str::FromStr};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+};
 
 use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
-use crate::config::NetworkContext;
+use crate::config::{IpfsFetchBackend, NetworkContext};
+use crate::ipfs_helper::{IpfsHelperBridge, IpfsHelperConfig};
 use crate::state::{AppState, TabAction, UserEvent};
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,6 +59,16 @@ struct LogEntry {
     log_index: u64,
     kind: String,
     log: Log,
+}
+
+#[derive(Debug, Clone)]
+struct EffectiveIpfsConfig {
+    fetch_backend: IpfsFetchBackend,
+    gateway_endpoint: String,
+    helia_gateways: Vec<String>,
+    helia_routers: Vec<String>,
+    helia_timeout_ms: u64,
+    strict_root_verification: bool,
 }
 
 pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
@@ -305,13 +321,32 @@ pub fn handle_launcher_ipc(
                 .unwrap_or(root_cid);
             println!("launcher: fetch bundle {root_cid}");
             let bundle_dir = devnet.cache_dir.join(root_cid);
-            ensure_bundle_cached(devnet, root_cid, &bundle_dir)?;
+            let ipfs = resolve_effective_ipfs_config(state, devnet);
+            println!("[ipfs] backend={}", ipfs.fetch_backend.as_str());
+            ensure_bundle_cached(devnet, &ipfs, root_cid, &bundle_dir)?;
             println!("launcher: verify bundle manifest");
             verify_manifest(&bundle_dir)?;
-            println!("launcher: verify CID via IPFS");
-            let computed = compute_ipfs_cid(&bundle_dir, &devnet.ipfs_api)?;
-            if computed != root_cid {
-                return Err(anyhow!("CID mismatch: expected {root_cid} got {computed}"));
+            if ipfs.fetch_backend == IpfsFetchBackend::Gateway || ipfs.strict_root_verification {
+                println!("launcher: verify CID via IPFS");
+                match compute_ipfs_cid(&bundle_dir, &devnet.ipfs_api) {
+                    Ok(computed) => {
+                        if computed != root_cid {
+                            return Err(anyhow!(
+                                "CID mismatch: expected {root_cid} got {computed}"
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        if ipfs.fetch_backend == IpfsFetchBackend::Helia {
+                            eprintln!(
+                                "launcher: strict CID verification unavailable (continuing): {:#}",
+                                e
+                            );
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
             }
             let dist_dir = bundle_dir.join(".vibefi").join("dist");
             if dist_dir.join("index.html").exists() {
@@ -336,22 +371,94 @@ pub fn handle_launcher_ipc(
     }
 }
 
-fn ensure_bundle_cached(devnet: &NetworkContext, root_cid: &str, bundle_dir: &Path) -> Result<()> {
+fn ensure_bundle_cached(
+    devnet: &NetworkContext,
+    ipfs: &EffectiveIpfsConfig,
+    root_cid: &str,
+    bundle_dir: &Path,
+) -> Result<()> {
     if bundle_dir.join("manifest.json").exists() {
         return Ok(());
     }
+    match ipfs.fetch_backend {
+        IpfsFetchBackend::Gateway => {
+            ensure_bundle_cached_gateway(devnet, ipfs, root_cid, bundle_dir)
+        }
+        IpfsFetchBackend::Helia => ensure_bundle_cached_helia(ipfs, root_cid, bundle_dir),
+    }
+}
+
+fn ensure_bundle_cached_gateway(
+    devnet: &NetworkContext,
+    ipfs: &EffectiveIpfsConfig,
+    root_cid: &str,
+    bundle_dir: &Path,
+) -> Result<()> {
     println!("launcher: download bundle from IPFS gateway");
     fs::create_dir_all(bundle_dir).context("create cache dir")?;
-    let (manifest, manifest_bytes) = fetch_dapp_manifest(devnet, root_cid)?;
-    download_dapp_bundle(devnet, root_cid, bundle_dir, &manifest, &manifest_bytes)?;
+    let (manifest, manifest_bytes) = fetch_dapp_manifest_gateway(devnet, ipfs, root_cid)?;
+    download_dapp_bundle_gateway(
+        devnet,
+        ipfs,
+        root_cid,
+        bundle_dir,
+        &manifest,
+        &manifest_bytes,
+    )?;
     Ok(())
 }
 
-fn fetch_dapp_manifest(
+fn ensure_bundle_cached_helia(
+    ipfs: &EffectiveIpfsConfig,
+    root_cid: &str,
+    bundle_dir: &Path,
+) -> Result<()> {
+    println!("launcher: download bundle via Helia verified fetch");
+    fs::create_dir_all(bundle_dir).context("create cache dir")?;
+    let mut helper = IpfsHelperBridge::spawn(IpfsHelperConfig {
+        gateways: ipfs.helia_gateways.clone(),
+        routers: ipfs.helia_routers.clone(),
+    })?;
+    let manifest_url = format!("ipfs://{root_cid}/manifest.json");
+    let manifest_resp = helper.fetch(&manifest_url, Some(ipfs.helia_timeout_ms))?;
+    if !(200..300).contains(&manifest_resp.status) {
+        return Err(anyhow!(
+            "fetch manifest failed with status {}",
+            manifest_resp.status
+        ));
+    }
+    let raw_bytes = manifest_resp.body;
+    let manifest: BundleManifest = serde_json::from_slice(&raw_bytes).context("parse manifest")?;
+    if manifest.files.is_empty() {
+        return Err(anyhow!("manifest.json missing files list"));
+    }
+    fs::write(bundle_dir.join("manifest.json"), &raw_bytes).context("write manifest.json")?;
+
+    for entry in &manifest.files {
+        let file_url = format!("ipfs://{root_cid}/{}", entry.path);
+        let response = helper.fetch(&file_url, Some(ipfs.helia_timeout_ms))?;
+        if !(200..300).contains(&response.status) {
+            return Err(anyhow!(
+                "bundle fetch failed for {} with status {}",
+                entry.path,
+                response.status
+            ));
+        }
+        let dest = sanitize_bundle_destination(bundle_dir, &entry.path)?;
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(dest, &response.body)?;
+    }
+    Ok(())
+}
+
+fn fetch_dapp_manifest_gateway(
     devnet: &NetworkContext,
+    ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
 ) -> Result<(BundleManifest, Vec<u8>)> {
-    let gateway = normalize_gateway(&devnet.ipfs_gateway);
+    let gateway = normalize_gateway(&ipfs.gateway_endpoint);
     let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
     let res = devnet.http.get(url).send().context("fetch manifest")?;
     if !res.status().is_success() {
@@ -366,14 +473,15 @@ fn fetch_dapp_manifest(
     Ok((manifest, raw_bytes))
 }
 
-fn download_dapp_bundle(
+fn download_dapp_bundle_gateway(
     devnet: &NetworkContext,
+    ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     out_dir: &Path,
     manifest: &BundleManifest,
     manifest_bytes: &[u8],
 ) -> Result<()> {
-    let gateway = normalize_gateway(&devnet.ipfs_gateway);
+    let gateway = normalize_gateway(&ipfs.gateway_endpoint);
     fs::write(out_dir.join("manifest.json"), manifest_bytes)?;
     for entry in &manifest.files {
         let url = format!("{}/ipfs/{}/{}", gateway, root_cid, entry.path);
@@ -383,13 +491,57 @@ fn download_dapp_bundle(
             return Err(anyhow!("bundle fetch failed: {}", text));
         }
         let bytes = res.bytes().context("read bundle file")?;
-        let dest = out_dir.join(&entry.path);
+        let dest = sanitize_bundle_destination(out_dir, &entry.path)?;
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::write(dest, &bytes)?;
     }
     Ok(())
+}
+
+fn resolve_effective_ipfs_config(state: &AppState, devnet: &NetworkContext) -> EffectiveIpfsConfig {
+    let mut fetch_backend = devnet.ipfs_fetch_backend;
+    let mut gateway_endpoint = devnet.ipfs_gateway.clone();
+    if let Some(config_path) = state.config_path.as_ref() {
+        let settings = crate::settings::load_settings(config_path);
+        if let Some(backend) = settings.ipfs.fetch_backend {
+            fetch_backend = backend;
+        }
+        if let Some(endpoint) = settings.ipfs.gateway_endpoint {
+            let trimmed = endpoint.trim();
+            if !trimmed.is_empty() {
+                gateway_endpoint = trimmed.to_string();
+            }
+        }
+    }
+    EffectiveIpfsConfig {
+        fetch_backend,
+        gateway_endpoint,
+        helia_gateways: devnet.ipfs_helia_gateways.clone(),
+        helia_routers: devnet.ipfs_helia_routers.clone(),
+        helia_timeout_ms: devnet.ipfs_helia_timeout_ms,
+        strict_root_verification: devnet.ipfs_strict_root_verification,
+    }
+}
+
+fn sanitize_bundle_destination(root: &Path, entry_path: &str) -> Result<PathBuf> {
+    let rel = Path::new(entry_path);
+    if rel.as_os_str().is_empty() || rel.is_absolute() {
+        return Err(anyhow!("invalid bundle path {}", entry_path));
+    }
+    for component in rel.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
+                return Err(anyhow!("invalid bundle path {}", entry_path));
+            }
+        }
+    }
+    Ok(root.join(rel))
 }
 
 fn compute_ipfs_cid(out_dir: &Path, ipfs_api: &str) -> Result<String> {

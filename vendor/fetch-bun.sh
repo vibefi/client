@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-1.2.4}"
+VERSION="${1:-1.3.7}"
 VENDOR_DIR="$(cd "$(dirname "$0")/bun" && pwd)"
 
 fetch_bun() {

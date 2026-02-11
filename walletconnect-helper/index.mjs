@@ -1,9 +1,39 @@
 #!/usr/bin/env node
 
 import process from "node:process";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import readline from "node:readline";
 import { EthereumProvider } from "@walletconnect/ethereum-provider";
 import QRCode from "qrcode";
+
+// File-backed IKeyValueStorage implementation.
+// The bundled WC SDK resolves to the browser entry which requires indexedDB.
+// This provides a node-compatible storage that works in bun.
+class FileKeyValueStorage {
+  constructor(filePath) {
+    this._path = filePath;
+    this._data = {};
+    try {
+      const raw = fs.readFileSync(filePath, "utf8");
+      this._data = JSON.parse(raw);
+    } catch {}
+  }
+  _save() {
+    const dir = path.dirname(this._path);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(this._path, JSON.stringify(this._data), "utf8");
+  }
+  async getKeys() { return Object.keys(this._data); }
+  async getEntries() { return Object.entries(this._data); }
+  async getItem(key) { const v = this._data[key]; return v === undefined ? undefined : v; }
+  async setItem(key, value) { this._data[key] = value; this._save(); }
+  async removeItem(key) { delete this._data[key]; this._save(); }
+}
+
+const wcStoragePath = path.join(os.homedir(), ".vibefi", "walletconnect-store.json");
+const wcStorage = new FileKeyValueStorage(wcStoragePath);
 
 const projectId = process.env.VIBEFI_WC_PROJECT_ID || process.env.WC_PROJECT_ID || "";
 const relayUrl = process.env.VIBEFI_WC_RELAY_URL || process.env.WC_RELAY_URL || undefined;
@@ -139,6 +169,7 @@ async function ensureProvider(requiredChainId) {
     optionalChains,
     showQrModal: false,
     relayUrl,
+    storage: wcStorage,
     metadata: {
       name: metadataName,
       description: metadataDesc,

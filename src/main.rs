@@ -4,6 +4,7 @@ mod events;
 mod hardware;
 mod ipc;
 mod ipc_contract;
+mod ipfs_helper;
 mod menu;
 mod registry;
 mod rpc_manager;

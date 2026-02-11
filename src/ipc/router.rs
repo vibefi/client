@@ -28,10 +28,10 @@ pub fn handle_ipc(
     }
 
     if req.provider() == Some(KnownProviderId::Settings) {
-        if req.method == "vibefi_setEndpoints" {
+        if req.method == "vibefi_setEndpoints" || req.method == "vibefi_setIpfsSettings" {
             let settings_id = state.settings_webview_id.lock().unwrap();
             if settings_id.as_deref() != Some(webview_id) {
-                bail!("vibefi_setEndpoints is only available to the settings webview");
+                bail!("settings write methods are only available to the settings webview");
             }
         }
         let result = super::settings::handle_settings_ipc(state, &req);

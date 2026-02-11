@@ -1,0 +1,18 @@
+{
+  "name": "vibefi-ipfs-helper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:dist": "bun build index.mjs --bundle --target=bun --conditions=module --outfile dist/ipfs-helper.mjs"
+  },
+  "dependencies": {
+    "@helia/block-brokers": "^4.2.1",
+    "@helia/http": "^2.1.1",
+    "@helia/routers": "^3.1.1",
+    "@helia/unixfs": "^4.0.0",
+    "multiformats": "^13.0.0"
+  },
+  "trustedDependencies": [
+    "@ipshipyard/node-datachannel"
+  ]
+}
