@@ -1,7 +1,6 @@
 use alloy_primitives::{Address, B256, Bytes, Log, U256};
 use alloy_sol_types::{SolEvent, sol};
 use anyhow::{Context, Result, anyhow};
-use reqwest::blocking::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -68,7 +67,6 @@ struct EffectiveIpfsConfig {
     helia_gateways: Vec<String>,
     helia_routers: Vec<String>,
     helia_timeout_ms: u64,
-    strict_root_verification: bool,
 }
 
 pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
@@ -326,28 +324,6 @@ pub fn handle_launcher_ipc(
             ensure_bundle_cached(devnet, &ipfs, root_cid, &bundle_dir)?;
             println!("launcher: verify bundle manifest");
             verify_manifest(&bundle_dir)?;
-            if ipfs.fetch_backend == IpfsFetchBackend::Gateway || ipfs.strict_root_verification {
-                println!("launcher: verify CID via IPFS");
-                match compute_ipfs_cid(&bundle_dir, &devnet.ipfs_api) {
-                    Ok(computed) => {
-                        if computed != root_cid {
-                            return Err(anyhow!(
-                                "CID mismatch: expected {root_cid} got {computed}"
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        if ipfs.fetch_backend == IpfsFetchBackend::Helia {
-                            eprintln!(
-                                "launcher: strict CID verification unavailable (continuing): {:#}",
-                                e
-                            );
-                        } else {
-                            return Err(e);
-                        }
-                    }
-                }
-            }
             let dist_dir = bundle_dir.join(".vibefi").join("dist");
             if dist_dir.join("index.html").exists() {
                 println!("launcher: using cached build");
@@ -381,23 +357,23 @@ fn ensure_bundle_cached(
         return Ok(());
     }
     match ipfs.fetch_backend {
-        IpfsFetchBackend::Gateway => {
-            ensure_bundle_cached_gateway(devnet, ipfs, root_cid, bundle_dir)
+        IpfsFetchBackend::LocalNode => {
+            ensure_bundle_cached_local_node(devnet, ipfs, root_cid, bundle_dir)
         }
         IpfsFetchBackend::Helia => ensure_bundle_cached_helia(ipfs, root_cid, bundle_dir),
     }
 }
 
-fn ensure_bundle_cached_gateway(
+fn ensure_bundle_cached_local_node(
     devnet: &NetworkContext,
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     bundle_dir: &Path,
 ) -> Result<()> {
-    println!("launcher: download bundle from IPFS gateway");
+    println!("launcher: download bundle from local IPFS node");
     fs::create_dir_all(bundle_dir).context("create cache dir")?;
-    let (manifest, manifest_bytes) = fetch_dapp_manifest_gateway(devnet, ipfs, root_cid)?;
-    download_dapp_bundle_gateway(
+    let (manifest, manifest_bytes) = fetch_dapp_manifest_local_node(devnet, ipfs, root_cid)?;
+    download_dapp_bundle_local_node(
         devnet,
         ipfs,
         root_cid,
@@ -453,7 +429,7 @@ fn ensure_bundle_cached_helia(
     Ok(())
 }
 
-fn fetch_dapp_manifest_gateway(
+fn fetch_dapp_manifest_local_node(
     devnet: &NetworkContext,
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
@@ -473,7 +449,7 @@ fn fetch_dapp_manifest_gateway(
     Ok((manifest, raw_bytes))
 }
 
-fn download_dapp_bundle_gateway(
+fn download_dapp_bundle_local_node(
     devnet: &NetworkContext,
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
@@ -521,7 +497,6 @@ fn resolve_effective_ipfs_config(state: &AppState, devnet: &NetworkContext) -> E
         helia_gateways: devnet.ipfs_helia_gateways.clone(),
         helia_routers: devnet.ipfs_helia_routers.clone(),
         helia_timeout_ms: devnet.ipfs_helia_timeout_ms,
-        strict_root_verification: devnet.ipfs_strict_root_verification,
     }
 }
 
@@ -542,51 +517,6 @@ fn sanitize_bundle_destination(root: &Path, entry_path: &str) -> Result<PathBuf>
         }
     }
     Ok(root.join(rel))
-}
-
-fn compute_ipfs_cid(out_dir: &Path, ipfs_api: &str) -> Result<String> {
-    let files = crate::bundle::walk_files(out_dir)?;
-    let mut form = reqwest::blocking::multipart::Form::new();
-    for file in files {
-        let rel = file
-            .strip_prefix(out_dir)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let data = fs::read(&file)?;
-        let part = reqwest::blocking::multipart::Part::bytes(data).file_name(rel);
-        form = form.part("file", part);
-    }
-    let url = format!("{}/api/v0/add", ipfs_api.trim_end_matches('/'));
-    let res = HttpClient::new()
-        .post(url)
-        .query(&[
-            ("recursive", "true"),
-            ("wrap-with-directory", "true"),
-            ("cid-version", "1"),
-            ("pin", "false"),
-            ("only-hash", "true"),
-        ])
-        .multipart(form)
-        .send()
-        .context("ipfs add failed")?;
-    let body = res.text().context("read ipfs response")?;
-    let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
-    if lines.is_empty() {
-        return Err(anyhow!("IPFS add returned empty response"));
-    }
-    let last = lines[lines.len() - 1];
-    let json: serde_json::Value = serde_json::from_str(last).context("parse ipfs response")?;
-    if let Some(hash) = json.get("Hash").and_then(|v| v.as_str()) {
-        return Ok(hash.to_string());
-    }
-    if let Some(hash) = json
-        .get("Cid")
-        .and_then(|v| v.get("/"))
-        .and_then(|v| v.as_str())
-    {
-        return Ok(hash.to_string());
-    }
-    Err(anyhow!("IPFS add response missing CID"))
 }
 
 fn normalize_gateway(gateway: &str) -> String {

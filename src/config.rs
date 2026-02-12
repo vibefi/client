@@ -7,22 +7,23 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum IpfsFetchBackend {
-    Gateway,
+    #[serde(rename = "localnode")]
+    LocalNode,
+    #[serde(rename = "helia")]
     Helia,
 }
 
 impl Default for IpfsFetchBackend {
     fn default() -> Self {
-        Self::Gateway
+        Self::Helia
     }
 }
 
 impl IpfsFetchBackend {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Gateway => "gateway",
+            Self::LocalNode => "localnode",
             Self::Helia => "helia",
         }
     }
@@ -67,9 +68,6 @@ pub struct AppConfig {
     pub ipfsHeliaTimeoutMs: u64,
 
     #[serde(default)]
-    pub ipfsStrictRootVerification: bool,
-
-    #[serde(default)]
     pub cacheDir: Option<String>,
 
     #[serde(default)]
@@ -81,11 +79,18 @@ fn default_rpc_url() -> String {
 }
 
 fn default_ipfs_helia_gateways() -> Vec<String> {
-    vec!["https://trustless-gateway.link".to_string()]
+    vec![
+        "https://trustless-gateway.link".to_string(),
+        "https://cloudflare-ipfs.com".to_string(),
+        "https://4everland.io".to_string(),
+    ]
 }
 
 fn default_ipfs_helia_routers() -> Vec<String> {
-    vec!["https://delegated-ipfs.dev".to_string()]
+    vec![
+        "https://delegated-ipfs.dev".to_string(),
+        "https://cid.contact".to_string(),
+    ]
 }
 
 fn default_ipfs_helia_timeout_ms() -> u64 {
@@ -111,7 +116,6 @@ pub struct NetworkContext {
     pub ipfs_helia_gateways: Vec<String>,
     pub ipfs_helia_routers: Vec<String>,
     pub ipfs_helia_timeout_ms: u64,
-    pub ipfs_strict_root_verification: bool,
     pub cache_dir: PathBuf,
     pub http: HttpClient,
 }
@@ -136,7 +140,6 @@ pub fn build_network_context(config: AppConfig) -> NetworkContext {
     let ipfs_helia_gateways = config.ipfsHeliaGateways.clone();
     let ipfs_helia_routers = config.ipfsHeliaRouters.clone();
     let ipfs_helia_timeout_ms = config.ipfsHeliaTimeoutMs;
-    let ipfs_strict_root_verification = config.ipfsStrictRootVerification;
     let cache_dir = config
         .cacheDir
         .as_ref()
@@ -155,7 +158,6 @@ pub fn build_network_context(config: AppConfig) -> NetworkContext {
         ipfs_helia_gateways,
         ipfs_helia_routers,
         ipfs_helia_timeout_ms,
-        ipfs_strict_root_verification,
         cache_dir,
         http: HttpClient::new(),
     }

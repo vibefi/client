@@ -7,7 +7,7 @@
   "developerPrivateKey": null,
   "ipfsApi": null,
   "ipfsGateway": null,
-  "ipfsFetchBackend": "gateway",
+  "ipfsFetchBackend": "helia",
   "cacheDir": null,
   "walletConnect": null
 }

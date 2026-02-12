@@ -63,7 +63,7 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                 .network
                 .as_ref()
                 .map(|n| n.ipfs_fetch_backend)
-                .unwrap_or(IpfsFetchBackend::Gateway);
+                .unwrap_or_default();
             let default_gateway_endpoint = state
                 .network
                 .as_ref()

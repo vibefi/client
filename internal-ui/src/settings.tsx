@@ -14,7 +14,7 @@ type RpcEndpoint = {
   label?: string;
 };
 
-type IpfsFetchBackend = "gateway" | "helia";
+type IpfsFetchBackend = "helia" | "localnode";
 
 type IpfsSettings = {
   fetchBackend: IpfsFetchBackend;
@@ -23,7 +23,7 @@ type IpfsSettings = {
 };
 
 const DEFAULT_IPFS_SETTINGS: IpfsSettings = {
-  fetchBackend: "gateway",
+  fetchBackend: "helia",
   gatewayEndpoint: "http://127.0.0.1:8080",
   defaultGatewayEndpoint: "http://127.0.0.1:8080",
 };
@@ -166,7 +166,7 @@ function settingsIpc(method: string, params: unknown[] = []): Promise<unknown> {
 function parseIpfsSettings(value: unknown): IpfsSettings {
   if (!value || typeof value !== "object") return DEFAULT_IPFS_SETTINGS;
   const record = value as Record<string, unknown>;
-  const backend = record.fetchBackend === "helia" ? "helia" : "gateway";
+  const backend = record.fetchBackend === "localnode" ? "localnode" : "helia";
   const defaultGateway =
     typeof record.defaultGatewayEndpoint === "string" && record.defaultGatewayEndpoint.trim()
       ? record.defaultGatewayEndpoint.trim()
@@ -235,7 +235,7 @@ function App() {
     try {
       await settingsIpc("vibefi_setIpfsSettings", [{
         fetchBackend: ipfsDraft.fetchBackend,
-        gatewayEndpoint: ipfsDraft.fetchBackend === "gateway" ? ipfsDraft.gatewayEndpoint.trim() : undefined,
+        gatewayEndpoint: ipfsDraft.fetchBackend === "localnode" ? ipfsDraft.gatewayEndpoint.trim() : undefined,
       }]);
       setStatus({ text: "Saved", ok: true });
     } catch (err: any) {
@@ -343,41 +343,38 @@ function App() {
                   <input
                     type="radio"
                     name="ipfs-backend"
-                    checked={ipfsDraft.fetchBackend === "gateway"}
-                    onChange={() => setIpfsDraft((curr) => ({ ...curr, fetchBackend: "gateway" }))}
+                    checked={ipfsDraft.fetchBackend === "helia"}
+                    onChange={() => setIpfsDraft((curr) => ({ ...curr, fetchBackend: "helia" }))}
                   />
                   <div>
-                    <div className="label">IPFS Endpoint</div>
-                    <div className="desc">Fetch bundle files from a configured gateway endpoint.</div>
+                    <div className="label">Helia Verified Fetch (Recommended)</div>
+                    <div className="desc">Fetches via trustless gateways with local cryptographic verification. No local node needed.</div>
                   </div>
                 </label>
                 <label className="radio-option">
                   <input
                     type="radio"
                     name="ipfs-backend"
-                    checked={ipfsDraft.fetchBackend === "helia"}
-                    onChange={() => setIpfsDraft((curr) => ({ ...curr, fetchBackend: "helia" }))}
+                    checked={ipfsDraft.fetchBackend === "localnode"}
+                    onChange={() => setIpfsDraft((curr) => ({ ...curr, fetchBackend: "localnode" }))}
                   />
                   <div>
-                    <div className="label">Helia Verified Fetch</div>
-                    <div className="desc">Use the Helia helper process and verified fetch workflow.</div>
+                    <div className="label">Local IPFS Node</div>
+                    <div className="desc">For advanced users running their own IPFS daemon. Implicitly trusted.</div>
                   </div>
                 </label>
               </div>
 
-              <div className="field">
-                <label>Gateway Endpoint</label>
-                <input
-                  type="text"
-                  placeholder={ipfsDraft.defaultGatewayEndpoint}
-                  value={ipfsDraft.gatewayEndpoint}
-                  disabled={ipfsDraft.fetchBackend !== "gateway"}
-                  onChange={(e) => setIpfsDraft((curr) => ({ ...curr, gatewayEndpoint: e.target.value }))}
-                />
-              </div>
-
-              {ipfsDraft.fetchBackend === "helia" ? (
-                <div className="muted">Gateway endpoint is ignored in Helia mode.</div>
+              {ipfsDraft.fetchBackend === "localnode" ? (
+                <div className="field">
+                  <label>Local Node Endpoint</label>
+                  <input
+                    type="text"
+                    placeholder="http://127.0.0.1:8080"
+                    value={ipfsDraft.gatewayEndpoint}
+                    onChange={(e) => setIpfsDraft((curr) => ({ ...curr, gatewayEndpoint: e.target.value }))}
+                  />
+                </div>
               ) : null}
 
               <div className="ipfs-actions">
