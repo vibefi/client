@@ -12,6 +12,15 @@ type DappInfo = {
 };
 
 type VibefiRequest = (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+type ProviderEventHandler = (...args: unknown[]) => void;
+
+type LaunchProgress = {
+  stage: string;
+  message: string;
+  percent: number;
+  completedFiles?: number;
+  totalFiles?: number;
+};
 
 declare global {
   interface Window {
@@ -92,6 +101,38 @@ const styles = `
     max-height: 220px;
     overflow: auto;
   }
+  .progress-card {
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+  }
+  .progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+  .progress-track {
+    width: 100%;
+    height: 10px;
+    border-radius: 9999px;
+    background: #e2e8f0;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #0f172a, #334155);
+    transition: width 140ms ease;
+  }
+  .progress-meta {
+    margin-top: 6px;
+    color: #64748b;
+    font-size: 12px;
+  }
 `;
 
 function asErrorMessage(err: unknown): string {
@@ -101,11 +142,25 @@ function asErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function parseLaunchProgress(input: unknown): LaunchProgress | null {
+  if (!input || typeof input !== "object") return null;
+  const value = input as Record<string, unknown>;
+  const percentRaw = typeof value.percent === "number" ? value.percent : Number(value.percent);
+  const percent = Number.isFinite(percentRaw) ? Math.max(0, Math.min(100, percentRaw)) : 0;
+  const stage = typeof value.stage === "string" ? value.stage : "progress";
+  const message = typeof value.message === "string" ? value.message : "Working...";
+  const completedFiles =
+    typeof value.completedFiles === "number" ? value.completedFiles : undefined;
+  const totalFiles = typeof value.totalFiles === "number" ? value.totalFiles : undefined;
+  return { stage, message, percent, completedFiles, totalFiles };
+}
+
 function App() {
   const [items, setItems] = useState<DappInfo[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [launchProgress, setLaunchProgress] = useState<LaunchProgress | null>(null);
 
   const selectedItem = useMemo(() => {
     if (selectedIndex === null) return null;
@@ -151,6 +206,11 @@ function App() {
       return;
     }
     setBusy(true);
+    setLaunchProgress({
+      stage: "prepare",
+      message: "Preparing launch...",
+      percent: 0,
+    });
     addLog(`Launching ${selectedItem.name || ""} ${selectedItem.version || ""} (${selectedItem.rootCid})`);
     try {
       await vibefiRequest("vibefi_launchDapp", [selectedItem.rootCid, selectedItem.name || selectedItem.rootCid]);
@@ -164,6 +224,15 @@ function App() {
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  useEffect(() => {
+    const handler: ProviderEventHandler = (payload) => {
+      const next = parseLaunchProgress(payload);
+      if (!next) return;
+      setLaunchProgress(next);
+    };
+    window.ethereum?.on?.("vibefiLaunchProgress", handler);
   }, []);
 
   return (
@@ -184,6 +253,25 @@ function App() {
           </button>
           <button onClick={() => void vibefiRequest("vibefi_openSettings")}>Settings</button>
         </div>
+        {busy && launchProgress ? (
+          <div className="progress-card">
+            <div className="progress-head">
+              <span>{launchProgress.message}</span>
+              <strong>{Math.round(launchProgress.percent)}%</strong>
+            </div>
+            <div className="progress-track">
+              <div
+                className="progress-fill"
+                style={{ width: `${Math.max(0, Math.min(100, launchProgress.percent))}%` }}
+              />
+            </div>
+            {typeof launchProgress.completedFiles === "number" && typeof launchProgress.totalFiles === "number" ? (
+              <div className="progress-meta">
+                Downloaded {launchProgress.completedFiles}/{launchProgress.totalFiles} files
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <table>
           <thead>
             <tr>

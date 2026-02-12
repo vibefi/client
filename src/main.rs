@@ -203,6 +203,13 @@ fn main() -> Result<()> {
             }) => {
                 events::user_event::handle_rpc_result(&manager, webview_id, ipc_id, result);
             }
+            Event::UserEvent(UserEvent::ProviderEvent {
+                webview_id,
+                event,
+                value,
+            }) => {
+                events::user_event::handle_provider_event(&manager, webview_id, event, value);
+            }
             Event::UserEvent(UserEvent::CloseWalletSelector) => {
                 events::user_event::handle_close_wallet_selector(&state, &mut manager);
             }

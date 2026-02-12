@@ -47,23 +47,20 @@ pub fn respond_err(webview: &WebView, id: u64, message: &str) -> Result<()> {
 
 pub fn emit_accounts_changed(webview: &WebView, addrs: Vec<String>) {
     let payload = Value::Array(addrs.into_iter().map(Value::String).collect());
-    let _ = dispatch(
-        webview,
-        HostDispatchKind::ProviderEvent,
-        ProviderEventPayload {
-            event: "accountsChanged".to_string(),
-            value: payload,
-        },
-    );
+    emit_provider_event(webview, "accountsChanged", payload);
 }
 
 pub fn emit_chain_changed(webview: &WebView, chain_id_hex: String) {
+    emit_provider_event(webview, "chainChanged", Value::String(chain_id_hex));
+}
+
+pub fn emit_provider_event(webview: &WebView, event: &str, value: Value) {
     let _ = dispatch(
         webview,
         HostDispatchKind::ProviderEvent,
         ProviderEventPayload {
-            event: "chainChanged".to_string(),
-            value: Value::String(chain_id_hex),
+            event: event.to_string(),
+            value,
         },
     );
 }

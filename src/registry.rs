@@ -69,6 +69,48 @@ struct EffectiveIpfsConfig {
     helia_timeout_ms: u64,
 }
 
+const LAUNCH_PROGRESS_EVENT: &str = "vibefiLaunchProgress";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchProgress {
+    stage: String,
+    message: String,
+    percent: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_files: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_files: Option<usize>,
+}
+
+impl LaunchProgress {
+    fn simple(stage: &str, message: impl Into<String>, percent: u8) -> Self {
+        Self {
+            stage: stage.to_string(),
+            message: message.into(),
+            percent: percent.min(100),
+            completed_files: None,
+            total_files: None,
+        }
+    }
+
+    fn files(
+        stage: &str,
+        message: impl Into<String>,
+        percent: u8,
+        completed_files: usize,
+        total_files: usize,
+    ) -> Self {
+        Self {
+            stage: stage.to_string(),
+            message: message.into(),
+            percent: percent.min(100),
+            completed_files: Some(completed_files),
+            total_files: Some(total_files),
+        }
+    }
+}
+
 pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
     if devnet.config.dappRegistry.is_empty() {
         return Err(anyhow!("config missing dappRegistry"));
@@ -292,59 +334,138 @@ fn event_kind(log: &Log) -> Result<String> {
 }
 
 pub fn handle_launcher_ipc(
-    _webview: &wry::WebView,
     state: &AppState,
+    webview_id: &str,
     req: &crate::ipc_contract::IpcRequest,
-) -> Result<serde_json::Value> {
-    let devnet = state
-        .network
-        .as_ref()
-        .ok_or_else(|| anyhow!("Network not configured"))?;
+) -> Result<Option<serde_json::Value>> {
     match req.method.as_str() {
         "vibefi_listDapps" => {
-            println!("launcher: fetching dapp list from logs");
-            let dapps = list_dapps(devnet)?;
-            Ok(serde_json::to_value(dapps)?)
+            let state_clone = state.clone();
+            let webview_id = webview_id.to_string();
+            let ipc_id = req.id;
+            std::thread::spawn(move || {
+                let result = (|| -> Result<serde_json::Value> {
+                    let devnet = state_clone
+                        .network
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("Network not configured"))?;
+                    println!("launcher: fetching dapp list from logs");
+                    let dapps = list_dapps(devnet)?;
+                    Ok(serde_json::to_value(dapps)?)
+                })()
+                .map_err(|e| e.to_string());
+                let _ = state_clone.proxy.send_event(UserEvent::RpcResult {
+                    webview_id,
+                    ipc_id,
+                    result,
+                });
+            });
+            Ok(None)
         }
         "vibefi_launchDapp" => {
             let root_cid = req
                 .params
                 .get(0)
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("missing rootCid"))?;
+                .ok_or_else(|| anyhow!("missing rootCid"))?
+                .to_string();
             let name = req
                 .params
                 .get(1)
                 .and_then(|v| v.as_str())
-                .unwrap_or(root_cid);
-            println!("launcher: fetch bundle {root_cid}");
-            let bundle_dir = devnet.cache_dir.join(root_cid);
-            let ipfs = resolve_effective_ipfs_config(state, devnet);
-            println!("[ipfs] backend={}", ipfs.fetch_backend.as_str());
-            ensure_bundle_cached(devnet, &ipfs, root_cid, &bundle_dir)?;
-            println!("launcher: verify bundle manifest");
-            verify_manifest(&bundle_dir)?;
-            let dist_dir = bundle_dir.join(".vibefi").join("dist");
-            if dist_dir.join("index.html").exists() {
-                println!("launcher: using cached build");
-            } else {
-                println!("launcher: build bundle");
-                build_bundle(&bundle_dir, &dist_dir)?;
-            }
-            let _ = state
-                .proxy
-                .send_event(UserEvent::TabAction(TabAction::OpenApp {
-                    name: name.to_string(),
-                    dist_dir,
-                }));
-            Ok(serde_json::Value::Bool(true))
+                .unwrap_or(&root_cid)
+                .to_string();
+            let state_clone = state.clone();
+            let webview_id = webview_id.to_string();
+            let ipc_id = req.id;
+            std::thread::spawn(move || {
+                let result = launch_dapp(&state_clone, &webview_id, &root_cid, &name)
+                    .map(|_| serde_json::Value::Bool(true))
+                    .map_err(|e| e.to_string());
+                let _ = state_clone.proxy.send_event(UserEvent::RpcResult {
+                    webview_id,
+                    ipc_id,
+                    result,
+                });
+            });
+            Ok(None)
         }
         "vibefi_openSettings" => {
             let _ = state.proxy.send_event(UserEvent::OpenSettings);
-            Ok(serde_json::Value::Bool(true))
+            Ok(Some(serde_json::Value::Bool(true)))
         }
         _ => Err(anyhow!("Unsupported launcher method: {}", req.method)),
     }
+}
+
+fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -> Result<()> {
+    let devnet = state
+        .network
+        .as_ref()
+        .ok_or_else(|| anyhow!("Network not configured"))?;
+    println!("launcher: fetch bundle {root_cid}");
+    let bundle_dir = devnet.cache_dir.join(root_cid);
+    let ipfs = resolve_effective_ipfs_config(state, devnet);
+    println!("[ipfs] backend={}", ipfs.fetch_backend.as_str());
+
+    emit_launch_progress(
+        state,
+        webview_id,
+        LaunchProgress::simple("prepare", "Preparing bundle retrieval...", 2),
+    );
+
+    {
+        let mut emit = |progress: LaunchProgress| emit_launch_progress(state, webview_id, progress);
+        ensure_bundle_cached(devnet, &ipfs, root_cid, &bundle_dir, &mut emit)?;
+    }
+
+    println!("launcher: verify bundle manifest");
+    emit_launch_progress(
+        state,
+        webview_id,
+        LaunchProgress::simple("verify", "Verifying downloaded bundle...", 88),
+    );
+    verify_manifest(&bundle_dir)?;
+
+    let dist_dir = bundle_dir.join(".vibefi").join("dist");
+    if dist_dir.join("index.html").exists() {
+        println!("launcher: using cached build");
+        emit_launch_progress(
+            state,
+            webview_id,
+            LaunchProgress::simple("build", "Using cached build artifacts.", 96),
+        );
+    } else {
+        println!("launcher: build bundle");
+        emit_launch_progress(
+            state,
+            webview_id,
+            LaunchProgress::simple("build", "Building bundle...", 94),
+        );
+        build_bundle(&bundle_dir, &dist_dir)?;
+    }
+    emit_launch_progress(
+        state,
+        webview_id,
+        LaunchProgress::simple("done", "Launch complete.", 100),
+    );
+
+    let _ = state
+        .proxy
+        .send_event(UserEvent::TabAction(TabAction::OpenApp {
+            name: name.to_string(),
+            dist_dir,
+        }));
+    Ok(())
+}
+
+fn emit_launch_progress(state: &AppState, webview_id: &str, progress: LaunchProgress) {
+    let value = serde_json::to_value(progress).unwrap_or(serde_json::Value::Null);
+    let _ = state.proxy.send_event(UserEvent::ProviderEvent {
+        webview_id: webview_id.to_string(),
+        event: LAUNCH_PROGRESS_EVENT.to_string(),
+        value,
+    });
 }
 
 fn ensure_bundle_cached(
@@ -352,15 +473,23 @@ fn ensure_bundle_cached(
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     bundle_dir: &Path,
+    on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
     if bundle_dir.join("manifest.json").exists() {
+        on_progress(LaunchProgress::simple(
+            "download",
+            "Using cached IPFS bundle files.",
+            82,
+        ));
         return Ok(());
     }
     match ipfs.fetch_backend {
         IpfsFetchBackend::LocalNode => {
-            ensure_bundle_cached_local_node(devnet, ipfs, root_cid, bundle_dir)
+            ensure_bundle_cached_local_node(devnet, ipfs, root_cid, bundle_dir, on_progress)
         }
-        IpfsFetchBackend::Helia => ensure_bundle_cached_helia(ipfs, root_cid, bundle_dir),
+        IpfsFetchBackend::Helia => {
+            ensure_bundle_cached_helia(ipfs, root_cid, bundle_dir, on_progress)
+        }
     }
 }
 
@@ -369,8 +498,14 @@ fn ensure_bundle_cached_local_node(
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     bundle_dir: &Path,
+    on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
     println!("launcher: download bundle from local IPFS node");
+    on_progress(LaunchProgress::simple(
+        "download",
+        "Downloading bundle from local IPFS node...",
+        4,
+    ));
     fs::create_dir_all(bundle_dir).context("create cache dir")?;
     let (manifest, manifest_bytes) = fetch_dapp_manifest_local_node(devnet, ipfs, root_cid)?;
     download_dapp_bundle_local_node(
@@ -380,6 +515,7 @@ fn ensure_bundle_cached_local_node(
         bundle_dir,
         &manifest,
         &manifest_bytes,
+        on_progress,
     )?;
     Ok(())
 }
@@ -388,8 +524,14 @@ fn ensure_bundle_cached_helia(
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     bundle_dir: &Path,
+    on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
     println!("launcher: download bundle via Helia verified fetch");
+    on_progress(LaunchProgress::simple(
+        "download",
+        "Fetching manifest from IPFS...",
+        6,
+    ));
     fs::create_dir_all(bundle_dir).context("create cache dir")?;
     let mut helper = IpfsHelperBridge::spawn(IpfsHelperConfig {
         gateways: ipfs.helia_gateways.clone(),
@@ -410,7 +552,15 @@ fn ensure_bundle_cached_helia(
     }
     fs::write(bundle_dir.join("manifest.json"), &raw_bytes).context("write manifest.json")?;
 
-    for entry in &manifest.files {
+    let total_files = manifest.files.len();
+    on_progress(LaunchProgress::files(
+        "download",
+        format!("Downloading bundle files (0/{total_files})..."),
+        10,
+        0,
+        total_files,
+    ));
+    for (idx, entry) in manifest.files.iter().enumerate() {
         let file_url = format!("ipfs://{root_cid}/{}", entry.path);
         let response = helper.fetch(&file_url, Some(ipfs.helia_timeout_ms))?;
         if !(200..300).contains(&response.status) {
@@ -425,6 +575,14 @@ fn ensure_bundle_cached_helia(
             fs::create_dir_all(parent)?;
         }
         fs::write(dest, &response.body)?;
+        let completed = idx + 1;
+        on_progress(LaunchProgress::files(
+            "download",
+            format!("Downloaded {completed}/{total_files}: {}", entry.path),
+            download_percent(completed, total_files),
+            completed,
+            total_files,
+        ));
     }
     Ok(())
 }
@@ -456,10 +614,19 @@ fn download_dapp_bundle_local_node(
     out_dir: &Path,
     manifest: &BundleManifest,
     manifest_bytes: &[u8],
+    on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
     let gateway = normalize_gateway(&ipfs.gateway_endpoint);
     fs::write(out_dir.join("manifest.json"), manifest_bytes)?;
-    for entry in &manifest.files {
+    let total_files = manifest.files.len();
+    on_progress(LaunchProgress::files(
+        "download",
+        format!("Downloading bundle files (0/{total_files})..."),
+        10,
+        0,
+        total_files,
+    ));
+    for (idx, entry) in manifest.files.iter().enumerate() {
         let url = format!("{}/ipfs/{}/{}", gateway, root_cid, entry.path);
         let res = devnet.http.get(url).send().context("fetch bundle file")?;
         if !res.status().is_success() {
@@ -472,8 +639,24 @@ fn download_dapp_bundle_local_node(
             fs::create_dir_all(parent)?;
         }
         fs::write(dest, &bytes)?;
+        let completed = idx + 1;
+        on_progress(LaunchProgress::files(
+            "download",
+            format!("Downloaded {completed}/{total_files}: {}", entry.path),
+            download_percent(completed, total_files),
+            completed,
+            total_files,
+        ));
     }
     Ok(())
+}
+
+fn download_percent(completed: usize, total: usize) -> u8 {
+    if total == 0 {
+        return 80;
+    }
+    let pct = 10 + ((completed * 72) / total);
+    pct.min(82) as u8
 }
 
 fn resolve_effective_ipfs_config(state: &AppState, devnet: &NetworkContext) -> EffectiveIpfsConfig {

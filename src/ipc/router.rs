@@ -46,9 +46,10 @@ pub fn handle_ipc(
         if webview_id != "app-0" {
             bail!("launcher IPC is only available to the launcher webview");
         }
-        let result = handle_launcher_ipc(webview, state, &req);
+        let result = handle_launcher_ipc(state, webview_id, &req);
         match result {
-            Ok(v) => respond_ok(webview, req.id, v)?,
+            Ok(Some(v)) => respond_ok(webview, req.id, v)?,
+            Ok(None) => { /* response will be sent later */ }
             Err(e) => respond_err(webview, req.id, &e.to_string())?,
         }
         return Ok(());

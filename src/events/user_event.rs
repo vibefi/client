@@ -249,6 +249,17 @@ pub fn handle_rpc_result(
     }
 }
 
+pub fn handle_provider_event(
+    manager: &WebViewManager,
+    webview_id: String,
+    event: String,
+    value: serde_json::Value,
+) {
+    if let Some(wv) = manager.webview_for_id(&webview_id) {
+        ui_bridge::emit_provider_event(wv, &event, value);
+    }
+}
+
 pub fn handle_close_wallet_selector(state: &AppState, manager: &mut WebViewManager) {
     {
         let mut sel = state.selector_webview_id.lock().unwrap();

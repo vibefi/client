@@ -40,11 +40,14 @@ const heliaRouters = parseJsonList(
 const DEFAULT_GATEWAYS = [
   "https://trustless-gateway.link",
   "https://cloudflare-ipfs.com",
-  "https://4everland.io",
+  "https://ipfs.filebase.io",
+  "https://ipfs.io",
+  "https://dweb.link"
 ];
 const DEFAULT_ROUTERS = [
   "https://delegated-ipfs.dev",
   "https://cid.contact",
+  "https://indexer.pinata.cloud"
 ];
 
 let heliaPromise = null;
