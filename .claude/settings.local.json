@@ -9,7 +9,12 @@
       "WebFetch(domain:crates.io)",
       "WebFetch(domain:lib.rs)",
       "WebFetch(domain:www.npmjs.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(SKIP_UI_BUILD=1 cargo check:*)",
+      "Bash(dir:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

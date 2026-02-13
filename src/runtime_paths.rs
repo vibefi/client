@@ -48,6 +48,14 @@ fn probe_working_path_binary(name: &str) -> Option<PathBuf> {
         if candidate.is_file() && command_version_ok(&candidate) {
             return Some(candidate);
         }
+        // On Windows, executables typically have a .exe extension.
+        #[cfg(windows)]
+        {
+            let candidate_exe = dir.join(format!("{name}.exe"));
+            if candidate_exe.is_file() && command_version_ok(&candidate_exe) {
+                return Some(candidate_exe);
+            }
+        }
     }
     None
 }
