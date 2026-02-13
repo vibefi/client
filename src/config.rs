@@ -82,7 +82,9 @@ fn default_ipfs_helia_gateways() -> Vec<String> {
     vec![
         "https://trustless-gateway.link".to_string(),
         "https://cloudflare-ipfs.com".to_string(),
-        "https://4everland.io".to_string(),
+        "https://ipfs.filebase.io".to_string(),
+        "https://ipfs.io".to_string(),
+        "https://dweb.link".to_string(),
     ]
 }
 
@@ -90,6 +92,7 @@ fn default_ipfs_helia_routers() -> Vec<String> {
     vec![
         "https://delegated-ipfs.dev".to_string(),
         "https://cid.contact".to_string(),
+        "https://indexer.pinata.cloud".to_string(),
     ]
 }
 
