@@ -4922,6 +4922,7 @@ dependencies = [
  "alloy-signer-trezor",
  "alloy-sol-types",
  "anyhow",
+ "base64",
  "dirs",
  "gtk",
  "hex",

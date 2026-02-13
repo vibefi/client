@@ -1,9 +1,27 @@
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::IpfsFetchBackend;
 use crate::ipc_contract::IpcRequest;
 use crate::rpc_manager::RpcEndpoint;
 use crate::state::AppState;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IpfsSettingsResponse {
+    fetch_backend: IpfsFetchBackend,
+    gateway_endpoint: String,
+    default_gateway_endpoint: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetIpfsSettingsRequest {
+    fetch_backend: IpfsFetchBackend,
+    #[serde(default)]
+    gateway_endpoint: Option<String>,
+}
 
 pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<Value> {
     match req.method.as_str() {
@@ -33,9 +51,59 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
 
             // Persist to disk
             if let Some(ref config_path) = state.config_path {
-                let settings = crate::settings::UserSettings {
-                    rpc_endpoints: endpoints,
-                };
+                let mut settings = crate::settings::load_settings(config_path);
+                settings.rpc_endpoints = endpoints;
+                crate::settings::save_settings(config_path, &settings)?;
+            }
+
+            Ok(Value::Bool(true))
+        }
+        "vibefi_getIpfsSettings" => {
+            let default_backend = state
+                .network
+                .as_ref()
+                .map(|n| n.ipfs_fetch_backend)
+                .unwrap_or_default();
+            let default_gateway_endpoint = state
+                .network
+                .as_ref()
+                .map(|n| n.ipfs_gateway.clone())
+                .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
+
+            let user_settings = state
+                .config_path
+                .as_ref()
+                .map(|p| crate::settings::load_settings(p))
+                .unwrap_or_default();
+            let fetch_backend = user_settings.ipfs.fetch_backend.unwrap_or(default_backend);
+            let gateway_endpoint = user_settings
+                .ipfs
+                .gateway_endpoint
+                .unwrap_or_else(|| default_gateway_endpoint.clone());
+
+            Ok(serde_json::to_value(IpfsSettingsResponse {
+                fetch_backend,
+                gateway_endpoint,
+                default_gateway_endpoint,
+            })?)
+        }
+        "vibefi_setIpfsSettings" => {
+            let params: SetIpfsSettingsRequest = serde_json::from_value(
+                req.params
+                    .get(0)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("missing ipfs settings parameter"))?,
+            )?;
+
+            if let Some(ref config_path) = state.config_path {
+                let mut settings = crate::settings::load_settings(config_path);
+                settings.ipfs.fetch_backend = Some(params.fetch_backend);
+                settings.ipfs.gateway_endpoint = params
+                    .gateway_endpoint
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned);
                 crate::settings::save_settings(config_path, &settings)?;
             }
 

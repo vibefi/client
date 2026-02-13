@@ -3,19 +3,32 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::config::IpfsFetchBackend;
 use crate::rpc_manager::RpcEndpoint;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpfsUserSettings {
+    #[serde(default)]
+    pub fetch_backend: Option<IpfsFetchBackend>,
+    #[serde(default)]
+    pub gateway_endpoint: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserSettings {
     #[serde(default)]
     pub rpc_endpoints: Vec<RpcEndpoint>,
+    #[serde(default)]
+    pub ipfs: IpfsUserSettings,
 }
 
 impl Default for UserSettings {
     fn default() -> Self {
         Self {
             rpc_endpoints: Vec::new(),
+            ipfs: IpfsUserSettings::default(),
         }
     }
 }
