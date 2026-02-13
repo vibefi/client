@@ -19,6 +19,13 @@ fn macos_bundle_contents_dir() -> Option<PathBuf> {
     Some(contents.to_path_buf())
 }
 
+/// Returns the directory containing the running executable on Windows.
+/// NSIS installs place all binaries and resources in the same directory.
+fn windows_exe_dir() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    exe.parent().map(|p| p.to_path_buf())
+}
+
 /// Returns the install prefix for Linux packaged layouts, e.g. `/usr`
 /// from an executable path like `/usr/bin/vibefi`.
 fn linux_install_prefix_dir() -> Option<PathBuf> {
@@ -99,6 +106,14 @@ pub fn resolve_bun_binary() -> Result<String> {
         }
     }
 
+    // 3b. Bundled binary next to exe on Windows (NSIS install)
+    if let Some(dir) = windows_exe_dir() {
+        let bundled = dir.join("bun.exe");
+        if bundled.exists() && command_version_ok(&bundled) {
+            return Ok(bundled.to_string_lossy().into_owned());
+        }
+    }
+
     // 4. PATH fallback (dev mode and package fallback)
     if let Some(bun) = probe_working_path_binary("bun") {
         return Ok(bun.to_string_lossy().into_owned());
@@ -133,6 +148,14 @@ pub fn resolve_node_binary() -> Result<String> {
     // 3. Bundled binary in Linux package layouts (deb/appimage)
     if let Some(prefix) = linux_install_prefix_dir() {
         let bundled = prefix.join("bin").join("bun");
+        if bundled.exists() {
+            return Ok(bundled.to_string_lossy().into_owned());
+        }
+    }
+
+    // 3b. Bundled binary next to exe on Windows (NSIS install)
+    if let Some(dir) = windows_exe_dir() {
+        let bundled = dir.join("bun.exe");
         if bundled.exists() {
             return Ok(bundled.to_string_lossy().into_owned());
         }
@@ -189,6 +212,14 @@ pub fn resolve_wc_helper_script() -> Result<PathBuf> {
             .join("lib")
             .join(env!("CARGO_PKG_NAME"))
             .join("walletconnect-helper.mjs");
+        if bundled.exists() {
+            return Ok(bundled);
+        }
+    }
+
+    // 3b. Bundled resource next to exe on Windows (NSIS install)
+    if let Some(dir) = windows_exe_dir() {
+        let bundled = dir.join("walletconnect-helper.mjs");
         if bundled.exists() {
             return Ok(bundled);
         }
@@ -266,6 +297,18 @@ pub fn resolve_ipfs_helper_script() -> Result<PathBuf> {
         }
     }
 
+    // 3b. Bundled resource next to exe on Windows (NSIS install)
+    if let Some(dir) = windows_exe_dir() {
+        let bundled_file = dir.join("ipfs-helper.mjs");
+        if bundled_file.exists() {
+            return Ok(bundled_file);
+        }
+        let bundled_dir = dir.join("ipfs-helper").join("index.mjs");
+        if bundled_dir.exists() {
+            return Ok(bundled_dir);
+        }
+    }
+
     // 4. Dev fallback: source tree
     let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("ipfs-helper")
@@ -278,4 +321,50 @@ pub fn resolve_ipfs_helper_script() -> Result<PathBuf> {
         "ipfs helper script not found. \
          set VIBEFI_IPFS_HELPER_SCRIPT or ensure the app bundle includes it"
     )
+}
+
+/// Resolve the default network config file (sepolia.json) from the bundle.
+///
+/// Resolution order:
+/// 1. Bundled config inside macOS app bundle (`Contents/Resources/sepolia.json`)
+/// 2. Bundled config in Linux package layouts (`<prefix>/lib/<pkg>/sepolia.json`)
+/// 3. Bundled config next to exe on Windows (NSIS install)
+/// 4. Source-tree fallback via `CARGO_MANIFEST_DIR` (dev mode)
+pub fn resolve_default_config() -> Option<PathBuf> {
+    // 1. macOS app bundle
+    if let Some(contents) = macos_bundle_contents_dir() {
+        let bundled = contents.join("Resources").join("sepolia.json");
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+
+    // 2. Linux package layout
+    if let Some(prefix) = linux_install_prefix_dir() {
+        let bundled = prefix
+            .join("lib")
+            .join(env!("CARGO_PKG_NAME"))
+            .join("sepolia.json");
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+
+    // 3. Windows NSIS install (next to exe)
+    if let Some(dir) = windows_exe_dir() {
+        let bundled = dir.join("sepolia.json");
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+
+    // 4. Dev fallback: source tree
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("config")
+        .join("sepolia.json");
+    if dev_path.is_file() {
+        return Some(dev_path);
+    }
+
+    None
 }

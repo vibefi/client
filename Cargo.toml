@@ -7,19 +7,20 @@ edition = "2024"
 product-name = "VibeFi"
 identifier = "fi.vibefi.client"
 formats = ["app", "dmg", "deb", "appimage"]
-icons = ["packaging/icons/vibefi.icns", "packaging/icons/vibefi.png"]
+icons = ["packaging/icons/vibefi.icns", "packaging/icons/vibefi.png", "packaging/icons/vibefi.ico"]
 out-dir = "target/packager"
 
 resources = [
   "walletconnect-helper/dist/walletconnect-helper.mjs",
-  "ipfs-helper",
+  "ipfs-helper/dist/ipfs-helper.mjs",
   "config/mainnet.json",
   "config/sepolia.json",
+  "vendor/WebView2Loader.dll",
 ]
 
 external-binaries = ["vendor/bun/bun"]
 
-before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile && bun install --cwd ipfs-helper --frozen-lockfile && cd walletconnect-helper && bun run build:dist"
+before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile && bun install --cwd ipfs-helper --frozen-lockfile && cd walletconnect-helper && bun run build:dist && cd ../ipfs-helper && bun run build:dist"
 
 [package.metadata.packager.macos]
 minimum-system-version = "12.0"
@@ -35,6 +36,12 @@ application-folder-position = { x = 480, y = 220 }
 section = "utils"
 priority = "optional"
 depends = "libgtk-3-0, libwebkit2gtk-4.1-0"
+
+[package.metadata.packager.windows]
+allow-downgrades = true
+
+[package.metadata.packager.nsis]
+display-language-selector = false
 
 [dependencies]
 anyhow = "1"

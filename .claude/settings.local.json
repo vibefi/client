@@ -14,7 +14,8 @@
       "Bash(git add:*)",
       "Bash(SKIP_UI_BUILD=1 cargo check:*)",
       "Bash(dir:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(where:*)"
     ]
   }
 }
