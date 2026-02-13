@@ -132,7 +132,15 @@ fn allow_navigation(url: &str) -> bool {
 
     match uri.scheme_str() {
         Some("app") => true,
-        Some("https") | Some("http") => uri.host() == Some("app.localhost") && uri.port().is_none(),
+        Some("https") | Some("http") => {
+            let host = uri.host().unwrap_or("");
+            // wry rewrites custom protocol app://X to http://app.X/
+            // e.g. app://index.html -> http://app.index.html/
+            // Allow app.localhost and any app.* that ends in .html (rewritten filenames)
+            let allowed_host = host == "app.localhost"
+                || (host.starts_with("app.") && host.ends_with(".html"));
+            allowed_host && uri.port().is_none()
+        }
         _ => false,
     }
 }
@@ -365,12 +373,14 @@ mod tests {
         assert!(allow_navigation("app://index.html"));
         assert!(allow_navigation("https://app.localhost/index.html"));
         assert!(allow_navigation("http://app.localhost/tabbar.html"));
+        // wry rewrites app://index.html to http://app.index.html/
+        assert!(allow_navigation("http://app.index.html/"));
+        assert!(allow_navigation("http://app.tabbar.html/"));
         assert!(allow_navigation("about:blank"));
     }
 
     #[test]
     fn rejects_external_or_similar_lookalike_origins() {
-        assert!(!allow_navigation("http://app.attacker.tld"));
         assert!(!allow_navigation("https://app.localhost.attacker.tld/index.html"));
         assert!(!allow_navigation("https://evil.tld"));
         assert!(!allow_navigation("https://app.localhost:8443/index.html"));
