@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tao::event_loop::EventLoopProxy;
 
 use crate::ipc;
@@ -67,35 +69,18 @@ pub fn handle_open_wallet_selector(
         }
     }
     if let Some(host) = host {
-        let size = host.window.inner_size();
-        let id = manager.next_app_id();
-        let bounds = manager.app_rect(size.width, size.height);
-        match build_app_webview(
+        match open_app_tab(
             host,
-            &id,
+            state,
+            manager,
+            proxy,
             None,
             EmbeddedContent::WalletSelector,
-            state,
-            proxy.clone(),
-            bounds,
+            "Connect Wallet".to_string(),
         ) {
-            Ok(wv) => {
-                // Hide currently active before adding new
-                if let Some(active) = manager.active_app_webview() {
-                    let _ = active.set_visible(false);
-                }
-                let idx = manager.apps.len();
-                {
-                    let mut sel = state.selector_webview_id.lock().unwrap();
-                    *sel = Some(id.clone());
-                }
-                manager.apps.push(AppWebViewEntry {
-                    webview: wv,
-                    id,
-                    label: "Connect Wallet".to_string(),
-                });
-                manager.active_app_index = Some(idx);
-                manager.update_tab_bar();
+            Ok(id) => {
+                let mut sel = state.selector_webview_id.lock().unwrap();
+                *sel = Some(id);
             }
             Err(e) => eprintln!("failed to open wallet selector tab: {e:?}"),
         }
@@ -158,17 +143,13 @@ pub fn handle_hardware_sign_result(
     result: Result<String, String>,
 ) {
     if let Some(wv) = manager.webview_for_id(&webview_id) {
-        match result {
-            Ok(value) => {
-                let json_val: serde_json::Value = serde_json::Value::String(value);
-                if let Err(e) = ipc::respond_ok(wv, ipc_id, json_val) {
-                    eprintln!("[hardware] failed to send ok response: {e}");
-                }
-            }
-            Err(msg) => {
-                if let Err(e) = ipc::respond_err(wv, ipc_id, &msg) {
-                    eprintln!("[hardware] failed to send error response: {e}");
-                }
+        let is_ok = result.is_ok();
+        let mapped = result.map(serde_json::Value::String);
+        if let Err(e) = ipc::respond_value_result(wv, ipc_id, mapped) {
+            if is_ok {
+                eprintln!("[hardware] failed to send ok response: {e}");
+            } else {
+                eprintln!("[hardware] failed to send error response: {e}");
             }
         }
     }
@@ -193,34 +174,18 @@ pub fn handle_open_settings(
         }
     }
     if let Some(host) = host {
-        let size = host.window.inner_size();
-        let id = manager.next_app_id();
-        let bounds = manager.app_rect(size.width, size.height);
-        match build_app_webview(
+        match open_app_tab(
             host,
-            &id,
+            state,
+            manager,
+            proxy,
             None,
             EmbeddedContent::Settings,
-            state,
-            proxy.clone(),
-            bounds,
+            "Settings".to_string(),
         ) {
-            Ok(wv) => {
-                if let Some(active) = manager.active_app_webview() {
-                    let _ = active.set_visible(false);
-                }
-                let idx = manager.apps.len();
-                {
-                    let mut sel = state.settings_webview_id.lock().unwrap();
-                    *sel = Some(id.clone());
-                }
-                manager.apps.push(AppWebViewEntry {
-                    webview: wv,
-                    id,
-                    label: "Settings".to_string(),
-                });
-                manager.active_app_index = Some(idx);
-                manager.update_tab_bar();
+            Ok(id) => {
+                let mut sel = state.settings_webview_id.lock().unwrap();
+                *sel = Some(id);
             }
             Err(e) => eprintln!("failed to open settings tab: {e:?}"),
         }
@@ -234,16 +199,12 @@ pub fn handle_rpc_result(
     result: Result<serde_json::Value, String>,
 ) {
     if let Some(wv) = manager.webview_for_id(&webview_id) {
-        match result {
-            Ok(value) => {
-                if let Err(e) = ipc::respond_ok(wv, ipc_id, value) {
-                    eprintln!("[rpc] failed to send ok response: {e}");
-                }
-            }
-            Err(msg) => {
-                if let Err(e) = ipc::respond_err(wv, ipc_id, &msg) {
-                    eprintln!("[rpc] failed to send error response: {e}");
-                }
+        let is_ok = result.is_ok();
+        if let Err(e) = ipc::respond_value_result(wv, ipc_id, result) {
+            if is_ok {
+                eprintln!("[rpc] failed to send ok response: {e}");
+            } else {
+                eprintln!("[rpc] failed to send error response: {e}");
             }
         }
     }
@@ -278,35 +239,43 @@ pub fn handle_tab_action(
     match action {
         TabAction::OpenApp { name, dist_dir } => {
             if let Some(host) = host {
-                let size = host.window.inner_size();
-                let id = manager.next_app_id();
-                let bounds = manager.app_rect(size.width, size.height);
-                match build_app_webview(
+                if let Err(e) = open_app_tab(
                     host,
-                    &id,
-                    Some(dist_dir.clone()),
-                    EmbeddedContent::Default,
                     state,
-                    proxy.clone(),
-                    bounds,
+                    manager,
+                    proxy,
+                    Some(dist_dir),
+                    EmbeddedContent::Default,
+                    name,
                 ) {
-                    Ok(wv) => {
-                        // Hide currently active before adding new
-                        if let Some(active) = manager.active_app_webview() {
-                            let _ = active.set_visible(false);
-                        }
-                        let idx = manager.apps.len();
-                        manager.apps.push(AppWebViewEntry {
-                            webview: wv,
-                            id,
-                            label: name,
-                        });
-                        manager.active_app_index = Some(idx);
-                        manager.update_tab_bar();
-                    }
-                    Err(e) => eprintln!("failed to open app tab: {e:?}"),
+                    eprintln!("failed to open app tab: {e:?}");
                 }
             }
         }
     }
+}
+
+fn open_app_tab(
+    host: &WebViewHost,
+    state: &AppState,
+    manager: &mut WebViewManager,
+    proxy: &EventLoopProxy<UserEvent>,
+    dist_dir: Option<PathBuf>,
+    embedded: EmbeddedContent,
+    label: String,
+) -> anyhow::Result<String> {
+    let size = host.window.inner_size();
+    let id = manager.next_app_id();
+    let bounds = manager.app_rect(size.width, size.height);
+    let webview = build_app_webview(host, &id, dist_dir, embedded, state, proxy.clone(), bounds)?;
+
+    if let Some(active) = manager.active_app_webview() {
+        let _ = active.set_visible(false);
+    }
+    let idx = manager.apps.len();
+    manager.apps.push(AppWebViewEntry { webview, id, label });
+    manager.active_app_index = Some(idx);
+    manager.update_tab_bar();
+
+    Ok(manager.apps[idx].id.clone())
 }

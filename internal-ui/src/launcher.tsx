@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { composeStyles, sharedStyles } from "./styles/shared";
 
 type DappInfo = {
   dappId: string;
@@ -30,15 +31,7 @@ declare global {
   }
 }
 
-const styles = `
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: system-ui, sans-serif;
-    margin: 0;
-    color: #0f172a;
-    background: #f8fafc;
-  }
+const localStyles = `
   .app { padding: 24px; }
   h1 { margin: 0 0 8px; font-size: 26px; }
   p { margin: 0 0 16px; color: #475569; }
@@ -52,15 +45,6 @@ const styles = `
     color: #9a3412;
     font-size: 14px;
   }
-  button {
-    padding: 10px 14px;
-    border-radius: 10px;
-    border: 1px solid #cbd5f5;
-    background: #fff;
-    cursor: pointer;
-  }
-  button:disabled { opacity: 0.6; cursor: default; }
-  button.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
   table {
     width: 100%;
     border-collapse: collapse;
@@ -134,6 +118,7 @@ const styles = `
     font-size: 12px;
   }
 `;
+const styles = composeStyles(sharedStyles, localStyles);
 
 function asErrorMessage(err: unknown): string {
   if (err && typeof err === "object" && "message" in err && typeof (err as { message?: unknown }).message === "string") {

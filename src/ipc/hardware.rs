@@ -6,20 +6,20 @@ use crate::state::{AppState, ProviderInfo, UserEvent};
 
 use super::rpc::{
     build_filled_tx_request, build_typed_tx, decode_0x_hex, encode_signed_typed_tx_hex,
-    is_rpc_passthrough, proxy_rpc, send_raw_transaction,
+    send_raw_transaction,
 };
+use super::try_spawn_rpc_passthrough;
 
 pub(super) fn handle_hardware_ipc(
     state: &AppState,
     webview_id: &str,
     req: &IpcRequest,
 ) -> Result<Option<Value>> {
+    if let Some(value) = super::network_identity_response(state, req.method.as_str()) {
+        return Ok(Some(value));
+    }
+
     match req.method.as_str() {
-        "eth_chainId" => Ok(Some(Value::String(state.chain_id_hex()))),
-        "net_version" => {
-            let chain_id = state.wallet.lock().unwrap().chain.chain_id;
-            Ok(Some(Value::String(chain_id.to_string())))
-        }
         "eth_accounts" | "eth_requestAccounts" => {
             let ws = state.wallet.lock().unwrap();
             if ws.authorized {
@@ -56,47 +56,11 @@ pub(super) fn handle_hardware_ipc(
                 msg.as_bytes().to_vec()
             };
 
-            let proxy = state.proxy.clone();
-            let hardware_signer = state.hardware_signer.clone();
-            let ipc_id = req.id;
-            let wv_id = webview_id.to_string();
-
-            std::thread::spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err(format!("runtime error: {e}")),
-                        });
-                        return;
-                    }
-                };
-                let hs = hardware_signer.lock().unwrap();
-                let device = match hs.as_ref() {
-                    Some(d) => d,
-                    None => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err("Hardware wallet not connected".to_string()),
-                        });
-                        return;
-                    }
-                };
-                let result = rt
-                    .block_on(crate::hardware::sign_message(device, &bytes))
-                    .map_err(format_hardware_error);
-                drop(hs);
-                let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                    webview_id: wv_id,
-                    ipc_id,
-                    result,
-                });
+            spawn_hardware_async(state, webview_id, req.id, move |rt, hardware_signer| {
+                with_connected_hardware_device(hardware_signer, |device| {
+                    rt.block_on(crate::hardware::sign_message(device, &bytes))
+                        .map_err(format_hardware_error)
+                })
             });
 
             Ok(None) // deferred
@@ -109,48 +73,12 @@ pub(super) fn handle_hardware_ipc(
                 .ok_or_else(|| anyhow!("invalid params for eth_signTypedData_v4"))?
                 .to_string();
 
-            let proxy = state.proxy.clone();
-            let hardware_signer = state.hardware_signer.clone();
-            let ipc_id = req.id;
-            let wv_id = webview_id.to_string();
-
-            std::thread::spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err(format!("runtime error: {e}")),
-                        });
-                        return;
-                    }
-                };
+            spawn_hardware_async(state, webview_id, req.id, move |rt, hardware_signer| {
                 let hash = alloy_primitives::keccak256(typed_data_json.as_bytes());
-                let hs = hardware_signer.lock().unwrap();
-                let device = match hs.as_ref() {
-                    Some(d) => d,
-                    None => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err("Hardware wallet not connected".to_string()),
-                        });
-                        return;
-                    }
-                };
-                let result = rt
-                    .block_on(crate::hardware::sign_hash(device, hash.into()))
-                    .map_err(format_hardware_error);
-                drop(hs);
-                let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                    webview_id: wv_id,
-                    ipc_id,
-                    result,
-                });
+                with_connected_hardware_device(hardware_signer, |device| {
+                    rt.block_on(crate::hardware::sign_hash(device, hash.into()))
+                        .map_err(format_hardware_error)
+                })
             });
 
             Ok(None) // deferred
@@ -169,116 +97,77 @@ pub(super) fn handle_hardware_ipc(
                 .ok_or_else(|| anyhow!("invalid params for eth_sendTransaction"))?;
 
             // Sign and broadcast the typed transaction via the connected hardware device.
-            let proxy = state.proxy.clone();
-            let hardware_signer = state.hardware_signer.clone();
             let state_for_rpc = state.clone();
             let ipc_id = req.id;
-            let wv_id = webview_id.to_string();
 
-            std::thread::spawn(move || {
+            spawn_hardware_async(state, webview_id, ipc_id, move |rt, hardware_signer| {
                 // Build and fill the tx request inside the thread to avoid blocking
                 // the main event loop with the 4-5 sequential RPC fill calls.
-                let tx_request = match build_filled_tx_request(&state_for_rpc, tx_obj) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err(e.to_string()),
-                        });
-                        return;
-                    }
-                };
-                let mut tx = match build_typed_tx(tx_request) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err(e.to_string()),
-                        });
-                        return;
-                    }
-                };
+                let tx_request =
+                    build_filled_tx_request(&state_for_rpc, tx_obj).map_err(|e| e.to_string())?;
+                let mut tx = build_typed_tx(tx_request).map_err(|e| e.to_string())?;
 
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err(format!("runtime error: {e}")),
-                        });
-                        return;
-                    }
-                };
+                let sig = with_connected_hardware_device(hardware_signer, |device| {
+                    rt.block_on(crate::hardware::sign_transaction(device, &mut tx))
+                        .map_err(format_hardware_error)
+                })?;
 
-                let hs = hardware_signer.lock().unwrap();
-                let device = match hs.as_ref() {
-                    Some(d) => d,
-                    None => {
-                        let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                            webview_id: wv_id,
-                            ipc_id,
-                            result: Err("Hardware wallet not connected".to_string()),
-                        });
-                        return;
-                    }
-                };
-
-                let sign_result = rt
-                    .block_on(crate::hardware::sign_transaction(device, &mut tx))
-                    .map_err(format_hardware_error);
-                drop(hs);
-
-                let result = match sign_result {
-                    Ok(sig) => {
-                        let raw_tx_hex = encode_signed_typed_tx_hex(tx, sig);
-                        send_raw_transaction(&state_for_rpc, raw_tx_hex).map_err(|e| e.to_string())
-                    }
-                    Err(e) => Err(e),
-                };
-
-                let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                    webview_id: wv_id,
-                    ipc_id,
-                    result,
-                });
+                let raw_tx_hex = encode_signed_typed_tx_hex(tx, sig);
+                send_raw_transaction(&state_for_rpc, raw_tx_hex).map_err(|e| e.to_string())
             });
 
             Ok(None) // deferred
         }
         _ => {
-            if state.network.is_some() && is_rpc_passthrough(req.method.as_str()) {
-                let proxy = state.proxy.clone();
-                let state_clone = state.clone();
-                let ipc_id = req.id;
-                let method = req.method.clone();
-                let params = req.params.clone();
-                let wv_id = webview_id.to_string();
-                std::thread::spawn(move || {
-                    let req = crate::ipc_contract::IpcRequest {
-                        id: ipc_id,
-                        provider_id: None,
-                        method,
-                        params,
-                    };
-                    let result = proxy_rpc(&state_clone, &req).map_err(|e| e.to_string());
-                    let _ = proxy.send_event(UserEvent::RpcResult {
-                        webview_id: wv_id,
-                        ipc_id,
-                        result,
-                    });
-                });
+            if try_spawn_rpc_passthrough(state, webview_id, req) {
                 Ok(None)
             } else {
                 Err(anyhow!("Unsupported method: {}", req.method))
             }
         }
     }
+}
+
+fn spawn_hardware_async<F>(state: &AppState, webview_id: &str, ipc_id: u64, task: F)
+where
+    F: FnOnce(
+            &tokio::runtime::Runtime,
+            &std::sync::Arc<std::sync::Mutex<Option<crate::hardware::HardwareDevice>>>,
+        ) -> std::result::Result<String, String>
+        + Send
+        + 'static,
+{
+    let proxy = state.proxy.clone();
+    let hardware_signer = state.hardware_signer.clone();
+    let wv_id = webview_id.to_string();
+
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("runtime error: {e}"))
+            .and_then(|rt| task(&rt, &hardware_signer));
+
+        let _ = proxy.send_event(UserEvent::HardwareSignResult {
+            webview_id: wv_id,
+            ipc_id,
+            result,
+        });
+    });
+}
+
+fn with_connected_hardware_device<T, F>(
+    hardware_signer: &std::sync::Arc<std::sync::Mutex<Option<crate::hardware::HardwareDevice>>>,
+    task: F,
+) -> std::result::Result<T, String>
+where
+    F: FnOnce(&crate::hardware::HardwareDevice) -> std::result::Result<T, String>,
+{
+    let hs = hardware_signer.lock().unwrap();
+    let device = hs
+        .as_ref()
+        .ok_or_else(|| "Hardware wallet not connected".to_string())?;
+    task(device)
 }
 
 fn format_hardware_error(err: anyhow::Error) -> String {

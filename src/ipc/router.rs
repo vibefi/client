@@ -6,7 +6,9 @@ use crate::ipc_contract::{IpcRequest, KnownProviderId};
 use crate::registry::handle_launcher_ipc;
 use crate::state::{AppState, PendingConnect, ProviderInfo, UserEvent, WalletBackend};
 
-use super::{hardware, local, respond_err, respond_ok, rpc, selector, walletconnect};
+use super::{
+    hardware, local, respond_option_result, respond_value_result, selector, walletconnect,
+};
 
 pub fn handle_ipc(
     webview: &WebView,
@@ -19,11 +21,7 @@ pub fn handle_ipc(
     // Handle vibefi-wallet IPC from the wallet selector tab.
     if req.provider() == Some(KnownProviderId::Wallet) {
         let result = selector::handle_wallet_selector_ipc(webview, state, webview_id, &req);
-        match result {
-            Ok(Some(v)) => respond_ok(webview, req.id, v)?,
-            Ok(None) => { /* response will be sent later */ }
-            Err(e) => respond_err(webview, req.id, &e.to_string())?,
-        }
+        respond_option_result(webview, req.id, result)?;
         return Ok(());
     }
 
@@ -34,11 +32,8 @@ pub fn handle_ipc(
                 bail!("settings write methods are only available to the settings webview");
             }
         }
-        let result = super::settings::handle_settings_ipc(state, &req);
-        match result {
-            Ok(v) => respond_ok(webview, req.id, v)?,
-            Err(e) => respond_err(webview, req.id, &e.to_string())?,
-        }
+        let result = super::settings::handle_settings_ipc(state, &req).map_err(|e| e.to_string());
+        respond_value_result(webview, req.id, result)?;
         return Ok(());
     }
 
@@ -47,11 +42,7 @@ pub fn handle_ipc(
             bail!("launcher IPC is only available to the launcher webview");
         }
         let result = handle_launcher_ipc(state, webview_id, &req);
-        match result {
-            Ok(Some(v)) => respond_ok(webview, req.id, v)?,
-            Ok(None) => { /* response will be sent later */ }
-            Err(e) => respond_err(webview, req.id, &e.to_string())?,
-        }
+        respond_option_result(webview, req.id, result)?;
         return Ok(());
     }
 
@@ -79,14 +70,13 @@ pub fn handle_ipc(
         }
         Some(WalletBackend::Hardware) => hardware::handle_hardware_ipc(state, webview_id, &req),
         None => {
+            if let Some(value) = super::network_identity_response(state, req.method.as_str()) {
+                return respond_option_result(webview, req.id, Ok(Some(value)));
+            }
+
             // For methods other than eth_requestAccounts when no wallet is selected,
             // return sensible defaults.
             match req.method.as_str() {
-                "eth_chainId" => Ok(Some(Value::String(state.chain_id_hex()))),
-                "net_version" => {
-                    let chain_id = state.wallet.lock().unwrap().chain.chain_id;
-                    Ok(Some(Value::String(chain_id.to_string())))
-                }
                 "eth_accounts" => Ok(Some(Value::Array(vec![]))),
                 "wallet_getProviderInfo" => {
                     let info = ProviderInfo {
@@ -99,28 +89,7 @@ pub fn handle_ipc(
                     Ok(Some(serde_json::to_value(info)?))
                 }
                 _ => {
-                    if state.network.is_some() && rpc::is_rpc_passthrough(req.method.as_str()) {
-                        let proxy = state.proxy.clone();
-                        let state_clone = state.clone();
-                        let ipc_id = req.id;
-                        let method = req.method.clone();
-                        let params = req.params.clone();
-                        let wv_id = webview_id.to_string();
-                        std::thread::spawn(move || {
-                            let req = crate::ipc_contract::IpcRequest {
-                                id: ipc_id,
-                                provider_id: None,
-                                method,
-                                params,
-                            };
-                            let result =
-                                rpc::proxy_rpc(&state_clone, &req).map_err(|e| e.to_string());
-                            let _ = proxy.send_event(UserEvent::RpcResult {
-                                webview_id: wv_id,
-                                ipc_id,
-                                result,
-                            });
-                        });
+                    if super::try_spawn_rpc_passthrough(state, webview_id, &req) {
                         Ok(None)
                     } else {
                         Err(anyhow!(
@@ -132,11 +101,7 @@ pub fn handle_ipc(
         }
     };
 
-    match result {
-        Ok(Some(v)) => respond_ok(webview, req.id, v)?,
-        Ok(None) => { /* response will be sent later via UserEvent */ }
-        Err(e) => respond_err(webview, req.id, &e.to_string())?,
-    }
+    respond_option_result(webview, req.id, result)?;
 
     Ok(())
 }
