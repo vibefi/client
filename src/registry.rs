@@ -1,15 +1,16 @@
-use alloy_primitives::{Address, B256, Bytes, Log, U256};
-use alloy_sol_types::{SolEvent, sol};
-use anyhow::{Context, Result, anyhow};
+use alloy_primitives::{Address, Bytes, Log, B256, U256};
+use alloy_sol_types::{sol, SolEvent};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
+    io::ErrorKind,
     path::{Component, Path, PathBuf},
     str::FromStr,
 };
 
-use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
+use crate::bundle::{build_bundle, verify_manifest, BundleManifest};
 use crate::config::{IpfsFetchBackend, NetworkContext};
 use crate::ipfs_helper::{IpfsHelperBridge, IpfsHelperConfig};
 use crate::state::{AppState, TabAction, UserEvent};
@@ -476,21 +477,48 @@ fn ensure_bundle_cached(
     on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
     if bundle_dir.join("manifest.json").exists() {
-        on_progress(LaunchProgress::simple(
-            "download",
-            "Using cached IPFS bundle files.",
-            82,
-        ));
-        return Ok(());
+        match verify_manifest(bundle_dir) {
+            Ok(()) => {
+                on_progress(LaunchProgress::simple(
+                    "download",
+                    "Using cached IPFS bundle files.",
+                    82,
+                ));
+                return Ok(());
+            }
+            Err(err) => {
+                println!(
+                    "launcher: cached bundle invalid, purging cache and re-downloading: {err:#}"
+                );
+                on_progress(LaunchProgress::simple(
+                    "download",
+                    "Cached bundle is incomplete. Re-downloading...",
+                    8,
+                ));
+                match fs::remove_dir_all(bundle_dir) {
+                    Ok(()) => {}
+                    Err(remove_err) if remove_err.kind() == ErrorKind::NotFound => {}
+                    Err(remove_err) => {
+                        return Err(remove_err).context("remove invalid bundle cache");
+                    }
+                }
+            }
+        }
     }
-    match ipfs.fetch_backend {
+    let result = match ipfs.fetch_backend {
         IpfsFetchBackend::LocalNode => {
             ensure_bundle_cached_local_node(devnet, ipfs, root_cid, bundle_dir, on_progress)
         }
         IpfsFetchBackend::Helia => {
             ensure_bundle_cached_helia(ipfs, root_cid, bundle_dir, on_progress)
         }
+    };
+    if let Err(err) = result {
+        // Prevent interrupted downloads from becoming sticky cache failures.
+        let _ = fs::remove_dir_all(bundle_dir);
+        return Err(err);
     }
+    Ok(())
 }
 
 fn ensure_bundle_cached_local_node(
@@ -550,7 +578,6 @@ fn ensure_bundle_cached_helia(
     if manifest.files.is_empty() {
         return Err(anyhow!("manifest.json missing files list"));
     }
-    fs::write(bundle_dir.join("manifest.json"), &raw_bytes).context("write manifest.json")?;
 
     let total_files = manifest.files.len();
     on_progress(LaunchProgress::files(
@@ -584,6 +611,7 @@ fn ensure_bundle_cached_helia(
             total_files,
         ));
     }
+    fs::write(bundle_dir.join("manifest.json"), &raw_bytes).context("write manifest.json")?;
     Ok(())
 }
 
@@ -617,7 +645,6 @@ fn download_dapp_bundle_local_node(
     on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
     let gateway = normalize_gateway(&ipfs.gateway_endpoint);
-    fs::write(out_dir.join("manifest.json"), manifest_bytes)?;
     let total_files = manifest.files.len();
     on_progress(LaunchProgress::files(
         "download",
@@ -648,6 +675,7 @@ fn download_dapp_bundle_local_node(
             total_files,
         ));
     }
+    fs::write(out_dir.join("manifest.json"), manifest_bytes)?;
     Ok(())
 }
 
