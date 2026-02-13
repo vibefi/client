@@ -98,6 +98,15 @@ You can produce `/path/to/packaged-bundle` with the CLI `package` command.
 
 The bundle build step uses `bun` and `vite` from the bundle's `package.json`.
 
+## IPFS retrieval
+
+Dapp bundles are fetched from IPFS using one of two backends, configurable in Settings:
+
+- **Helia Verified Fetch** (default): Fetches content via trustless HTTP gateways. Every block is cryptographically verified locally against the Merkle DAG structure — the CID you request is the CID you get. No local IPFS node required.
+- **Local IPFS Node**: For advanced users running their own IPFS daemon (e.g. Kubo). Fetches from `http://127.0.0.1:8080` by default. The local node is implicitly trusted since you control it.
+
+Helia is the recommended default because it provides strong integrity guarantees without requiring any local infrastructure.
+
 ## What is sandboxed?
 
 - The WebView only allows navigation to `app://...` and `about:blank`.

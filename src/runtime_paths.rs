@@ -199,3 +199,75 @@ pub fn resolve_wc_helper_script() -> Result<PathBuf> {
          set VIBEFI_WC_HELPER_SCRIPT or ensure the app bundle includes it"
     )
 }
+
+/// Resolve the IPFS helper script path.
+///
+/// Resolution order:
+/// 1. `VIBEFI_IPFS_HELPER_SCRIPT` environment variable
+/// 2. Bundled script inside macOS app bundle (`Contents/Resources/ipfs-helper/index.mjs`)
+/// 3. Bundled script in Linux package layouts (`<prefix>/lib/<pkg>/ipfs-helper/index.mjs`)
+/// 4. Source-tree fallback via `CARGO_MANIFEST_DIR` (dev mode)
+pub fn resolve_ipfs_helper_script() -> Result<PathBuf> {
+    // 1. Explicit env override
+    if let Ok(path) = env::var("VIBEFI_IPFS_HELPER_SCRIPT") {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            bail!("VIBEFI_IPFS_HELPER_SCRIPT is set but empty or whitespace");
+        }
+        let p = PathBuf::from(trimmed);
+        if p.is_file() {
+            return Ok(p);
+        }
+        bail!(
+            "VIBEFI_IPFS_HELPER_SCRIPT is set to {:?} but the file does not exist or is not a regular file",
+            path
+        );
+    }
+
+    // 2. Bundled script in app bundle (cargo-packager flattens file resources into Contents/Resources/)
+    if let Some(contents) = macos_bundle_contents_dir() {
+        let bundled_file = contents.join("Resources").join("ipfs-helper.mjs");
+        if bundled_file.exists() {
+            return Ok(bundled_file);
+        }
+        let bundled_dir = contents
+            .join("Resources")
+            .join("ipfs-helper")
+            .join("index.mjs");
+        if bundled_dir.exists() {
+            return Ok(bundled_dir);
+        }
+    }
+
+    // 3. Bundled script in Linux package layouts (deb/appimage)
+    if let Some(prefix) = linux_install_prefix_dir() {
+        let bundled_file = prefix
+            .join("lib")
+            .join(env!("CARGO_PKG_NAME"))
+            .join("ipfs-helper.mjs");
+        if bundled_file.exists() {
+            return Ok(bundled_file);
+        }
+        let bundled_dir = prefix
+            .join("lib")
+            .join(env!("CARGO_PKG_NAME"))
+            .join("ipfs-helper")
+            .join("index.mjs");
+        if bundled_dir.exists() {
+            return Ok(bundled_dir);
+        }
+    }
+
+    // 4. Dev fallback: source tree
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("ipfs-helper")
+        .join("index.mjs");
+    if dev_path.exists() {
+        return Ok(dev_path);
+    }
+
+    bail!(
+        "ipfs helper script not found. \
+         set VIBEFI_IPFS_HELPER_SCRIPT or ensure the app bundle includes it"
+    )
+}

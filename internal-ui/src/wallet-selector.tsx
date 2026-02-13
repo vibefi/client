@@ -2,6 +2,14 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { IpcClient } from "./ipc/client";
 import { PROVIDER_IDS, type WalletconnectPairingPayload } from "./ipc/contracts";
+import {
+  composeStyles,
+  sharedFeedbackStyles,
+  sharedPageStyles,
+  sharedStyles,
+  sharedSurfaceStyles,
+  sharedUtilityStyles,
+} from "./styles/shared";
 
 declare global {
   interface Window {
@@ -11,30 +19,14 @@ declare global {
 
 type Phase = "select" | "connecting" | "done";
 
-const styles = `
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    background: #f8fafc;
-    color: #0f172a;
-  }
-  .container {
-    max-width: 480px;
-    margin: 60px auto;
-    padding: 32px;
-  }
-  h1 { font-size: 22px; margin-bottom: 6px; }
-  .subtitle { color: #475569; margin-bottom: 24px; font-size: 14px; }
+const localStyles = `
   .options { display: flex; flex-direction: column; gap: 12px; }
   .option {
     display: flex;
     align-items: center;
     gap: 14px;
     padding: 16px;
-    border: 1px solid #e2e8f0;
     border-radius: 12px;
-    background: #fff;
     cursor: pointer;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
@@ -85,25 +77,20 @@ const styles = `
     margin-bottom: 8px;
   }
   .actions { display: flex; gap: 8px; justify-content: center; }
-  button {
-    padding: 8px 16px;
-    border-radius: 8px;
-    border: 1px solid #cbd5e1;
-    background: #fff;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  button:hover { background: #f1f5f9; }
-  button.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
-  button.primary:hover { background: #1e293b; }
 
   .done-view { text-align: center; padding-top: 40px; }
   .done-view .check { font-size: 48px; margin-bottom: 12px; }
   .done-view h2 { font-size: 18px; margin-bottom: 4px; }
   .done-view .desc { color: #475569; font-size: 14px; }
-
-  .error { color: #dc2626; font-size: 13px; margin-top: 8px; }
 `;
+const styles = composeStyles(
+  sharedStyles,
+  sharedPageStyles,
+  sharedFeedbackStyles,
+  sharedSurfaceStyles,
+  sharedUtilityStyles,
+  localStyles
+);
 
 const walletClient = new IpcClient();
 
@@ -192,7 +179,7 @@ function App() {
     return (
       <>
         <style>{styles}</style>
-        <div className="container done-view">
+        <div className="page-container compact done-view">
           <div className="check">&#x2705;</div>
           <h2>Connected</h2>
           <div className="desc">Wallet connected successfully. This tab will close automatically.</div>
@@ -205,7 +192,7 @@ function App() {
     return (
       <>
         <style>{styles}</style>
-        <div className="container connecting-view">
+        <div className="page-container compact connecting-view">
           <div className="spinner" />
           <h2>Connecting...</h2>
           <div className="desc">Setting up wallet connection</div>
@@ -219,7 +206,7 @@ function App() {
     return (
       <>
         <style>{styles}</style>
-        <div className="container connecting-view">
+        <div className="page-container compact connecting-view">
           <h2>Scan QR Code</h2>
           <div className="desc">Open a WalletConnect-compatible wallet and scan the QR code below.</div>
           {qrSvg && (
@@ -239,26 +226,26 @@ function App() {
   return (
     <>
       <style>{styles}</style>
-      <div className="container">
-        <h1>Connect Wallet</h1>
+      <div className="page-container compact">
+        <h1 className="page-title">Connect Wallet</h1>
         <div className="subtitle">Choose how you want to connect to this dapp.</div>
-        {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+        {error && <div className="error mt-0 mb-12">{error}</div>}
         <div className="options">
-          <div className="option" onClick={connectLocal}>
+          <div className="option surface-card" onClick={connectLocal}>
             <div className="option-icon local">&#x1F511;</div>
             <div className="option-text">
               <strong>Local Signer</strong>
               <span>Use the built-in dev key for signing transactions.</span>
             </div>
           </div>
-          <div className="option" onClick={connectWalletConnect}>
+          <div className="option surface-card" onClick={connectWalletConnect}>
             <div className="option-icon wc">&#x1F4F1;</div>
             <div className="option-text">
               <strong>WalletConnect</strong>
               <span>Connect a mobile wallet by scanning a QR code.</span>
             </div>
           </div>
-          <div className="option" onClick={connectHardware}>
+          <div className="option surface-card" onClick={connectHardware}>
             <div className="option-icon hw">&#x1F50C;</div>
             <div className="option-text">
               <strong>Hardware Wallet</strong>

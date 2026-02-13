@@ -12,13 +12,14 @@ out-dir = "target/packager"
 
 resources = [
   "walletconnect-helper/dist/walletconnect-helper.mjs",
+  "ipfs-helper",
   "config/mainnet.json",
   "config/sepolia.json",
 ]
 
 external-binaries = ["vendor/bun/bun"]
 
-before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile && cd walletconnect-helper && bun run build:dist"
+before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile && bun install --cwd ipfs-helper --frozen-lockfile && cd walletconnect-helper && bun run build:dist"
 
 [package.metadata.packager.macos]
 minimum-system-version = "12.0"
@@ -60,6 +61,7 @@ alloy-rpc-types-eth = "1.5"
 alloy-sol-types = "1.5"
 tokio = { version = "1", features = ["rt", "net", "time"] }
 dirs = "6"
+base64 = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
