@@ -10,9 +10,9 @@ use crate::state::{AppState, ProviderInfo, UserEvent};
 
 use super::rpc::{
     build_filled_tx_request, build_typed_tx, decode_0x_hex, encode_signed_typed_tx_hex,
-    is_rpc_passthrough, parse_hex_u64, proxy_rpc, send_raw_transaction,
+    parse_hex_u64, send_raw_transaction,
 };
-use super::{emit_accounts_changed, emit_chain_changed};
+use super::{emit_accounts_changed, emit_chain_changed, try_spawn_rpc_passthrough};
 
 pub(super) fn handle_local_ipc(
     webview: &WebView,
@@ -20,12 +20,11 @@ pub(super) fn handle_local_ipc(
     webview_id: &str,
     req: &IpcRequest,
 ) -> Result<Option<Value>> {
+    if let Some(value) = super::network_identity_response(state, req.method.as_str()) {
+        return Ok(Some(value));
+    }
+
     match req.method.as_str() {
-        "eth_chainId" => Ok(Some(Value::String(state.chain_id_hex()))),
-        "net_version" => {
-            let chain_id = state.wallet.lock().unwrap().chain.chain_id;
-            Ok(Some(Value::String(chain_id.to_string())))
-        }
         "eth_accounts" => {
             let ws = state.wallet.lock().unwrap();
             if ws.authorized {
@@ -162,27 +161,7 @@ pub(super) fn handle_local_ipc(
             Ok(Some(serde_json::to_value(info)?))
         }
         _ => {
-            if state.network.is_some() && is_rpc_passthrough(req.method.as_str()) {
-                let proxy = state.proxy.clone();
-                let state_clone = state.clone();
-                let ipc_id = req.id;
-                let method = req.method.clone();
-                let params = req.params.clone();
-                let wv_id = webview_id.to_string();
-                std::thread::spawn(move || {
-                    let req = IpcRequest {
-                        id: ipc_id,
-                        provider_id: None,
-                        method,
-                        params,
-                    };
-                    let result = proxy_rpc(&state_clone, &req).map_err(|e| e.to_string());
-                    let _ = proxy.send_event(UserEvent::RpcResult {
-                        webview_id: wv_id,
-                        ipc_id,
-                        result,
-                    });
-                });
+            if try_spawn_rpc_passthrough(state, webview_id, req) {
                 Ok(None)
             } else {
                 Err(anyhow!("Unsupported method: {}", req.method))

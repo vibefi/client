@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { composeStyles, sharedStyles } from "./styles/shared";
 
 type Eip1193Request = (args: { method: string; params?: unknown[] }) => Promise<unknown>;
 type Eip1193Provider = {
@@ -13,9 +14,8 @@ declare global {
   }
 }
 
-const styles = `
-  * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; margin: 24px; }
+const localStyles = `
+  body { margin: 24px; }
   pre {
     background: #f6f6f6;
     padding: 12px;
@@ -25,14 +25,13 @@ const styles = `
     white-space: pre-wrap;
   }
   button {
-    padding: 10px 14px;
     border-radius: 12px;
-    border: 1px solid #ddd;
+    border-color: #ddd;
     margin-right: 8px;
     margin-bottom: 8px;
-    cursor: pointer;
   }
 `;
+const styles = composeStyles(sharedStyles, localStyles);
 
 function stringify(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);

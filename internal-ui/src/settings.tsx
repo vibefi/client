@@ -2,6 +2,15 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { IpcClient } from "./ipc/client";
 import { PROVIDER_IDS } from "./ipc/contracts";
+import {
+  composeStyles,
+  sharedFeedbackStyles,
+  sharedFormFieldStyles,
+  sharedPageStyles,
+  sharedStyles,
+  sharedSurfaceStyles,
+  sharedUtilityStyles,
+} from "./styles/shared";
 
 declare global {
   interface Window {
@@ -28,21 +37,7 @@ const DEFAULT_IPFS_SETTINGS: IpfsSettings = {
   defaultGatewayEndpoint: "http://127.0.0.1:8080",
 };
 
-const styles = `
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    background: #f8fafc;
-    color: #0f172a;
-  }
-  .container {
-    max-width: 620px;
-    margin: 40px auto;
-    padding: 32px;
-  }
-  h1 { font-size: 22px; margin-bottom: 6px; }
-  .subtitle { color: #475569; margin-bottom: 24px; font-size: 14px; }
+const localStyles = `
   .section { margin-bottom: 28px; }
   .section h2 { font-size: 16px; margin-bottom: 12px; }
   .endpoint-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
@@ -51,9 +46,6 @@ const styles = `
     align-items: center;
     gap: 8px;
     padding: 10px 12px;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    background: #fff;
     font-size: 13px;
   }
   .endpoint-item .index {
@@ -100,58 +92,29 @@ const styles = `
     gap: 8px;
     align-items: flex-end;
   }
-  .add-form .field { flex: 1; }
-  .field label { display: block; font-size: 12px; color: #64748b; margin-bottom: 4px; }
-  .field input {
-    width: 100%;
-    padding: 8px 10px;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    font-size: 13px;
-    background: #fff;
-  }
-  .field input:focus { outline: none; border-color: #94a3b8; }
-  .field input:disabled { background: #f8fafc; color: #94a3b8; cursor: default; }
   .radio-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
   .radio-option {
     display: flex;
     gap: 8px;
     align-items: flex-start;
     padding: 10px 12px;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    background: #fff;
   }
   .radio-option input { margin-top: 2px; }
   .radio-option .label { font-size: 13px; font-weight: 600; color: #1e293b; }
   .radio-option .desc { font-size: 12px; color: #64748b; margin-top: 2px; }
   .muted { font-size: 12px; color: #64748b; margin-top: 6px; }
   .ipfs-actions { margin-top: 12px; display: flex; gap: 8px; }
-  button.primary {
-    padding: 8px 16px;
-    border-radius: 8px;
-    border: 1px solid #0f172a;
-    background: #0f172a;
-    color: #fff;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  button.primary:hover { background: #1e293b; }
   button.primary:disabled { opacity: 0.5; cursor: default; }
-  button.secondary {
-    padding: 8px 16px;
-    border-radius: 8px;
-    border: 1px solid #cbd5e1;
-    background: #fff;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  button.secondary:hover { background: #f1f5f9; }
-  .status { font-size: 13px; margin-top: 8px; }
-  .status.ok { color: #0f766e; }
-  .status.err { color: #dc2626; }
-  .empty { color: #94a3b8; font-size: 13px; padding: 12px 0; }
 `;
+const styles = composeStyles(
+  sharedStyles,
+  sharedPageStyles,
+  sharedFormFieldStyles,
+  sharedFeedbackStyles,
+  sharedSurfaceStyles,
+  sharedUtilityStyles,
+  localStyles
+);
 
 const settingsClient = new IpcClient();
 
@@ -277,8 +240,8 @@ function App() {
   return (
     <>
       <style>{styles}</style>
-      <div className="container">
-        <h1>Settings</h1>
+      <div className="page-container wide">
+        <h1 className="page-title">Settings</h1>
         <div className="subtitle">Manage RPC endpoints and IPFS retrieval preferences.</div>
 
         <div className="section">
@@ -290,7 +253,7 @@ function App() {
           ) : (
             <div className="endpoint-list">
               {endpoints.map((ep, idx) => (
-                <div className="endpoint-item" key={`${idx}-${ep.url}`}>
+                <div className="endpoint-item surface-card" key={`${idx}-${ep.url}`}>
                   <div className="index">{idx + 1}</div>
                   <div className="info">
                     <div className="url">{ep.url}</div>
@@ -308,7 +271,7 @@ function App() {
           )}
 
           <div className="add-form">
-            <div className="field" style={{ flex: 2 }}>
+            <div className="field flex-2">
               <label>URL</label>
               <input
                 type="text"
@@ -318,7 +281,7 @@ function App() {
                 onKeyDown={(e) => { if (e.key === "Enter") addEndpoint(); }}
               />
             </div>
-            <div className="field" style={{ flex: 1 }}>
+            <div className="field flex-1">
               <label>Label (optional)</label>
               <input
                 type="text"
@@ -328,7 +291,7 @@ function App() {
                 onKeyDown={(e) => { if (e.key === "Enter") addEndpoint(); }}
               />
             </div>
-            <button className="secondary" onClick={addEndpoint} style={{ marginBottom: 0 }}>Add</button>
+            <button className="secondary mb-0" onClick={addEndpoint}>Add</button>
           </div>
         </div>
 
@@ -339,7 +302,7 @@ function App() {
           ) : (
             <>
               <div className="radio-group">
-                <label className="radio-option">
+                <label className="radio-option surface-card">
                   <input
                     type="radio"
                     name="ipfs-backend"
@@ -351,7 +314,7 @@ function App() {
                     <div className="desc">Fetches via trustless gateways with local cryptographic verification. No local node needed.</div>
                   </div>
                 </label>
-                <label className="radio-option">
+                <label className="radio-option surface-card">
                   <input
                     type="radio"
                     name="ipfs-backend"
@@ -395,4 +358,3 @@ const rootEl = document.getElementById("root");
 if (rootEl) {
   createRoot(rootEl).render(<App />);
 }
-

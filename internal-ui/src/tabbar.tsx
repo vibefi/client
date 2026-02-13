@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { IpcClient } from "./ipc/client";
 import { PROVIDER_IDS, type Tab } from "./ipc/contracts";
+import { composeStyles, sharedStyles } from "./styles/shared";
 
 declare global {
   interface Window {
@@ -12,8 +13,8 @@ declare global {
 
 const tabbarClient = new IpcClient();
 
-const styles = `
-* { margin: 0; padding: 0; box-sizing: border-box; }
+const localStyles = `
+* { margin: 0; padding: 0; }
 html, body {
   height: 40px;
   overflow: hidden;
@@ -64,6 +65,7 @@ html, body {
 }
 .tab-close:hover { opacity: 1; background: #334155; }
 `;
+const styles = composeStyles(sharedStyles, localStyles);
 
 function postTabbarCommand(method: "switchTab" | "closeTab", index: number) {
   tabbarClient.notify(PROVIDER_IDS.tabbar, method, [index]);
