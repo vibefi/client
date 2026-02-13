@@ -105,6 +105,38 @@ fn csp_response(
         .unwrap()
 }
 
+fn should_enable_devtools() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+
+    std::env::var("VIBEFI_ENABLE_DEVTOOLS")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn allow_navigation(url: &str) -> bool {
+    if url == "about:blank" {
+        return true;
+    }
+
+    let Ok(uri) = url.parse::<wry::http::Uri>() else {
+        return false;
+    };
+
+    match uri.scheme_str() {
+        Some("app") => true,
+        Some("https") | Some("http") => uri.host() == Some("app.localhost") && uri.port().is_none(),
+        _ => false,
+    }
+}
+
 pub fn build_app_webview(
     host: &WebViewHost,
     id: &str,
@@ -130,7 +162,10 @@ pub fn build_app_webview(
         if let Some(ref dist) = protocol_dist {
             eprintln!("[webview:debug] serving from dist_dir: path={path:?}");
             let (body, mime) = serve_file(dist, &path);
-            eprintln!("[webview:debug] dist response: mime={mime:?}, body_len={}", body.len());
+            eprintln!(
+                "[webview:debug] dist response: mime={mime:?}, body_len={}",
+                body.len()
+            );
             csp_response(body, mime)
         } else {
             let matched = match (embedded, path.as_str()) {
@@ -151,14 +186,20 @@ pub fn build_app_webview(
                     )
                 }
                 (EmbeddedContent::Launcher, "/launcher.js") => {
-                    eprintln!("[webview:debug] serving embedded launcher.js, len={}", LAUNCHER_JS.len());
+                    eprintln!(
+                        "[webview:debug] serving embedded launcher.js, len={}",
+                        LAUNCHER_JS.len()
+                    );
                     csp_response(
                         LAUNCHER_JS.as_bytes().to_vec(),
                         "application/javascript; charset=utf-8".to_string(),
                     )
                 }
                 (EmbeddedContent::Default, "/home.js") => {
-                    eprintln!("[webview:debug] serving embedded home.js, len={}", HOME_JS.len());
+                    eprintln!(
+                        "[webview:debug] serving embedded home.js, len={}",
+                        HOME_JS.len()
+                    );
                     csp_response(
                         HOME_JS.as_bytes().to_vec(),
                         "application/javascript; charset=utf-8".to_string(),
@@ -173,9 +214,7 @@ pub fn build_app_webview(
                     "application/javascript; charset=utf-8".to_string(),
                 ),
                 _ => {
-                    eprintln!(
-                        "[webview:debug] NOT FOUND: embedded={embedded:?}, path={path:?}"
-                    );
+                    eprintln!("[webview:debug] NOT FOUND: embedded={embedded:?}, path={path:?}");
                     csp_response(
                         format!("Not found: {}", path).into_bytes(),
                         "text/plain; charset=utf-8".to_string(),
@@ -187,10 +226,7 @@ pub fn build_app_webview(
     };
 
     let navigation_handler = |url: String| {
-        let allowed = url.starts_with("app://")
-            || url.starts_with("http://app.")
-            || url.starts_with("https://app.localhost")
-            || url == "about:blank";
+        let allowed = allow_navigation(&url);
         eprintln!("[webview:debug] navigation_handler: url={url:?} -> allowed={allowed}");
         allowed
     };
@@ -206,7 +242,7 @@ pub fn build_app_webview(
         .with_id(id)
         .with_bounds(bounds)
         .with_initialization_script(init_script)
-        .with_devtools(true)
+        .with_devtools(should_enable_devtools())
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://index.html")
         .with_navigation_handler(navigation_handler)
@@ -262,14 +298,20 @@ pub fn build_tab_bar_webview(
         let path = normalized_app_path(request.uri());
         let (body, mime) = match path.as_str() {
             "/" | "/index.html" | "/tabbar.html" => {
-                eprintln!("[webview:debug] tabbar: serving tabbar.html, len={}", TAB_BAR_HTML.len());
+                eprintln!(
+                    "[webview:debug] tabbar: serving tabbar.html, len={}",
+                    TAB_BAR_HTML.len()
+                );
                 (
                     TAB_BAR_HTML.as_bytes().to_vec(),
                     "text/html; charset=utf-8".to_string(),
                 )
             }
             "/tabbar.js" => {
-                eprintln!("[webview:debug] tabbar: serving tabbar.js, len={}", TAB_BAR_JS.len());
+                eprintln!(
+                    "[webview:debug] tabbar: serving tabbar.js, len={}",
+                    TAB_BAR_JS.len()
+                );
                 (
                     TAB_BAR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
@@ -290,7 +332,7 @@ pub fn build_tab_bar_webview(
         .with_id("tab-bar")
         .with_bounds(bounds)
         .with_initialization_script(PRELOAD_TAB_BAR_JS.to_string())
-        .with_devtools(true)
+        .with_devtools(should_enable_devtools())
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://tabbar.html")
         .with_ipc_handler(move |req: wry::http::Request<String>| {
@@ -312,4 +354,26 @@ pub fn build_tab_bar_webview(
     eprintln!("[webview:debug] tab bar webview built successfully");
 
     Ok(webview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allow_navigation;
+
+    #[test]
+    fn allows_internal_navigation_origins() {
+        assert!(allow_navigation("app://index.html"));
+        assert!(allow_navigation("https://app.localhost/index.html"));
+        assert!(allow_navigation("http://app.localhost/tabbar.html"));
+        assert!(allow_navigation("about:blank"));
+    }
+
+    #[test]
+    fn rejects_external_or_similar_lookalike_origins() {
+        assert!(!allow_navigation("http://app.attacker.tld"));
+        assert!(!allow_navigation("https://app.localhost.attacker.tld/index.html"));
+        assert!(!allow_navigation("https://evil.tld"));
+        assert!(!allow_navigation("https://app.localhost:8443/index.html"));
+        assert!(!allow_navigation("not-a-url"));
+    }
 }
