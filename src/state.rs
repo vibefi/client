@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+
 use tao::event_loop::EventLoopProxy;
 
 use crate::config::ResolvedConfig;
