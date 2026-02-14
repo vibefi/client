@@ -67,6 +67,12 @@ fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
 }
 
 fn normalized_app_path(uri: &wry::http::Uri) -> String {
+    eprintln!(
+        "[webview:debug] normalized_app_path: raw uri={uri}, scheme={:?}, host={:?}, path={:?}",
+        uri.scheme_str(),
+        uri.host(),
+        uri.path()
+    );
     let mut path = uri.path().to_string();
     if (path.is_empty() || path == "/") && uri.host().is_some() {
         if let Some(host) = uri.host() {
@@ -75,11 +81,13 @@ fn normalized_app_path(uri: &wry::http::Uri) -> String {
     }
 
     let trimmed = path.trim_start_matches('/');
-    if trimmed.is_empty() {
+    let result = if trimmed.is_empty() {
         "/".to_string()
     } else {
         format!("/{}", trimmed)
-    }
+    };
+    eprintln!("[webview:debug] normalized_app_path: result={result:?}");
+    result
 }
 
 fn csp_response(
@@ -91,10 +99,49 @@ fn csp_response(
         .header(CONTENT_TYPE, mime.as_str())
         .header(
             "Content-Security-Policy",
-            "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' 'unsafe-inline' app:; connect-src 'none'; frame-src 'none'",
+            "default-src 'self' app: https://app.localhost; img-src 'self' data: app: https://app.localhost; style-src 'self' 'unsafe-inline' app: https://app.localhost; script-src 'self' 'unsafe-inline' app: https://app.localhost; connect-src 'none'; frame-src 'none'",
         )
         .body(std::borrow::Cow::Owned(body))
         .unwrap()
+}
+
+fn should_enable_devtools() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+
+    std::env::var("VIBEFI_ENABLE_DEVTOOLS")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn allow_navigation(url: &str) -> bool {
+    if url == "about:blank" {
+        return true;
+    }
+
+    let Ok(uri) = url.parse::<wry::http::Uri>() else {
+        return false;
+    };
+
+    match uri.scheme_str() {
+        Some("app") => true,
+        Some("https") | Some("http") => {
+            let host = uri.host().unwrap_or("");
+            // wry rewrites custom protocol app://X to http://app.X/
+            // e.g. app://index.html -> http://app.index.html/
+            // Windows WebView2 uses app.index.html for rewritten app:// navigation.
+            let allowed_host = host == "app.index.html";
+            allowed_host && uri.port().is_none()
+        }
+        _ => false,
+    }
 }
 
 pub fn build_app_webview(
@@ -106,14 +153,29 @@ pub fn build_app_webview(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
 ) -> Result<WebView> {
+    eprintln!(
+        "[webview:debug] build_app_webview: id={id:?}, embedded={embedded:?}, dist_dir={dist_dir:?}, bounds={bounds:?}"
+    );
+
     let protocol_dist = dist_dir.clone();
+    let app_id_for_log = id.to_string();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
+        eprintln!(
+            "[webview:debug] app protocol handler ({app_id_for_log}): method={} uri={}",
+            request.method(),
+            request.uri()
+        );
         let path = normalized_app_path(request.uri());
         if let Some(ref dist) = protocol_dist {
+            eprintln!("[webview:debug] serving from dist_dir: path={path:?}");
             let (body, mime) = serve_file(dist, &path);
+            eprintln!(
+                "[webview:debug] dist response: mime={mime:?}, body_len={}",
+                body.len()
+            );
             csp_response(body, mime)
         } else {
-            match (embedded, path.as_str()) {
+            let matched = match (embedded, path.as_str()) {
                 (_, "/" | "/index.html") => {
                     let html = match embedded {
                         EmbeddedContent::Default => INDEX_HTML,
@@ -121,19 +183,35 @@ pub fn build_app_webview(
                         EmbeddedContent::WalletSelector => WALLET_SELECTOR_HTML,
                         EmbeddedContent::Settings => SETTINGS_HTML,
                     };
+                    eprintln!(
+                        "[webview:debug] serving embedded html for {embedded:?}, len={}",
+                        html.len()
+                    );
                     csp_response(
                         html.as_bytes().to_vec(),
                         "text/html; charset=utf-8".to_string(),
                     )
                 }
-                (EmbeddedContent::Launcher, "/launcher.js") => csp_response(
-                    LAUNCHER_JS.as_bytes().to_vec(),
-                    "application/javascript; charset=utf-8".to_string(),
-                ),
-                (EmbeddedContent::Default, "/home.js") => csp_response(
-                    HOME_JS.as_bytes().to_vec(),
-                    "application/javascript; charset=utf-8".to_string(),
-                ),
+                (EmbeddedContent::Launcher, "/launcher.js") => {
+                    eprintln!(
+                        "[webview:debug] serving embedded launcher.js, len={}",
+                        LAUNCHER_JS.len()
+                    );
+                    csp_response(
+                        LAUNCHER_JS.as_bytes().to_vec(),
+                        "application/javascript; charset=utf-8".to_string(),
+                    )
+                }
+                (EmbeddedContent::Default, "/home.js") => {
+                    eprintln!(
+                        "[webview:debug] serving embedded home.js, len={}",
+                        HOME_JS.len()
+                    );
+                    csp_response(
+                        HOME_JS.as_bytes().to_vec(),
+                        "application/javascript; charset=utf-8".to_string(),
+                    )
+                }
                 (EmbeddedContent::WalletSelector, "/wallet-selector.js") => csp_response(
                     WALLET_SELECTOR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
@@ -142,15 +220,23 @@ pub fn build_app_webview(
                     SETTINGS_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
                 ),
-                _ => csp_response(
-                    format!("Not found: {}", path).into_bytes(),
-                    "text/plain; charset=utf-8".to_string(),
-                ),
-            }
+                _ => {
+                    eprintln!("[webview:debug] NOT FOUND: embedded={embedded:?}, path={path:?}");
+                    csp_response(
+                        format!("Not found: {}", path).into_bytes(),
+                        "text/plain; charset=utf-8".to_string(),
+                    )
+                }
+            };
+            matched
         }
     };
 
-    let navigation_handler = |url: String| url.starts_with("app://") || url == "about:blank";
+    let navigation_handler = |url: String| {
+        let allowed = allow_navigation(&url);
+        eprintln!("[webview:debug] navigation_handler: url={url:?} -> allowed={allowed}");
+        allowed
+    };
 
     let init_script = match embedded {
         EmbeddedContent::WalletSelector => PRELOAD_WALLET_SELECTOR_JS.to_string(),
@@ -163,6 +249,7 @@ pub fn build_app_webview(
         .with_id(id)
         .with_bounds(bounds)
         .with_initialization_script(init_script)
+        .with_devtools(should_enable_devtools())
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://index.html")
         .with_navigation_handler(navigation_handler)
@@ -173,6 +260,7 @@ pub fn build_app_webview(
             });
         });
 
+    eprintln!("[webview:debug] building app webview (id={id})...");
     #[cfg(target_os = "linux")]
     let webview = builder
         .build_gtk(host.app_container)
@@ -181,6 +269,7 @@ pub fn build_app_webview(
     let webview = builder
         .build_as_child(host.window)
         .context("failed to build app webview")?;
+    eprintln!("[webview:debug] app webview built successfully (id={id})");
 
     // Emit initial chain/accounts state after load (skip for selector and settings tabs).
     if embedded != EmbeddedContent::WalletSelector && embedded != EmbeddedContent::Settings {
@@ -205,21 +294,43 @@ pub fn build_tab_bar_webview(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
 ) -> Result<WebView> {
+    eprintln!("[webview:debug] build_tab_bar_webview: bounds={bounds:?}");
+
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
+        eprintln!(
+            "[webview:debug] tabbar protocol handler: method={} uri={}",
+            request.method(),
+            request.uri()
+        );
         let path = normalized_app_path(request.uri());
         let (body, mime) = match path.as_str() {
-            "/" | "/index.html" | "/tabbar.html" => (
-                TAB_BAR_HTML.as_bytes().to_vec(),
-                "text/html; charset=utf-8".to_string(),
-            ),
-            "/tabbar.js" => (
-                TAB_BAR_JS.as_bytes().to_vec(),
-                "application/javascript; charset=utf-8".to_string(),
-            ),
-            _ => (
-                format!("Not found: {}", path).into_bytes(),
-                "text/plain; charset=utf-8".to_string(),
-            ),
+            "/" | "/index.html" | "/tabbar.html" => {
+                eprintln!(
+                    "[webview:debug] tabbar: serving tabbar.html, len={}",
+                    TAB_BAR_HTML.len()
+                );
+                (
+                    TAB_BAR_HTML.as_bytes().to_vec(),
+                    "text/html; charset=utf-8".to_string(),
+                )
+            }
+            "/tabbar.js" => {
+                eprintln!(
+                    "[webview:debug] tabbar: serving tabbar.js, len={}",
+                    TAB_BAR_JS.len()
+                );
+                (
+                    TAB_BAR_JS.as_bytes().to_vec(),
+                    "application/javascript; charset=utf-8".to_string(),
+                )
+            }
+            _ => {
+                eprintln!("[webview:debug] tabbar: NOT FOUND path={path:?}");
+                (
+                    format!("Not found: {}", path).into_bytes(),
+                    "text/plain; charset=utf-8".to_string(),
+                )
+            }
         };
         csp_response(body, mime)
     };
@@ -228,6 +339,7 @@ pub fn build_tab_bar_webview(
         .with_id("tab-bar")
         .with_bounds(bounds)
         .with_initialization_script(PRELOAD_TAB_BAR_JS.to_string())
+        .with_devtools(should_enable_devtools())
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://tabbar.html")
         .with_ipc_handler(move |req: wry::http::Request<String>| {
@@ -237,6 +349,7 @@ pub fn build_tab_bar_webview(
             });
         });
 
+    eprintln!("[webview:debug] building tab bar webview...");
     #[cfg(target_os = "linux")]
     let webview = builder
         .build_gtk(host.tab_bar_container)
@@ -245,6 +358,35 @@ pub fn build_tab_bar_webview(
     let webview = builder
         .build_as_child(host.window)
         .context("failed to build tab bar webview")?;
+    eprintln!("[webview:debug] tab bar webview built successfully");
 
     Ok(webview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allow_navigation;
+
+    #[test]
+    fn allows_internal_navigation_origins() {
+        assert!(allow_navigation("app://index.html"));
+        // wry rewrites app://index.html to http://app.index.html/
+        assert!(allow_navigation("http://app.index.html/"));
+        assert!(allow_navigation("about:blank"));
+    }
+
+    #[test]
+    fn rejects_external_or_similar_lookalike_origins() {
+        assert!(!allow_navigation("https://app.attacker.html/"));
+        assert!(!allow_navigation("https://app.localhost.evil.html/"));
+        assert!(!allow_navigation("https://app.localhost.attacker.tld/index.html"));
+        assert!(!allow_navigation("https://app.index.evil.html/"));
+        assert!(!allow_navigation("https://app.tabbar.html/"));
+        assert!(!allow_navigation("https://app.settings.html/"));
+        assert!(!allow_navigation("https://app..html/"));
+        assert!(!allow_navigation("https://app.localhost/index.html"));
+        assert!(!allow_navigation("https://evil.tld"));
+        assert!(!allow_navigation("https://app.localhost:8443/index.html"));
+        assert!(!allow_navigation("not-a-url"));
+    }
 }
