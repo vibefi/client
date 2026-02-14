@@ -53,13 +53,13 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         if let Some(m) = mgr.as_mut() {
             m.send_rpc(&payload)?
         } else {
-            // Fallback: use network.rpc_url directly
-            let network = state.network.as_ref().ok_or_else(|| {
+            // Fallback: use resolved config directly
+            let resolved = state.resolved.as_ref().ok_or_else(|| {
                 anyhow!("No RPC endpoint configured. Provide a config file with rpcUrl.")
             })?;
-            let res = network
-                .http
-                .post(&network.rpc_url)
+            let res = resolved
+                .http_client
+                .post(&resolved.rpc_url)
                 .json(&payload)
                 .send()
                 .context("rpc request failed")?;
@@ -89,7 +89,7 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
 }
 
 fn rpc_request(state: &AppState, method: &str, params: Value) -> Result<Value> {
-    if state.network.is_none() {
+    if state.resolved.is_none() {
         bail!("No RPC endpoint configured. Provide a config file with rpcUrl.");
     }
 

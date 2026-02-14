@@ -67,6 +67,7 @@ alloy-eips = "1.5"
 alloy-rpc-types-eth = "1.5"
 alloy-sol-types = "1.5"
 tokio = { version = "1", features = ["rt", "net", "time"] }
+clap = { version = "4", features = ["derive"] }
 dirs = "6"
 base64 = "0.22"
 tracing = "0.1"
