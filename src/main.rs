@@ -19,6 +19,7 @@ mod webview_manager;
 
 use anyhow::{Context, Result, anyhow};
 use std::{
+    collections::VecDeque,
     env,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -35,7 +36,7 @@ use config::{build_network_context, load_config};
 use rpc_manager::{RpcEndpoint, RpcEndpointManager};
 use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, WebViewHost, build_app_webview, build_tab_bar_webview};
-use webview_manager::{AppWebViewEntry, WebViewManager};
+use webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
 
 static INDEX_HTML: &str = include_str!("../internal-ui/static/home.html");
 static LAUNCHER_HTML: &str = include_str!("../internal-ui/static/launcher.html");
@@ -126,7 +127,7 @@ fn main() -> Result<()> {
         hardware_signer: Arc::new(Mutex::new(None)),
         network,
         proxy: proxy.clone(),
-        pending_connect: Arc::new(Mutex::new(None)),
+        pending_connect: Arc::new(Mutex::new(VecDeque::new())),
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
         config_path: config_path.clone(),
@@ -149,9 +150,13 @@ fn main() -> Result<()> {
                 let host = window.as_ref().map(|w| WebViewHost {
                     window: w,
                     #[cfg(target_os = "linux")]
-                    tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                    tab_bar_container: gtk_tab_bar_container
+                        .as_ref()
+                        .expect("linux tab bar container not initialized"),
                     #[cfg(target_os = "linux")]
-                    app_container: gtk_app_container.as_ref().unwrap(),
+                    app_container: gtk_app_container
+                        .as_ref()
+                        .expect("linux app container not initialized"),
                 });
                 events::user_event::handle_open_wallet_selector(
                     host.as_ref(),
@@ -164,9 +169,13 @@ fn main() -> Result<()> {
                 let host = window.as_ref().map(|w| WebViewHost {
                     window: w,
                     #[cfg(target_os = "linux")]
-                    tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                    tab_bar_container: gtk_tab_bar_container
+                        .as_ref()
+                        .expect("linux tab bar container not initialized"),
                     #[cfg(target_os = "linux")]
-                    app_container: gtk_app_container.as_ref().unwrap(),
+                    app_container: gtk_app_container
+                        .as_ref()
+                        .expect("linux app container not initialized"),
                 });
                 events::user_event::handle_open_settings(
                     host.as_ref(),
@@ -221,9 +230,13 @@ fn main() -> Result<()> {
                 let host = window.as_ref().map(|w| WebViewHost {
                     window: w,
                     #[cfg(target_os = "linux")]
-                    tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                    tab_bar_container: gtk_tab_bar_container
+                        .as_ref()
+                        .expect("linux tab bar container not initialized"),
                     #[cfg(target_os = "linux")]
-                    app_container: gtk_app_container.as_ref().unwrap(),
+                    app_container: gtk_app_container
+                        .as_ref()
+                        .expect("linux app container not initialized"),
                 });
                 events::user_event::handle_tab_action(
                     host.as_ref(),
@@ -273,9 +286,13 @@ fn main() -> Result<()> {
                     let host = WebViewHost {
                         window: &window_handle,
                         #[cfg(target_os = "linux")]
-                        tab_bar_container: gtk_tab_bar_container.as_ref().unwrap(),
+                        tab_bar_container: gtk_tab_bar_container
+                            .as_ref()
+                            .expect("linux tab bar container not initialized"),
                         #[cfg(target_os = "linux")]
-                        app_container: gtk_app_container.as_ref().unwrap(),
+                        app_container: gtk_app_container
+                            .as_ref()
+                            .expect("linux app container not initialized"),
                     };
 
                     let size = window_handle.inner_size();
@@ -309,6 +326,11 @@ fn main() -> Result<()> {
                     } else {
                         "Home".to_string()
                     };
+                    let kind = if has_registry && dist_dir.is_none() {
+                        AppWebViewKind::Launcher
+                    } else {
+                        AppWebViewKind::Standard
+                    };
                     let app_id = manager.next_app_id();
                     let bounds = manager.app_rect(w, h);
                     match build_app_webview(
@@ -325,6 +347,7 @@ fn main() -> Result<()> {
                                 webview: wv,
                                 id: app_id,
                                 label,
+                                kind,
                             });
                             manager.active_app_index = Some(0);
                             manager.update_tab_bar();

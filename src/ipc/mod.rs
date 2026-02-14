@@ -51,7 +51,12 @@ pub fn network_identity_response(state: &AppState, method: &str) -> Option<Value
     match method {
         "eth_chainId" => Some(Value::String(state.chain_id_hex())),
         "net_version" => {
-            let chain_id = state.wallet.lock().unwrap().chain.chain_id;
+            let chain_id = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while handling net_version")
+                .chain
+                .chain_id;
             Some(Value::String(chain_id.to_string()))
         }
         _ => None,

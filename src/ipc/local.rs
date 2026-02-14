@@ -26,7 +26,10 @@ pub(super) fn handle_local_ipc(
 
     match req.method.as_str() {
         "eth_accounts" => {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while handling local eth_accounts");
             if ws.authorized {
                 if let Some(account) = ws.account.clone().or_else(|| state.local_signer_address()) {
                     Ok(Some(Value::Array(vec![Value::String(account)])))
@@ -42,7 +45,10 @@ pub(super) fn handle_local_ipc(
                 .local_signer_address()
                 .ok_or_else(|| anyhow!("Local signer unavailable"))?;
             {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while authorizing local wallet");
                 ws.authorized = true;
                 ws.account = Some(account.clone());
             }
@@ -60,7 +66,10 @@ pub(super) fn handle_local_ipc(
             let chain_id = parse_hex_u64(chain_id_hex).ok_or_else(|| anyhow!("invalid chainId"))?;
 
             {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while switching local chain");
                 ws.chain.chain_id = chain_id;
             }
             let chain_hex = format!("0x{:x}", chain_id);
@@ -114,7 +123,10 @@ pub(super) fn handle_local_ipc(
             ))))
         }
         "eth_sendTransaction" => {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while handling local eth_sendTransaction");
             if !ws.authorized {
                 return Err(anyhow!("Unauthorized: call eth_requestAccounts first"));
             }
@@ -180,7 +192,10 @@ pub(super) fn handle_local_ipc(
             Ok(None)
         }
         "wallet_getProviderInfo" => {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while building local provider info");
             let info = ProviderInfo {
                 name: "vibefi-local-wallet".to_string(),
                 chain_id: state.chain_id_hex(),

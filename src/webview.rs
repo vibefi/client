@@ -102,7 +102,7 @@ fn csp_response(
             "default-src 'self' app: https://app.localhost; img-src 'self' data: app: https://app.localhost; style-src 'self' 'unsafe-inline' app: https://app.localhost; script-src 'self' 'unsafe-inline' app: https://app.localhost; connect-src 'none'; frame-src 'none'",
         )
         .body(std::borrow::Cow::Owned(body))
-        .unwrap()
+        .expect("failed to build CSP response")
 }
 
 fn should_enable_devtools() -> bool {
@@ -262,7 +262,10 @@ pub fn build_app_webview(
         let addr = state.account();
         let chain_hex = state.chain_id_hex();
         {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while emitting initial account state");
             if ws.authorized {
                 if let Some(addr) = addr {
                     emit_accounts_changed(&webview, vec![addr]);
