@@ -36,7 +36,7 @@ use config::{build_network_context, load_config};
 use rpc_manager::{RpcEndpoint, RpcEndpointManager};
 use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, WebViewHost, build_app_webview, build_tab_bar_webview};
-use webview_manager::{AppWebViewEntry, WebViewManager};
+use webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
 
 static INDEX_HTML: &str = include_str!("../internal-ui/static/home.html");
 static LAUNCHER_HTML: &str = include_str!("../internal-ui/static/launcher.html");
@@ -310,6 +310,11 @@ fn main() -> Result<()> {
                     } else {
                         "Home".to_string()
                     };
+                    let kind = if has_registry && dist_dir.is_none() {
+                        AppWebViewKind::Launcher
+                    } else {
+                        AppWebViewKind::Standard
+                    };
                     let app_id = manager.next_app_id();
                     let bounds = manager.app_rect(w, h);
                     match build_app_webview(
@@ -326,6 +331,7 @@ fn main() -> Result<()> {
                                 webview: wv,
                                 id: app_id,
                                 label,
+                                kind,
                             });
                             manager.active_app_index = Some(0);
                             manager.update_tab_bar();

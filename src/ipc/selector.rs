@@ -5,20 +5,19 @@ use wry::WebView;
 use crate::ipc_contract::{IpcRequest, WalletSelectorMethod};
 use crate::state::{AppState, UserEvent, WalletBackend};
 use crate::walletconnect::{WalletConnectBridge, WalletConnectConfig, WalletConnectSession};
+use crate::webview_manager::{AppWebViewKind, WebViewManager};
 
 /// Handle IPC from the wallet selector tab.
 pub(super) fn handle_wallet_selector_ipc(
     _webview: &WebView,
+    manager: &WebViewManager,
     state: &AppState,
     webview_id: &str,
     req: &IpcRequest,
 ) -> Result<Option<Value>> {
     // Verify the request comes from the actual selector tab.
-    {
-        let sel_id = state.selector_webview_id.lock().unwrap();
-        if sel_id.as_deref() != Some(webview_id) {
-            bail!("vibefi-wallet IPC only available to the wallet selector tab");
-        }
+    if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::WalletSelector) {
+        bail!("vibefi-wallet IPC only available to the wallet selector tab");
     }
 
     match req.wallet_selector_method() {

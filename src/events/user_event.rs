@@ -7,7 +7,7 @@ use crate::ipc_contract::{IpcRequest, KnownProviderId, TabbarMethod};
 use crate::state::{AppState, TabAction, UserEvent};
 use crate::ui_bridge;
 use crate::webview::{EmbeddedContent, WebViewHost, build_app_webview};
-use crate::webview_manager::{AppWebViewEntry, WebViewManager};
+use crate::webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
 
 pub fn handle_ipc_event(
     state: &AppState,
@@ -29,10 +29,10 @@ pub fn handle_ipc_event(
                         if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
                             let idx = idx as usize;
                             if let Some(entry) = manager.apps.get(idx) {
-                                if entry.label == "Settings" {
+                                if entry.kind == AppWebViewKind::Settings {
                                     let mut sel = state.settings_webview_id.lock().unwrap();
                                     *sel = None;
-                                } else if entry.label == "Connect Wallet" {
+                                } else if entry.kind == AppWebViewKind::WalletSelector {
                                     let mut sel = state.selector_webview_id.lock().unwrap();
                                     *sel = None;
                                 }
@@ -45,7 +45,7 @@ pub fn handle_ipc_event(
             }
         }
     } else if let Some(wv) = manager.webview_for_id(webview_id) {
-        if let Err(e) = ipc::handle_ipc(wv, state, webview_id, msg) {
+        if let Err(e) = ipc::handle_ipc(wv, manager, state, webview_id, msg) {
             tracing::error!(error = ?e, webview_id, "ipc error");
         }
     }
@@ -62,7 +62,7 @@ pub fn handle_open_wallet_selector(
         let sel = state.selector_webview_id.lock().unwrap();
         if sel.is_some() {
             // Already open — just switch to it
-            if let Some(idx) = manager.index_of_label("Connect Wallet") {
+            if let Some(idx) = manager.index_of_kind(AppWebViewKind::WalletSelector) {
                 manager.switch_to(idx);
             }
             return;
@@ -76,6 +76,7 @@ pub fn handle_open_wallet_selector(
             proxy,
             None,
             EmbeddedContent::WalletSelector,
+            AppWebViewKind::WalletSelector,
             "Connect Wallet".to_string(),
         ) {
             Ok(id) => {
@@ -169,7 +170,7 @@ pub fn handle_open_settings(
     {
         let mut sel = state.settings_webview_id.lock().unwrap();
         if sel.is_some() {
-            if let Some(idx) = manager.index_of_label("Settings") {
+            if let Some(idx) = manager.index_of_kind(AppWebViewKind::Settings) {
                 manager.switch_to(idx);
                 return;
             }
@@ -185,6 +186,7 @@ pub fn handle_open_settings(
             proxy,
             None,
             EmbeddedContent::Settings,
+            AppWebViewKind::Settings,
             "Settings".to_string(),
         ) {
             Ok(id) => {
@@ -230,7 +232,7 @@ pub fn handle_close_wallet_selector(state: &AppState, manager: &mut WebViewManag
         let mut sel = state.selector_webview_id.lock().unwrap();
         *sel = None;
     }
-    manager.close_by_label("Connect Wallet");
+    manager.close_by_kind(AppWebViewKind::WalletSelector);
 }
 
 pub fn handle_tab_action(
@@ -250,6 +252,7 @@ pub fn handle_tab_action(
                     proxy,
                     Some(dist_dir),
                     EmbeddedContent::Default,
+                    AppWebViewKind::Standard,
                     name,
                 ) {
                     tracing::error!(error = ?e, "failed to open app tab");
@@ -266,6 +269,7 @@ fn open_app_tab(
     proxy: &EventLoopProxy<UserEvent>,
     dist_dir: Option<PathBuf>,
     embedded: EmbeddedContent,
+    kind: AppWebViewKind,
     label: String,
 ) -> anyhow::Result<String> {
     let size = host.window.inner_size();
@@ -277,7 +281,12 @@ fn open_app_tab(
         let _ = active.set_visible(false);
     }
     let idx = manager.apps.len();
-    manager.apps.push(AppWebViewEntry { webview, id, label });
+    manager.apps.push(AppWebViewEntry {
+        webview,
+        id,
+        label,
+        kind,
+    });
     manager.active_app_index = Some(idx);
     manager.update_tab_bar();
 
