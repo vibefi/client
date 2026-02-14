@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+
 use tao::event_loop::EventLoopProxy;
 
 use crate::config::NetworkContext;
@@ -120,56 +121,33 @@ pub struct AppState {
 
 impl AppState {
     pub fn local_signer(&self) -> Option<Arc<PrivateKeySigner>> {
-        match lock_or_err(&self.signer, "signer") {
-            Ok(signer) => signer.as_ref().cloned(),
-            Err(err) => {
-                tracing::error!(error = %err, "failed to access local signer");
-                None
-            }
-        }
+        self.signer.lock().expect("signer").as_ref().cloned()
     }
 
     pub fn local_signer_address(&self) -> Option<String> {
-        match lock_or_err(&self.signer, "signer") {
-            Ok(signer) => signer
-                .as_ref()
-                .map(|signer| format!("0x{:x}", signer.address())),
-            Err(err) => {
-                tracing::error!(error = %err, "failed to access local signer address");
-                None
-            }
-        }
+        self.signer
+            .lock()
+            .expect("signer")
+            .as_ref()
+            .map(|signer| format!("0x{:x}", signer.address()))
     }
 
     pub fn account(&self) -> Option<String> {
-        if let Ok(ws) = lock_or_err(&self.wallet, "wallet") {
-            if let Some(account) = ws.account.clone() {
-                return Some(account);
-            }
-        } else {
-            tracing::error!("failed to access wallet account state");
+        let ws = self.wallet.lock().expect("wallet");
+        if let Some(account) = ws.account.clone() {
+            return Some(account);
         }
+        drop(ws);
         self.local_signer_address()
     }
 
     pub fn chain_id_hex(&self) -> String {
-        match lock_or_err(&self.wallet, "wallet") {
-            Ok(wallet) => format!("0x{:x}", wallet.chain.chain_id),
-            Err(err) => {
-                tracing::error!(error = %err, "failed to access wallet chain id");
-                "0x1".to_string()
-            }
-        }
+        let chain_id = self.wallet.lock().expect("wallet").chain.chain_id;
+        format!("0x{:x}", chain_id)
     }
 
     pub fn get_wallet_backend(&self) -> Option<WalletBackend> {
-        match lock_or_err(&self.wallet_backend, "wallet_backend") {
-            Ok(wallet_backend) => *wallet_backend,
-            Err(err) => {
-                tracing::error!(error = %err, "failed to access wallet backend");
-                None
-            }
-        }
+        *self.wallet_backend.lock().expect("wallet_backend")
     }
 }
 

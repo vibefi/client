@@ -105,20 +105,18 @@ pub(super) fn handle_wallet_selector_ipc(
             let wv_id = webview_id.to_string();
 
             std::thread::spawn(move || {
-                let result = match lock_or_err(&bridge, "walletconnect_bridge") {
-                    Ok(mut b) => {
-                        let proxy_for_events = proxy.clone();
-                        b.connect_with_event_handler(chain_id, move |event| {
-                            if event.event == "display_uri" {
-                                if let Some(uri) = event.uri.clone() {
-                                    let qr_svg = event.qr_svg.clone().unwrap_or_default();
-                                    let _ = proxy_for_events
-                                        .send_event(UserEvent::WalletConnectPairing { uri, qr_svg });
-                                }
+                let result = {
+                    let mut b = bridge.lock().expect("walletconnect_bridge");
+                    let proxy_for_events = proxy.clone();
+                    b.connect_with_event_handler(chain_id, move |event| {
+                        if event.event == "display_uri" {
+                            if let Some(uri) = event.uri.clone() {
+                                let qr_svg = event.qr_svg.clone().unwrap_or_default();
+                                let _ = proxy_for_events
+                                    .send_event(UserEvent::WalletConnectPairing { uri, qr_svg });
                             }
-                        })
-                    }
-                    Err(err) => Err(err),
+                        }
+                    })
                 };
                 let mapped = result.map_err(|e| e.to_string());
                 let _ = proxy.send_event(UserEvent::WalletConnectResult {
@@ -167,64 +165,24 @@ pub(super) fn handle_wallet_selector_ipc(
 
                         // Store hardware signer
                         {
-                            let mut hs = match lock_or_err(&hardware_signer, "hardware_signer") {
-                                Ok(hs) => hs,
-                                Err(err) => {
-                                    let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                                        webview_id: wv_id.clone(),
-                                        ipc_id,
-                                        result: Err(err.to_string()),
-                                    });
-                                    return;
-                                }
-                            };
+                            let mut hs = hardware_signer.lock().expect("hardware_signer");
                             *hs = Some(device);
                         }
                         // Set backend
                         {
-                            let mut wb = match lock_or_err(&wallet_backend, "wallet_backend") {
-                                Ok(wb) => wb,
-                                Err(err) => {
-                                    let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                                        webview_id: wv_id.clone(),
-                                        ipc_id,
-                                        result: Err(err.to_string()),
-                                    });
-                                    return;
-                                }
-                            };
+                            let mut wb = wallet_backend.lock().expect("wallet_backend");
                             *wb = Some(WalletBackend::Hardware);
                         }
                         // Update wallet state
                         {
-                            let mut ws = match lock_or_err(&wallet, "wallet") {
-                                Ok(ws) => ws,
-                                Err(err) => {
-                                    let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                                        webview_id: wv_id.clone(),
-                                        ipc_id,
-                                        result: Err(err.to_string()),
-                                    });
-                                    return;
-                                }
-                            };
+                            let mut ws = wallet.lock().expect("wallet");
                             ws.authorized = true;
                             ws.account = Some(account.clone());
                         }
 
                         // Resolve pending connect if any
-                        let pending: Vec<_> = match lock_or_err(&pending_connect, "pending_connect")
-                        {
-                            Ok(mut guard) => guard.drain(..).collect(),
-                            Err(err) => {
-                                let _ = proxy.send_event(UserEvent::HardwareSignResult {
-                                    webview_id: wv_id.clone(),
-                                    ipc_id,
-                                    result: Err(err.to_string()),
-                                });
-                                return;
-                            }
-                        };
+                        let pending: Vec<_> =
+                            pending_connect.lock().expect("pending_connect").drain(..).collect();
                         for pc in pending {
                             let _ = proxy.send_event(UserEvent::WalletConnectResult {
                                 webview_id: pc.webview_id,
@@ -267,13 +225,12 @@ pub(super) fn handle_wallet_selector_ipc(
 /// Resolve a pending `eth_requestAccounts` from a dapp tab by sending the
 /// account list back to the original webview.
 fn resolve_pending_connect(state: &AppState, accounts: Vec<String>) {
-    let pending: Vec<_> = match lock_or_err(&state.pending_connect, "pending_connect") {
-        Ok(mut guard) => guard.drain(..).collect(),
-        Err(err) => {
-            tracing::error!(error = %err, "failed to resolve pending account connects");
-            Vec::new()
-        }
-    };
+    let pending: Vec<_> = state
+        .pending_connect
+        .lock()
+        .expect("pending_connect")
+        .drain(..)
+        .collect();
     for pc in pending {
         let _ = state.proxy.send_event(UserEvent::WalletConnectResult {
             webview_id: pc.webview_id,
