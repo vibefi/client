@@ -18,9 +18,9 @@ pub(super) fn handle_walletconnect_ipc(
     match req.method.as_str() {
         "eth_requestAccounts" => {
             let chain_id = state.wallet.lock().unwrap().chain.chain_id;
-            eprintln!(
-                "[walletconnect] eth_requestAccounts received (chain=0x{:x})",
-                chain_id
+            tracing::info!(
+                chain_id = format!("0x{:x}", chain_id),
+                "walletconnect eth_requestAccounts received"
             );
             let bridge = state
                 .walletconnect
@@ -159,7 +159,7 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
         "display_uri" => {
             if let Some(uri) = event.uri.clone() {
                 let qr_svg = event.qr_svg.clone().unwrap_or_default();
-                println!("[WalletConnect] pairing uri: {uri}");
+                tracing::info!("walletconnect pairing uri emitted");
                 {
                     let mut ws = state.wallet.lock().unwrap();
                     ws.walletconnect_uri = Some(uri.clone());
@@ -233,18 +233,18 @@ pub fn handle_walletconnect_connect_result(
             }
             emit_chain_changed(webview, session.chain_id_hex.clone());
             let _ = state.proxy.send_event(UserEvent::CloseWalletSelector);
-            eprintln!(
-                "[walletconnect] eth_requestAccounts resolved ({} account(s))",
-                session.accounts.len()
+            tracing::info!(
+                accounts = session.accounts.len(),
+                "walletconnect eth_requestAccounts resolved"
             );
             if let Err(e) = respond_ok(webview, ipc_id, Value::Array(accounts)) {
-                eprintln!("[walletconnect] failed to send ok response: {e}");
+                tracing::error!(error = %e, "walletconnect failed to send ok response");
             }
         }
         Err(msg) => {
-            eprintln!("[walletconnect] eth_requestAccounts failed: {msg}");
+            tracing::warn!(error = %msg, "walletconnect eth_requestAccounts failed");
             if let Err(e) = respond_err(webview, ipc_id, &msg) {
-                eprintln!("[walletconnect] failed to send error response: {e}");
+                tracing::error!(error = %e, "walletconnect failed to send error response");
             }
         }
     }

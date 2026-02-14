@@ -47,6 +47,7 @@ pub(super) fn handle_local_ipc(
                 ws.account = Some(account.clone());
             }
             emit_accounts_changed(webview, vec![account.clone()]);
+            tracing::info!(webview_id, account, "local wallet authorized account");
             Ok(Some(Value::Array(vec![Value::String(account)])))
         }
         "wallet_switchEthereumChain" => {
@@ -64,6 +65,11 @@ pub(super) fn handle_local_ipc(
             }
             let chain_hex = format!("0x{:x}", chain_id);
             emit_chain_changed(webview, chain_hex);
+            tracing::info!(
+                webview_id,
+                chain_id = format!("0x{:x}", chain_id),
+                "local wallet switched chain"
+            );
             Ok(Some(Value::Null))
         }
         "personal_sign" => {
@@ -124,6 +130,11 @@ pub(super) fn handle_local_ipc(
             let state_clone = state.clone();
             let ipc_id = req.id;
             let wv_id = webview_id.to_string();
+            tracing::info!(
+                webview_id,
+                ipc_id,
+                "local wallet spawning eth_sendTransaction worker"
+            );
 
             std::thread::spawn(move || {
                 let result = (|| -> Result<Value> {
@@ -140,11 +151,30 @@ pub(super) fn handle_local_ipc(
                     Ok(Value::String(tx_hash))
                 })()
                 .map_err(|e| e.to_string());
-                let _ = proxy.send_event(UserEvent::RpcResult {
+                if let Err(err) = &result {
+                    tracing::warn!(
+                        webview_id = %wv_id,
+                        ipc_id,
+                        error = %err,
+                        "local wallet eth_sendTransaction worker failed"
+                    );
+                } else {
+                    tracing::debug!(
+                        webview_id = %wv_id,
+                        ipc_id,
+                        "local wallet eth_sendTransaction worker succeeded"
+                    );
+                }
+                if let Err(err) = proxy.send_event(UserEvent::RpcResult {
                     webview_id: wv_id,
                     ipc_id,
                     result,
-                });
+                }) {
+                    tracing::warn!(
+                        error = %err,
+                        "failed to send local wallet RpcResult event"
+                    );
+                }
             });
 
             Ok(None)

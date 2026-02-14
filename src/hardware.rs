@@ -33,14 +33,14 @@ pub async fn detect_and_connect(chain_id: u64) -> Result<HardwareDevice> {
     .await
     {
         Ok(signer) => {
-            eprintln!(
-                "[hardware] Ledger detected, address: 0x{:x}",
-                signer.address()
+            tracing::info!(
+                address = format!("0x{:x}", signer.address()),
+                "ledger detected"
             );
             return Ok(HardwareDevice::Ledger(signer));
         }
         Err(e) => {
-            eprintln!("[hardware] Ledger detection failed: {e}");
+            tracing::warn!(error = %e, "ledger detection failed");
         }
     }
 
@@ -52,14 +52,14 @@ pub async fn detect_and_connect(chain_id: u64) -> Result<HardwareDevice> {
     .await
     {
         Ok(signer) => {
-            eprintln!(
-                "[hardware] Trezor detected, address: 0x{:x}",
-                signer.address()
+            tracing::info!(
+                address = format!("0x{:x}", signer.address()),
+                "trezor detected"
             );
             return Ok(HardwareDevice::Trezor(signer));
         }
         Err(e) => {
-            eprintln!("[hardware] Trezor detection failed: {e}");
+            tracing::warn!(error = %e, "trezor detection failed");
         }
     }
 

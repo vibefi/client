@@ -46,7 +46,7 @@ pub fn handle_ipc_event(
         }
     } else if let Some(wv) = manager.webview_for_id(webview_id) {
         if let Err(e) = ipc::handle_ipc(wv, state, webview_id, msg) {
-            eprintln!("ipc error: {e:?}");
+            tracing::error!(error = ?e, webview_id, "ipc error");
         }
     }
 }
@@ -82,7 +82,7 @@ pub fn handle_open_wallet_selector(
                 let mut sel = state.selector_webview_id.lock().unwrap();
                 *sel = Some(id);
             }
-            Err(e) => eprintln!("failed to open wallet selector tab: {e:?}"),
+            Err(e) => tracing::error!(error = ?e, "failed to open wallet selector tab"),
         }
     }
 }
@@ -147,9 +147,9 @@ pub fn handle_hardware_sign_result(
         let mapped = result.map(serde_json::Value::String);
         if let Err(e) = ipc::respond_value_result(wv, ipc_id, mapped) {
             if is_ok {
-                eprintln!("[hardware] failed to send ok response: {e}");
+                tracing::error!(error = %e, "hardware: failed to send ok response");
             } else {
-                eprintln!("[hardware] failed to send error response: {e}");
+                tracing::error!(error = %e, "hardware: failed to send error response");
             }
         }
     }
@@ -187,7 +187,7 @@ pub fn handle_open_settings(
                 let mut sel = state.settings_webview_id.lock().unwrap();
                 *sel = Some(id);
             }
-            Err(e) => eprintln!("failed to open settings tab: {e:?}"),
+            Err(e) => tracing::error!(error = ?e, "failed to open settings tab"),
         }
     }
 }
@@ -202,9 +202,9 @@ pub fn handle_rpc_result(
         let is_ok = result.is_ok();
         if let Err(e) = ipc::respond_value_result(wv, ipc_id, result) {
             if is_ok {
-                eprintln!("[rpc] failed to send ok response: {e}");
+                tracing::error!(error = %e, "rpc: failed to send ok response");
             } else {
-                eprintln!("[rpc] failed to send error response: {e}");
+                tracing::error!(error = %e, "rpc: failed to send error response");
             }
         }
     }
@@ -248,7 +248,7 @@ pub fn handle_tab_action(
                     EmbeddedContent::Default,
                     name,
                 ) {
-                    eprintln!("failed to open app tab: {e:?}");
+                    tracing::error!(error = ?e, "failed to open app tab");
                 }
             }
         }

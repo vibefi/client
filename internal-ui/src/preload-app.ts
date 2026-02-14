@@ -56,8 +56,9 @@ declare global {
     for (const handler of Array.from(set)) {
       try {
         handler(...args);
-      } catch {
+      } catch (error) {
         // Keep provider semantics: listener failures should not break dispatch.
+        console.warn("[vibefi:preload] listener threw during emit", event, error);
       }
     }
   }
@@ -127,8 +128,9 @@ declare global {
     try {
       const chainId = await request({ method: "eth_chainId", params: [] });
       emit("connect", { chainId });
-    } catch {
+    } catch (error) {
       // Ignore connect bootstrap failure.
+      console.debug("[vibefi:preload] connect bootstrap failed", error);
     }
   });
 })();

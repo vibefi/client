@@ -67,8 +67,8 @@ fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
 }
 
 fn normalized_app_path(uri: &wry::http::Uri) -> String {
-    eprintln!(
-        "[webview:debug] normalized_app_path: raw uri={uri}, scheme={:?}, host={:?}, path={:?}",
+    tracing::trace!(
+        "normalized_app_path raw uri={uri}, scheme={:?}, host={:?}, path={:?}",
         uri.scheme_str(),
         uri.host(),
         uri.path()
@@ -86,7 +86,7 @@ fn normalized_app_path(uri: &wry::http::Uri) -> String {
     } else {
         format!("/{}", trimmed)
     };
-    eprintln!("[webview:debug] normalized_app_path: result={result:?}");
+    tracing::trace!("normalized_app_path result={result:?}");
     result
 }
 
@@ -153,26 +153,21 @@ pub fn build_app_webview(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
 ) -> Result<WebView> {
-    eprintln!(
-        "[webview:debug] build_app_webview: id={id:?}, embedded={embedded:?}, dist_dir={dist_dir:?}, bounds={bounds:?}"
-    );
+    tracing::debug!(?id, ?embedded, ?dist_dir, ?bounds, "build_app_webview");
 
     let protocol_dist = dist_dir.clone();
     let app_id_for_log = id.to_string();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
-        eprintln!(
-            "[webview:debug] app protocol handler ({app_id_for_log}): method={} uri={}",
+        tracing::trace!(
+            "app protocol handler ({app_id_for_log}): method={} uri={}",
             request.method(),
             request.uri()
         );
         let path = normalized_app_path(request.uri());
         if let Some(ref dist) = protocol_dist {
-            eprintln!("[webview:debug] serving from dist_dir: path={path:?}");
+            tracing::trace!("serving from dist_dir: path={path:?}");
             let (body, mime) = serve_file(dist, &path);
-            eprintln!(
-                "[webview:debug] dist response: mime={mime:?}, body_len={}",
-                body.len()
-            );
+            tracing::trace!("dist response: mime={mime:?}, body_len={}", body.len());
             csp_response(body, mime)
         } else {
             let matched = match (embedded, path.as_str()) {
@@ -183,30 +178,21 @@ pub fn build_app_webview(
                         EmbeddedContent::WalletSelector => WALLET_SELECTOR_HTML,
                         EmbeddedContent::Settings => SETTINGS_HTML,
                     };
-                    eprintln!(
-                        "[webview:debug] serving embedded html for {embedded:?}, len={}",
-                        html.len()
-                    );
+                    tracing::trace!("serving embedded html for {embedded:?}, len={}", html.len());
                     csp_response(
                         html.as_bytes().to_vec(),
                         "text/html; charset=utf-8".to_string(),
                     )
                 }
                 (EmbeddedContent::Launcher, "/launcher.js") => {
-                    eprintln!(
-                        "[webview:debug] serving embedded launcher.js, len={}",
-                        LAUNCHER_JS.len()
-                    );
+                    tracing::trace!("serving embedded launcher.js, len={}", LAUNCHER_JS.len());
                     csp_response(
                         LAUNCHER_JS.as_bytes().to_vec(),
                         "application/javascript; charset=utf-8".to_string(),
                     )
                 }
                 (EmbeddedContent::Default, "/home.js") => {
-                    eprintln!(
-                        "[webview:debug] serving embedded home.js, len={}",
-                        HOME_JS.len()
-                    );
+                    tracing::trace!("serving embedded home.js, len={}", HOME_JS.len());
                     csp_response(
                         HOME_JS.as_bytes().to_vec(),
                         "application/javascript; charset=utf-8".to_string(),
@@ -221,7 +207,7 @@ pub fn build_app_webview(
                     "application/javascript; charset=utf-8".to_string(),
                 ),
                 _ => {
-                    eprintln!("[webview:debug] NOT FOUND: embedded={embedded:?}, path={path:?}");
+                    tracing::debug!("app protocol miss: embedded={embedded:?}, path={path:?}");
                     csp_response(
                         format!("Not found: {}", path).into_bytes(),
                         "text/plain; charset=utf-8".to_string(),
@@ -234,7 +220,7 @@ pub fn build_app_webview(
 
     let navigation_handler = |url: String| {
         let allowed = allow_navigation(&url);
-        eprintln!("[webview:debug] navigation_handler: url={url:?} -> allowed={allowed}");
+        tracing::trace!("navigation_handler: url={url:?} allowed={allowed}");
         allowed
     };
 
@@ -260,7 +246,7 @@ pub fn build_app_webview(
             });
         });
 
-    eprintln!("[webview:debug] building app webview (id={id})...");
+    tracing::debug!(id, "building app webview");
     #[cfg(target_os = "linux")]
     let webview = builder
         .build_gtk(host.app_container)
@@ -269,7 +255,7 @@ pub fn build_app_webview(
     let webview = builder
         .build_as_child(host.window)
         .context("failed to build app webview")?;
-    eprintln!("[webview:debug] app webview built successfully (id={id})");
+    tracing::debug!(id, "app webview built");
 
     // Emit initial chain/accounts state after load (skip for selector and settings tabs).
     if embedded != EmbeddedContent::WalletSelector && embedded != EmbeddedContent::Settings {
@@ -294,38 +280,32 @@ pub fn build_tab_bar_webview(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
 ) -> Result<WebView> {
-    eprintln!("[webview:debug] build_tab_bar_webview: bounds={bounds:?}");
+    tracing::debug!(?bounds, "build_tab_bar_webview");
 
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
-        eprintln!(
-            "[webview:debug] tabbar protocol handler: method={} uri={}",
+        tracing::trace!(
+            "tabbar protocol handler: method={} uri={}",
             request.method(),
             request.uri()
         );
         let path = normalized_app_path(request.uri());
         let (body, mime) = match path.as_str() {
             "/" | "/index.html" | "/tabbar.html" => {
-                eprintln!(
-                    "[webview:debug] tabbar: serving tabbar.html, len={}",
-                    TAB_BAR_HTML.len()
-                );
+                tracing::trace!("tabbar: serving tabbar.html, len={}", TAB_BAR_HTML.len());
                 (
                     TAB_BAR_HTML.as_bytes().to_vec(),
                     "text/html; charset=utf-8".to_string(),
                 )
             }
             "/tabbar.js" => {
-                eprintln!(
-                    "[webview:debug] tabbar: serving tabbar.js, len={}",
-                    TAB_BAR_JS.len()
-                );
+                tracing::trace!("tabbar: serving tabbar.js, len={}", TAB_BAR_JS.len());
                 (
                     TAB_BAR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
                 )
             }
             _ => {
-                eprintln!("[webview:debug] tabbar: NOT FOUND path={path:?}");
+                tracing::debug!("tabbar protocol miss: path={path:?}");
                 (
                     format!("Not found: {}", path).into_bytes(),
                     "text/plain; charset=utf-8".to_string(),
@@ -349,7 +329,7 @@ pub fn build_tab_bar_webview(
             });
         });
 
-    eprintln!("[webview:debug] building tab bar webview...");
+    tracing::debug!("building tab bar webview");
     #[cfg(target_os = "linux")]
     let webview = builder
         .build_gtk(host.tab_bar_container)
@@ -358,7 +338,7 @@ pub fn build_tab_bar_webview(
     let webview = builder
         .build_as_child(host.window)
         .context("failed to build tab bar webview")?;
-    eprintln!("[webview:debug] tab bar webview built successfully");
+    tracing::debug!("tab bar webview built");
 
     Ok(webview)
 }
@@ -379,7 +359,9 @@ mod tests {
     fn rejects_external_or_similar_lookalike_origins() {
         assert!(!allow_navigation("https://app.attacker.html/"));
         assert!(!allow_navigation("https://app.localhost.evil.html/"));
-        assert!(!allow_navigation("https://app.localhost.attacker.tld/index.html"));
+        assert!(!allow_navigation(
+            "https://app.localhost.attacker.tld/index.html"
+        ));
         assert!(!allow_navigation("https://app.index.evil.html/"));
         assert!(!allow_navigation("https://app.tabbar.html/"));
         assert!(!allow_navigation("https://app.settings.html/"));

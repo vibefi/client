@@ -17,18 +17,31 @@ pub fn handle_ipc(
     msg: String,
 ) -> Result<()> {
     let req: IpcRequest = serde_json::from_str(&msg).context("invalid IPC JSON")?;
+    let provider = req.provider();
+    tracing::debug!(
+        webview_id,
+        provider = ?provider,
+        method = %req.method,
+        ipc_id = req.id,
+        "ipc request received"
+    );
 
     // Handle vibefi-wallet IPC from the wallet selector tab.
-    if req.provider() == Some(KnownProviderId::Wallet) {
+    if provider == Some(KnownProviderId::Wallet) {
         let result = selector::handle_wallet_selector_ipc(webview, state, webview_id, &req);
         respond_option_result(webview, req.id, result)?;
         return Ok(());
     }
 
-    if req.provider() == Some(KnownProviderId::Settings) {
+    if provider == Some(KnownProviderId::Settings) {
         if req.method == "vibefi_setEndpoints" || req.method == "vibefi_setIpfsSettings" {
             let settings_id = state.settings_webview_id.lock().unwrap();
             if settings_id.as_deref() != Some(webview_id) {
+                tracing::warn!(
+                    webview_id,
+                    method = %req.method,
+                    "settings write attempt from non-settings webview"
+                );
                 bail!("settings write methods are only available to the settings webview");
             }
         }
@@ -37,8 +50,13 @@ pub fn handle_ipc(
         return Ok(());
     }
 
-    if req.provider() == Some(KnownProviderId::Launcher) {
+    if provider == Some(KnownProviderId::Launcher) {
         if webview_id != "app-0" {
+            tracing::warn!(
+                webview_id,
+                method = %req.method,
+                "launcher ipc request rejected for non-launcher webview"
+            );
             bail!("launcher IPC is only available to the launcher webview");
         }
         let result = handle_launcher_ipc(state, webview_id, &req);
@@ -58,7 +76,14 @@ pub fn handle_ipc(
                 ipc_id: req.id,
             });
         }
-        let _ = state.proxy.send_event(UserEvent::OpenWalletSelector);
+        tracing::info!(
+            webview_id,
+            ipc_id = req.id,
+            "queued pending eth_requestAccounts and opening wallet selector"
+        );
+        if let Err(err) = state.proxy.send_event(UserEvent::OpenWalletSelector) {
+            tracing::warn!(error = %err, "failed to send OpenWalletSelector event");
+        }
         // Response will be sent later once the user picks a wallet.
         return Ok(());
     }

@@ -164,7 +164,8 @@ function App() {
     try {
       const result = await settingsIpc("vibefi_getEndpoints");
       setEndpoints(Array.isArray(result) ? (result as RpcEndpoint[]) : []);
-    } catch {
+    } catch (error) {
+      console.warn("[vibefi:settings] failed to load rpc endpoints", error);
       setEndpoints([]);
     } finally {
       setLoadingEndpoints(false);
@@ -176,7 +177,8 @@ function App() {
     try {
       const result = await settingsIpc("vibefi_getIpfsSettings");
       setIpfsDraft(parseIpfsSettings(result));
-    } catch {
+    } catch (error) {
+      console.warn("[vibefi:settings] failed to load ipfs settings", error);
       setIpfsDraft(DEFAULT_IPFS_SETTINGS);
     } finally {
       setLoadingIpfs(false);
@@ -189,6 +191,7 @@ function App() {
       setEndpoints(next);
       setStatus({ text: "Saved", ok: true });
     } catch (err: any) {
+      console.warn("[vibefi:settings] failed to save rpc endpoints", err);
       setStatus({ text: err?.message || String(err), ok: false });
     }
   };
@@ -202,6 +205,7 @@ function App() {
       }]);
       setStatus({ text: "Saved", ok: true });
     } catch (err: any) {
+      console.warn("[vibefi:settings] failed to save ipfs settings", err);
       setStatus({ text: err?.message || String(err), ok: false });
     } finally {
       setSavingIpfs(false);

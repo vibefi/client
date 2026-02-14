@@ -55,25 +55,29 @@ pub fn emit_chain_changed(webview: &WebView, chain_id_hex: String) {
 }
 
 pub fn emit_provider_event(webview: &WebView, event: &str, value: Value) {
-    let _ = dispatch(
+    if let Err(err) = dispatch(
         webview,
         HostDispatchKind::ProviderEvent,
         ProviderEventPayload {
             event: event.to_string(),
             value,
         },
-    );
+    ) {
+        tracing::warn!(event, error = %err, "failed to dispatch provider event");
+    }
 }
 
 pub fn emit_walletconnect_pairing(webview: &WebView, uri: &str, qr_svg: &str) {
-    let _ = dispatch(
+    if let Err(err) = dispatch(
         webview,
         HostDispatchKind::WalletconnectPairing,
         WalletconnectPairingPayload {
             uri: uri.to_string(),
             qr_svg: qr_svg.to_string(),
         },
-    );
+    ) {
+        tracing::warn!(error = %err, "failed to dispatch walletconnect pairing payload");
+    }
 }
 
 pub fn update_tabs(webview: &WebView, tabs: Vec<Value>, active_index: usize) -> Result<()> {

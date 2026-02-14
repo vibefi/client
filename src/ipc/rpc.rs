@@ -38,10 +38,10 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         "params": req.params,
     });
 
-    println!(
-        "[RPC] -> {} params={}",
-        req.method,
-        serde_json::to_string(&req.params).unwrap_or_default()
+    tracing::debug!(
+        method = %req.method,
+        params = %serde_json::to_string(&req.params).unwrap_or_default(),
+        "rpc request"
     );
 
     // Try RpcEndpointManager first (supports failover)
@@ -77,11 +77,11 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         .unwrap_or_else(|| "null".to_string());
 
     if let Some(err) = v.get("error") {
-        println!("[RPC] <- {} ERROR: {}", req.method, err);
+        tracing::warn!(method = %req.method, error = %err, "rpc error response");
         bail!("rpc error: {}", err);
     }
 
-    println!("[RPC] <- {} result={}", req.method, result_str);
+    tracing::debug!(method = %req.method, result = %result_str, "rpc success response");
     Ok(v.get("result").cloned().unwrap_or(Value::Null))
 }
 

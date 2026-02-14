@@ -5,6 +5,7 @@ mod hardware;
 mod ipc;
 mod ipc_contract;
 mod ipfs_helper;
+mod logging;
 mod menu;
 mod registry;
 mod rpc_manager;
@@ -59,6 +60,7 @@ pub(crate) static DEMO_PRIVKEY_HEX: &str =
 
 fn main() -> Result<()> {
     apply_linux_env_defaults();
+    logging::init_logging()?;
 
     let args = parse_args()?;
     let bundle = args.bundle;
@@ -69,7 +71,7 @@ fn main() -> Result<()> {
     let network = match config_path.as_ref().map(|p| (p, load_config(p))) {
         Some((_, Ok(cfg))) => Some(build_network_context(cfg)),
         Some((path, Err(e))) => {
-            eprintln!("warning: failed to load config {:?}: {:#}", path, e);
+            tracing::warn!(path = ?path, error = %e, "failed to load config");
             None
         }
         None => None,
@@ -242,7 +244,7 @@ fn main() -> Result<()> {
                     let window_handle = match built {
                         Ok(window) => window,
                         Err(e) => {
-                            eprintln!("window error: {e:?}");
+                            tracing::error!(error = ?e, "window error");
                             *control_flow = ControlFlow::Exit;
                             return;
                         }
@@ -283,7 +285,7 @@ fn main() -> Result<()> {
                     // 1. Build tab bar
                     match build_tab_bar_webview(&host, proxy.clone(), manager.tab_bar_rect(w)) {
                         Ok(tb) => manager.tab_bar = Some(tb),
-                        Err(e) => eprintln!("tab bar error: {e:?}"),
+                        Err(e) => tracing::error!(error = ?e, "tab bar error"),
                     }
 
                     // 2. Build initial app webview
@@ -328,7 +330,7 @@ fn main() -> Result<()> {
                             manager.update_tab_bar();
                         }
                         Err(e) => {
-                            eprintln!("webview error: {e:?}");
+                            tracing::error!(error = ?e, "webview error");
                             *control_flow = ControlFlow::Exit;
                             return;
                         }

@@ -33,6 +33,7 @@ impl RpcEndpointManager {
                 backoff_until: None,
             })
             .collect();
+        tracing::info!(endpoints = health.len(), "rpc endpoint manager initialized");
         Self {
             endpoints: health,
             http,
@@ -42,26 +43,67 @@ impl RpcEndpointManager {
 
     pub fn send_rpc(&mut self, payload: &Value) -> Result<Value> {
         if self.endpoints.is_empty() {
+            tracing::error!("rpc endpoint manager has no configured endpoints");
             bail!("No RPC endpoints configured");
         }
 
         let max_retries = 3usize;
         let mut last_error: Option<anyhow::Error> = None;
+        let method = payload
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
 
-        for _ in 0..max_retries {
+        tracing::debug!(
+            method,
+            endpoints = self.endpoints.len(),
+            retries = max_retries,
+            "rpc send start"
+        );
+
+        for attempt in 0..max_retries {
             let idx = self.pick_endpoint();
-            let url = self.endpoints[idx].endpoint.url.clone();
+            let endpoint = &self.endpoints[idx].endpoint;
+            let url = endpoint.url.clone();
+            let label = endpoint.label.as_deref().unwrap_or("");
+            tracing::debug!(
+                method,
+                attempt = attempt + 1,
+                endpoint_index = idx,
+                endpoint_url = %url,
+                endpoint_label = %label,
+                "rpc attempt"
+            );
 
             match self.try_send(&url, payload) {
                 Ok(body) => {
                     // Check for JSON-RPC level error
                     if body.get("error").is_some() {
                         // Non-transient JSON-RPC error — return immediately
+                        let rpc_error = body
+                            .get("error")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string());
+                        tracing::warn!(
+                            method,
+                            endpoint_index = idx,
+                            endpoint_url = %url,
+                            error = %rpc_error,
+                            "rpc json-rpc error response"
+                        );
                         return Ok(body);
                     }
                     // Success: reset failure count
+                    let previous_failures = self.endpoints[idx].consecutive_failures;
                     self.endpoints[idx].consecutive_failures = 0;
                     self.endpoints[idx].backoff_until = None;
+                    tracing::debug!(
+                        method,
+                        endpoint_index = idx,
+                        endpoint_url = %url,
+                        previous_failures,
+                        "rpc success"
+                    );
                     return Ok(body);
                 }
                 Err(e) => {
@@ -73,11 +115,29 @@ impl RpcEndpointManager {
                     health.backoff_until =
                         Some(Instant::now() + std::time::Duration::from_millis(backoff_ms));
                     self.advance_active();
+                    tracing::warn!(
+                        method,
+                        endpoint_index = idx,
+                        endpoint_url = %url,
+                        consecutive_failures = n,
+                        backoff_ms,
+                        error = %e,
+                        "rpc endpoint attempt failed"
+                    );
                     last_error = Some(e);
                 }
             }
         }
 
+        tracing::error!(
+            method,
+            retries = max_retries,
+            last_error = %last_error
+                .as_ref()
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            "all rpc endpoints failed"
+        );
         Err(last_error.unwrap_or_else(|| anyhow!("All RPC endpoints failed")))
     }
 
@@ -95,6 +155,7 @@ impl RpcEndpointManager {
             })
             .collect();
         self.active_index = 0;
+        tracing::info!(endpoints = self.endpoints.len(), "rpc endpoints updated");
     }
 
     fn pick_endpoint(&self) -> usize {
@@ -122,7 +183,13 @@ impl RpcEndpointManager {
 
     fn advance_active(&mut self) {
         if self.endpoints.len() > 1 {
+            let previous = self.active_index;
             self.active_index = (self.active_index + 1) % self.endpoints.len();
+            tracing::debug!(
+                from = previous,
+                to = self.active_index,
+                "advanced rpc active endpoint"
+            );
         }
     }
 
