@@ -136,9 +136,8 @@ fn allow_navigation(url: &str) -> bool {
             let host = uri.host().unwrap_or("");
             // wry rewrites custom protocol app://X to http://app.X/
             // e.g. app://index.html -> http://app.index.html/
-            // Allow app.localhost and any app.* that ends in .html (rewritten filenames)
-            let allowed_host = host == "app.localhost"
-                || (host.starts_with("app.") && host.ends_with(".html"));
+            // Windows WebView2 uses app.index.html for rewritten app:// navigation.
+            let allowed_host = host == "app.index.html";
             allowed_host && uri.port().is_none()
         }
         _ => false,
@@ -371,17 +370,21 @@ mod tests {
     #[test]
     fn allows_internal_navigation_origins() {
         assert!(allow_navigation("app://index.html"));
-        assert!(allow_navigation("https://app.localhost/index.html"));
-        assert!(allow_navigation("http://app.localhost/tabbar.html"));
         // wry rewrites app://index.html to http://app.index.html/
         assert!(allow_navigation("http://app.index.html/"));
-        assert!(allow_navigation("http://app.tabbar.html/"));
         assert!(allow_navigation("about:blank"));
     }
 
     #[test]
     fn rejects_external_or_similar_lookalike_origins() {
+        assert!(!allow_navigation("https://app.attacker.html/"));
+        assert!(!allow_navigation("https://app.localhost.evil.html/"));
         assert!(!allow_navigation("https://app.localhost.attacker.tld/index.html"));
+        assert!(!allow_navigation("https://app.index.evil.html/"));
+        assert!(!allow_navigation("https://app.tabbar.html/"));
+        assert!(!allow_navigation("https://app.settings.html/"));
+        assert!(!allow_navigation("https://app..html/"));
+        assert!(!allow_navigation("https://app.localhost/index.html"));
         assert!(!allow_navigation("https://evil.tld"));
         assert!(!allow_navigation("https://app.localhost:8443/index.html"));
         assert!(!allow_navigation("not-a-url"));
