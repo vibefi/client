@@ -1,9 +1,12 @@
+use anyhow::{Result, anyhow};
 use alloy_signer_local::PrivateKeySigner;
 use serde::Serialize;
 use std::{
+    collections::VecDeque,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
+
 
 use tao::event_loop::EventLoopProxy;
 
@@ -108,7 +111,7 @@ pub struct AppState {
     pub hardware_signer: Arc<Mutex<Option<HardwareDevice>>>,
     pub network: Option<NetworkContext>,
     pub proxy: EventLoopProxy<UserEvent>,
-    pub pending_connect: Arc<Mutex<Option<PendingConnect>>>,
+    pub pending_connect: Arc<Mutex<VecDeque<PendingConnect>>>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
     pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,
@@ -118,19 +121,19 @@ pub struct AppState {
 
 impl AppState {
     pub fn local_signer(&self) -> Option<Arc<PrivateKeySigner>> {
-        self.signer.lock().unwrap().as_ref().cloned()
+        self.signer.lock().expect("signer").as_ref().cloned()
     }
 
     pub fn local_signer_address(&self) -> Option<String> {
         self.signer
             .lock()
-            .unwrap()
+            .expect("signer")
             .as_ref()
             .map(|signer| format!("0x{:x}", signer.address()))
     }
 
     pub fn account(&self) -> Option<String> {
-        let ws = self.wallet.lock().unwrap();
+        let ws = self.wallet.lock().expect("wallet");
         if let Some(account) = ws.account.clone() {
             return Some(account);
         }
@@ -139,11 +142,17 @@ impl AppState {
     }
 
     pub fn chain_id_hex(&self) -> String {
-        let chain_id = self.wallet.lock().unwrap().chain.chain_id;
+        let chain_id = self.wallet.lock().expect("wallet").chain.chain_id;
         format!("0x{:x}", chain_id)
     }
 
     pub fn get_wallet_backend(&self) -> Option<WalletBackend> {
-        *self.wallet_backend.lock().unwrap()
+        *self.wallet_backend.lock().expect("wallet_backend")
     }
+}
+
+pub(crate) fn lock_or_err<'a, T>(mutex: &'a Mutex<T>, name: &str) -> Result<MutexGuard<'a, T>> {
+    mutex
+        .lock()
+        .map_err(|_| anyhow!("poisoned lock: {}", name))
 }

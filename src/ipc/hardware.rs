@@ -21,7 +21,10 @@ pub(super) fn handle_hardware_ipc(
 
     match req.method.as_str() {
         "eth_accounts" | "eth_requestAccounts" => {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while handling hardware account request");
             if ws.authorized {
                 if let Some(account) = ws.account.clone() {
                     Ok(Some(Value::Array(vec![Value::String(account)])))
@@ -33,7 +36,10 @@ pub(super) fn handle_hardware_ipc(
             }
         }
         "wallet_getProviderInfo" => {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while building hardware provider info");
             let info = ProviderInfo {
                 name: "vibefi-hardware".to_string(),
                 chain_id: format!("0x{:x}", ws.chain.chain_id),
@@ -94,7 +100,10 @@ pub(super) fn handle_hardware_ipc(
             Ok(None) // deferred
         }
         "eth_sendTransaction" => {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while handling hardware eth_sendTransaction");
             if !ws.authorized {
                 return Err(anyhow!("Unauthorized: call eth_requestAccounts first"));
             }
@@ -198,7 +207,9 @@ fn with_connected_hardware_device<T, F>(
 where
     F: FnOnce(&crate::hardware::HardwareDevice) -> std::result::Result<T, String>,
 {
-    let hs = hardware_signer.lock().unwrap();
+    let hs = hardware_signer
+        .lock()
+        .expect("poisoned hardware_signer lock while accessing connected hardware device");
     let device = hs
         .as_ref()
         .ok_or_else(|| "Hardware wallet not connected".to_string())?;

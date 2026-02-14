@@ -4,7 +4,9 @@ use wry::WebView;
 
 use crate::ipc_contract::{IpcRequest, KnownProviderId};
 use crate::registry::handle_launcher_ipc;
+use crate::state::lock_or_err;
 use crate::state::{AppState, PendingConnect, ProviderInfo, UserEvent, WalletBackend};
+use crate::webview_manager::{AppWebViewKind, WebViewManager};
 
 use super::{
     hardware, local, respond_option_result, respond_value_result, selector, walletconnect,
@@ -12,6 +14,7 @@ use super::{
 
 pub fn handle_ipc(
     webview: &WebView,
+    manager: &WebViewManager,
     state: &AppState,
     webview_id: &str,
     msg: String,
@@ -28,15 +31,14 @@ pub fn handle_ipc(
 
     // Handle vibefi-wallet IPC from the wallet selector tab.
     if provider == Some(KnownProviderId::Wallet) {
-        let result = selector::handle_wallet_selector_ipc(webview, state, webview_id, &req);
+        let result = selector::handle_wallet_selector_ipc(webview, manager, state, webview_id, &req);
         respond_option_result(webview, req.id, result)?;
         return Ok(());
     }
 
     if provider == Some(KnownProviderId::Settings) {
         if req.method == "vibefi_setEndpoints" || req.method == "vibefi_setIpfsSettings" {
-            let settings_id = state.settings_webview_id.lock().unwrap();
-            if settings_id.as_deref() != Some(webview_id) {
+            if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::Settings) {
                 tracing::warn!(
                     webview_id,
                     method = %req.method,
@@ -51,7 +53,7 @@ pub fn handle_ipc(
     }
 
     if provider == Some(KnownProviderId::Launcher) {
-        if webview_id != "app-0" {
+        if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::Launcher) {
             tracing::warn!(
                 webview_id,
                 method = %req.method,
@@ -70,8 +72,8 @@ pub fn handle_ipc(
     // open the wallet selector tab and park the request.
     if backend.is_none() && req.method == "eth_requestAccounts" {
         {
-            let mut pending = state.pending_connect.lock().unwrap();
-            *pending = Some(PendingConnect {
+            let mut pending = lock_or_err(&state.pending_connect, "pending_connect")?;
+            pending.push_back(PendingConnect {
                 webview_id: webview_id.to_string(),
                 ipc_id: req.id,
             });

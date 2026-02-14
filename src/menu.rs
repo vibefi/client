@@ -4,7 +4,7 @@ pub fn setup_macos_app_menu(app_name: &str) {
     use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
     use objc2_foundation::{MainThreadMarker, NSString};
 
-    let mtm = MainThreadMarker::new().unwrap();
+    let mtm = MainThreadMarker::new().expect("failed to acquire MainThreadMarker on macOS");
     let app = NSApplication::sharedApplication(mtm);
     if app.mainMenu().is_some() {
         return;

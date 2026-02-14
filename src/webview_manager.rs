@@ -43,10 +43,19 @@ fn bring_webview_to_front(_webview: &WebView) {}
 /// to get the physical pixel height used in `Rect` bounds.
 pub const TAB_BAR_HEIGHT_LOGICAL: f64 = 40.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppWebViewKind {
+    Standard,
+    Launcher,
+    WalletSelector,
+    Settings,
+}
+
 pub struct AppWebViewEntry {
     pub webview: WebView,
     pub id: String,
     pub label: String,
+    pub kind: AppWebViewKind,
 }
 
 pub struct WebViewManager {
@@ -160,14 +169,16 @@ impl WebViewManager {
         self.update_tab_bar();
     }
 
-    /// Find an app entry by its label and return its index.
-    pub fn index_of_label(&self, label: &str) -> Option<usize> {
-        self.apps.iter().position(|e| e.label == label)
+    pub fn index_of_kind(&self, kind: AppWebViewKind) -> Option<usize> {
+        self.apps.iter().position(|e| e.kind == kind)
     }
 
-    /// Close an app tab by label (used to close the wallet selector).
-    pub fn close_by_label(&mut self, label: &str) {
-        if let Some(idx) = self.index_of_label(label) {
+    pub fn app_kind_for_id(&self, id: &str) -> Option<AppWebViewKind> {
+        self.apps.iter().find(|e| e.id == id).map(|e| e.kind)
+    }
+
+    pub fn close_by_kind(&mut self, kind: AppWebViewKind) {
+        if let Some(idx) = self.index_of_kind(kind) {
             self.close_app(idx);
         }
     }

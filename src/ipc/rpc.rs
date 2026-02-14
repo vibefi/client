@@ -46,7 +46,10 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
 
     // Try RpcEndpointManager first (supports failover)
     let v = {
-        let mut mgr = state.rpc_manager.lock().unwrap();
+        let mut mgr = state
+            .rpc_manager
+            .lock()
+            .expect("poisoned rpc_manager lock while proxying RPC request");
         if let Some(m) = mgr.as_mut() {
             m.send_rpc(&payload)?
         } else {
@@ -146,7 +149,14 @@ pub(super) fn build_filled_tx_request(
     }
 
     if tx.chain_id.is_none() {
-        tx.chain_id = Some(state.wallet.lock().unwrap().chain.chain_id);
+        tx.chain_id = Some(
+            state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while filling transaction chain_id")
+                .chain
+                .chain_id,
+        );
     }
 
     if tx.nonce.is_none() {

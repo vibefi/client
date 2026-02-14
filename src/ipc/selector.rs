@@ -3,22 +3,22 @@ use serde_json::Value;
 use wry::WebView;
 
 use crate::ipc_contract::{IpcRequest, WalletSelectorMethod};
+use crate::state::lock_or_err;
 use crate::state::{AppState, UserEvent, WalletBackend};
 use crate::walletconnect::{WalletConnectBridge, WalletConnectConfig, WalletConnectSession};
+use crate::webview_manager::{AppWebViewKind, WebViewManager};
 
 /// Handle IPC from the wallet selector tab.
 pub(super) fn handle_wallet_selector_ipc(
     _webview: &WebView,
+    manager: &WebViewManager,
     state: &AppState,
     webview_id: &str,
     req: &IpcRequest,
 ) -> Result<Option<Value>> {
     // Verify the request comes from the actual selector tab.
-    {
-        let sel_id = state.selector_webview_id.lock().unwrap();
-        if sel_id.as_deref() != Some(webview_id) {
-            bail!("vibefi-wallet IPC only available to the wallet selector tab");
-        }
+    if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::WalletSelector) {
+        bail!("vibefi-wallet IPC only available to the wallet selector tab");
     }
 
     match req.wallet_selector_method() {
@@ -43,17 +43,17 @@ pub(super) fn handle_wallet_selector_ipc(
 
             // Store signer
             {
-                let mut s = state.signer.lock().unwrap();
+                let mut s = lock_or_err(&state.signer, "signer")?;
                 *s = Some(std::sync::Arc::new(signer));
             }
             // Set backend
             {
-                let mut wb = state.wallet_backend.lock().unwrap();
+                let mut wb = lock_or_err(&state.wallet_backend, "wallet_backend")?;
                 *wb = Some(WalletBackend::Local);
             }
             // Update wallet state
             {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = lock_or_err(&state.wallet, "wallet")?;
                 ws.authorized = true;
                 ws.account = Some(account.clone());
             }
@@ -95,18 +95,18 @@ pub(super) fn handle_wallet_selector_ipc(
 
             // Store bridge
             {
-                let mut wc = state.walletconnect.lock().unwrap();
+                let mut wc = lock_or_err(&state.walletconnect, "walletconnect")?;
                 *wc = Some(bridge.clone());
             }
 
-            let chain_id = state.wallet.lock().unwrap().chain.chain_id;
+            let chain_id = lock_or_err(&state.wallet, "wallet")?.chain.chain_id;
             let proxy = state.proxy.clone();
             let ipc_id = req.id;
             let wv_id = webview_id.to_string();
 
             std::thread::spawn(move || {
                 let result = {
-                    let mut b = bridge.lock().unwrap();
+                    let mut b = bridge.lock().expect("walletconnect_bridge");
                     let proxy_for_events = proxy.clone();
                     b.connect_with_event_handler(chain_id, move |event| {
                         if event.event == "display_uri" {
@@ -131,7 +131,7 @@ pub(super) fn handle_wallet_selector_ipc(
         }
         Some(WalletSelectorMethod::ConnectHardware) => {
             tracing::info!("wallet-selector connecting hardware wallet");
-            let chain_id = state.wallet.lock().unwrap().chain.chain_id;
+            let chain_id = lock_or_err(&state.wallet, "wallet")?.chain.chain_id;
             let proxy = state.proxy.clone();
             let hardware_signer = state.hardware_signer.clone();
             let wallet_backend = state.wallet_backend.clone();
@@ -165,24 +165,25 @@ pub(super) fn handle_wallet_selector_ipc(
 
                         // Store hardware signer
                         {
-                            let mut hs = hardware_signer.lock().unwrap();
+                            let mut hs = hardware_signer.lock().expect("hardware_signer");
                             *hs = Some(device);
                         }
                         // Set backend
                         {
-                            let mut wb = wallet_backend.lock().unwrap();
+                            let mut wb = wallet_backend.lock().expect("wallet_backend");
                             *wb = Some(WalletBackend::Hardware);
                         }
                         // Update wallet state
                         {
-                            let mut ws = wallet.lock().unwrap();
+                            let mut ws = wallet.lock().expect("wallet");
                             ws.authorized = true;
                             ws.account = Some(account.clone());
                         }
 
                         // Resolve pending connect if any
-                        let pending = pending_connect.lock().unwrap().take();
-                        if let Some(pc) = pending {
+                        let pending: Vec<_> =
+                            pending_connect.lock().expect("pending_connect").drain(..).collect();
+                        for pc in pending {
                             let _ = proxy.send_event(UserEvent::WalletConnectResult {
                                 webview_id: pc.webview_id,
                                 ipc_id: pc.ipc_id,
@@ -224,16 +225,18 @@ pub(super) fn handle_wallet_selector_ipc(
 /// Resolve a pending `eth_requestAccounts` from a dapp tab by sending the
 /// account list back to the original webview.
 fn resolve_pending_connect(state: &AppState, accounts: Vec<String>) {
-    let pending = {
-        let mut p = state.pending_connect.lock().unwrap();
-        p.take()
-    };
-    if let Some(pc) = pending {
+    let pending: Vec<_> = state
+        .pending_connect
+        .lock()
+        .expect("pending_connect")
+        .drain(..)
+        .collect();
+    for pc in pending {
         let _ = state.proxy.send_event(UserEvent::WalletConnectResult {
             webview_id: pc.webview_id,
             ipc_id: pc.ipc_id,
             result: Ok(WalletConnectSession {
-                accounts,
+                accounts: accounts.clone(),
                 chain_id_hex: state.chain_id_hex(),
             }),
         });

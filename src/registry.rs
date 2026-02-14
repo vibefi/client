@@ -183,7 +183,10 @@ pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
                 let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.root_cid = Some(root);
                 v.status = Some("Published".to_string());
-                dapps.get_mut(&dapp_id).unwrap().latest_version_id = version_id;
+                dapps
+                    .get_mut(&dapp_id)
+                    .expect("dapp entry missing after version creation")
+                    .latest_version_id = version_id;
             }
             "DappUpgraded" => {
                 let decoded = DappUpgraded::decode_log(&log.log)?;
@@ -193,7 +196,10 @@ pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
                 let v = get_or_create_version!(dapps, dapp_id, version_id);
                 v.root_cid = Some(root);
                 v.status = Some("Published".to_string());
-                dapps.get_mut(&dapp_id).unwrap().latest_version_id = version_id;
+                dapps
+                    .get_mut(&dapp_id)
+                    .expect("dapp entry missing after version creation")
+                    .latest_version_id = version_id;
             }
             "DappMetadata" => {
                 let decoded = DappMetadata::decode_log(&log.log)?;
