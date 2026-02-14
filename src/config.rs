@@ -78,6 +78,17 @@ fn default_rpc_url() -> String {
     "http://127.0.0.1:8546".to_string()
 }
 
+fn resolve_rpc_url(config: &AppConfig) -> String {
+    if let Ok(override_url) = std::env::var("VIBEFI_RPC_URL") {
+        let trimmed = override_url.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    config.rpcUrl.clone()
+}
+
 fn default_ipfs_helia_gateways() -> Vec<String> {
     vec![
         "https://trustless-gateway.link".to_string(),
@@ -130,7 +141,7 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
 }
 
 pub fn build_network_context(config: AppConfig) -> NetworkContext {
-    let rpc_url = config.rpcUrl.clone();
+    let rpc_url = resolve_rpc_url(&config);
     let ipfs_api = config
         .ipfsApi
         .clone()

@@ -62,7 +62,9 @@ fn main() -> Result<()> {
 
     let args = parse_args()?;
     let bundle = args.bundle;
-    let config_path = args.config_path;
+    let config_path = args
+        .config_path
+        .or_else(|| runtime_paths::resolve_default_config());
 
     let network = match config_path.as_ref().map(|p| (p, load_config(p))) {
         Some((_, Ok(cfg))) => Some(build_network_context(cfg)),
