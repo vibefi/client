@@ -1,9 +1,10 @@
+use anyhow::{Result, anyhow};
 use alloy_signer_local::PrivateKeySigner;
 use serde::Serialize;
 use std::{
     collections::VecDeque,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use tao::event_loop::EventLoopProxy;
@@ -119,32 +120,61 @@ pub struct AppState {
 
 impl AppState {
     pub fn local_signer(&self) -> Option<Arc<PrivateKeySigner>> {
-        self.signer.lock().unwrap().as_ref().cloned()
+        match lock_or_err(&self.signer, "signer") {
+            Ok(signer) => signer.as_ref().cloned(),
+            Err(err) => {
+                tracing::error!(error = %err, "failed to access local signer");
+                None
+            }
+        }
     }
 
     pub fn local_signer_address(&self) -> Option<String> {
-        self.signer
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|signer| format!("0x{:x}", signer.address()))
+        match lock_or_err(&self.signer, "signer") {
+            Ok(signer) => signer
+                .as_ref()
+                .map(|signer| format!("0x{:x}", signer.address())),
+            Err(err) => {
+                tracing::error!(error = %err, "failed to access local signer address");
+                None
+            }
+        }
     }
 
     pub fn account(&self) -> Option<String> {
-        let ws = self.wallet.lock().unwrap();
-        if let Some(account) = ws.account.clone() {
-            return Some(account);
+        if let Ok(ws) = lock_or_err(&self.wallet, "wallet") {
+            if let Some(account) = ws.account.clone() {
+                return Some(account);
+            }
+        } else {
+            tracing::error!("failed to access wallet account state");
         }
-        drop(ws);
         self.local_signer_address()
     }
 
     pub fn chain_id_hex(&self) -> String {
-        let chain_id = self.wallet.lock().unwrap().chain.chain_id;
-        format!("0x{:x}", chain_id)
+        match lock_or_err(&self.wallet, "wallet") {
+            Ok(wallet) => format!("0x{:x}", wallet.chain.chain_id),
+            Err(err) => {
+                tracing::error!(error = %err, "failed to access wallet chain id");
+                "0x1".to_string()
+            }
+        }
     }
 
     pub fn get_wallet_backend(&self) -> Option<WalletBackend> {
-        *self.wallet_backend.lock().unwrap()
+        match lock_or_err(&self.wallet_backend, "wallet_backend") {
+            Ok(wallet_backend) => *wallet_backend,
+            Err(err) => {
+                tracing::error!(error = %err, "failed to access wallet backend");
+                None
+            }
+        }
     }
+}
+
+pub(crate) fn lock_or_err<'a, T>(mutex: &'a Mutex<T>, name: &str) -> Result<MutexGuard<'a, T>> {
+    mutex
+        .lock()
+        .map_err(|_| anyhow!("poisoned lock: {}", name))
 }

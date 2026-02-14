@@ -1,13 +1,25 @@
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
 use tao::event_loop::EventLoopProxy;
 
 use crate::ipc;
 use crate::ipc_contract::{IpcRequest, KnownProviderId, TabbarMethod};
+use crate::state::lock_or_err;
 use crate::state::{AppState, TabAction, UserEvent};
 use crate::ui_bridge;
 use crate::webview::{EmbeddedContent, WebViewHost, build_app_webview};
 use crate::webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
+
+fn lock_or_log<'a, T>(mutex: &'a Mutex<T>, name: &str) -> Option<MutexGuard<'a, T>> {
+    match lock_or_err(mutex, name) {
+        Ok(guard) => Some(guard),
+        Err(err) => {
+            tracing::error!(error = %err, "failed to acquire lock");
+            None
+        }
+    }
+}
 
 pub fn handle_ipc_event(
     state: &AppState,
@@ -30,11 +42,17 @@ pub fn handle_ipc_event(
                             let idx = idx as usize;
                             if let Some(entry) = manager.apps.get(idx) {
                                 if entry.kind == AppWebViewKind::Settings {
-                                    let mut sel = state.settings_webview_id.lock().unwrap();
-                                    *sel = None;
+                                    if let Some(mut sel) =
+                                        lock_or_log(&state.settings_webview_id, "settings_webview_id")
+                                    {
+                                        *sel = None;
+                                    }
                                 } else if entry.kind == AppWebViewKind::WalletSelector {
-                                    let mut sel = state.selector_webview_id.lock().unwrap();
-                                    *sel = None;
+                                    if let Some(mut sel) =
+                                        lock_or_log(&state.selector_webview_id, "selector_webview_id")
+                                    {
+                                        *sel = None;
+                                    }
                                 }
                             }
                             manager.close_app(idx);
@@ -59,7 +77,9 @@ pub fn handle_open_wallet_selector(
 ) {
     // Only open one selector at a time.
     {
-        let sel = state.selector_webview_id.lock().unwrap();
+        let Some(sel) = lock_or_log(&state.selector_webview_id, "selector_webview_id") else {
+            return;
+        };
         if sel.is_some() {
             // Already open — just switch to it
             if let Some(idx) = manager.index_of_kind(AppWebViewKind::WalletSelector) {
@@ -80,8 +100,11 @@ pub fn handle_open_wallet_selector(
             "Connect Wallet".to_string(),
         ) {
             Ok(id) => {
-                let mut sel = state.selector_webview_id.lock().unwrap();
-                *sel = Some(id);
+                if let Some(mut sel) =
+                    lock_or_log(&state.selector_webview_id, "selector_webview_id")
+                {
+                    *sel = Some(id);
+                }
             }
             Err(e) => tracing::error!(error = ?e, "failed to open wallet selector tab"),
         }
@@ -95,7 +118,9 @@ pub fn handle_walletconnect_pairing(
     qr_svg: String,
 ) {
     // Send pairing data to the wallet selector tab (if open).
-    let sel_id = state.selector_webview_id.lock().unwrap().clone();
+    let sel_id = lock_or_log(&state.selector_webview_id, "selector_webview_id")
+        .map(|id| id.clone())
+        .flatten();
     if let Some(sel_id) = sel_id {
         if let Some(wv) = manager.webview_for_id(&sel_id) {
             ui_bridge::emit_walletconnect_pairing(wv, &uri, &qr_svg);
@@ -121,9 +146,9 @@ pub fn handle_walletconnect_result(
     // If there is a pending eth_requestAccounts from a dapp,
     // resolve it now that the wallet is connected.
     if let Ok(ref session) = result {
-        let pending: Vec<_> = {
-            let mut guard = state.pending_connect.lock().unwrap();
-            guard.drain(..).collect()
+        let pending: Vec<_> = match lock_or_log(&state.pending_connect, "pending_connect") {
+            Some(mut guard) => guard.drain(..).collect(),
+            None => Vec::new(),
         };
         for pc in pending {
             if pc.webview_id == webview_id && pc.ipc_id == ipc_id {
@@ -168,7 +193,9 @@ pub fn handle_open_settings(
 ) {
     // Only open one settings tab at a time.
     {
-        let mut sel = state.settings_webview_id.lock().unwrap();
+        let Some(mut sel) = lock_or_log(&state.settings_webview_id, "settings_webview_id") else {
+            return;
+        };
         if sel.is_some() {
             if let Some(idx) = manager.index_of_kind(AppWebViewKind::Settings) {
                 manager.switch_to(idx);
@@ -190,8 +217,11 @@ pub fn handle_open_settings(
             "Settings".to_string(),
         ) {
             Ok(id) => {
-                let mut sel = state.settings_webview_id.lock().unwrap();
-                *sel = Some(id);
+                if let Some(mut sel) =
+                    lock_or_log(&state.settings_webview_id, "settings_webview_id")
+                {
+                    *sel = Some(id);
+                }
             }
             Err(e) => tracing::error!(error = ?e, "failed to open settings tab"),
         }
@@ -228,8 +258,7 @@ pub fn handle_provider_event(
 }
 
 pub fn handle_close_wallet_selector(state: &AppState, manager: &mut WebViewManager) {
-    {
-        let mut sel = state.selector_webview_id.lock().unwrap();
+    if let Some(mut sel) = lock_or_log(&state.selector_webview_id, "selector_webview_id") {
         *sel = None;
     }
     manager.close_by_kind(AppWebViewKind::WalletSelector);

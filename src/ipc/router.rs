@@ -4,6 +4,7 @@ use wry::WebView;
 
 use crate::ipc_contract::{IpcRequest, KnownProviderId};
 use crate::registry::handle_launcher_ipc;
+use crate::state::lock_or_err;
 use crate::state::{AppState, PendingConnect, ProviderInfo, UserEvent, WalletBackend};
 use crate::webview_manager::{AppWebViewKind, WebViewManager};
 
@@ -71,7 +72,7 @@ pub fn handle_ipc(
     // open the wallet selector tab and park the request.
     if backend.is_none() && req.method == "eth_requestAccounts" {
         {
-            let mut pending = state.pending_connect.lock().unwrap();
+            let mut pending = lock_or_err(&state.pending_connect, "pending_connect")?;
             pending.push_back(PendingConnect {
                 webview_id: webview_id.to_string(),
                 ipc_id: req.id,
