@@ -19,6 +19,7 @@ mod webview_manager;
 
 use anyhow::{Context, Result, anyhow};
 use std::{
+    collections::VecDeque,
     env,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -126,7 +127,7 @@ fn main() -> Result<()> {
         hardware_signer: Arc::new(Mutex::new(None)),
         network,
         proxy: proxy.clone(),
-        pending_connect: Arc::new(Mutex::new(None)),
+        pending_connect: Arc::new(Mutex::new(VecDeque::new())),
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
         config_path: config_path.clone(),

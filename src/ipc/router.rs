@@ -71,7 +71,7 @@ pub fn handle_ipc(
     if backend.is_none() && req.method == "eth_requestAccounts" {
         {
             let mut pending = state.pending_connect.lock().unwrap();
-            *pending = Some(PendingConnect {
+            pending.push_back(PendingConnect {
                 webview_id: webview_id.to_string(),
                 ipc_id: req.id,
             });

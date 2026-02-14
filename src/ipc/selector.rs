@@ -181,8 +181,11 @@ pub(super) fn handle_wallet_selector_ipc(
                         }
 
                         // Resolve pending connect if any
-                        let pending = pending_connect.lock().unwrap().take();
-                        if let Some(pc) = pending {
+                        let pending: Vec<_> = {
+                            let mut guard = pending_connect.lock().unwrap();
+                            guard.drain(..).collect()
+                        };
+                        for pc in pending {
                             let _ = proxy.send_event(UserEvent::WalletConnectResult {
                                 webview_id: pc.webview_id,
                                 ipc_id: pc.ipc_id,
@@ -224,16 +227,16 @@ pub(super) fn handle_wallet_selector_ipc(
 /// Resolve a pending `eth_requestAccounts` from a dapp tab by sending the
 /// account list back to the original webview.
 fn resolve_pending_connect(state: &AppState, accounts: Vec<String>) {
-    let pending = {
-        let mut p = state.pending_connect.lock().unwrap();
-        p.take()
+    let pending: Vec<_> = {
+        let mut guard = state.pending_connect.lock().unwrap();
+        guard.drain(..).collect()
     };
-    if let Some(pc) = pending {
+    for pc in pending {
         let _ = state.proxy.send_event(UserEvent::WalletConnectResult {
             webview_id: pc.webview_id,
             ipc_id: pc.ipc_id,
             result: Ok(WalletConnectSession {
-                accounts,
+                accounts: accounts.clone(),
                 chain_id_hex: state.chain_id_hex(),
             }),
         });

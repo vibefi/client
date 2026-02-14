@@ -1,6 +1,7 @@
 use alloy_signer_local::PrivateKeySigner;
 use serde::Serialize;
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -108,7 +109,7 @@ pub struct AppState {
     pub hardware_signer: Arc<Mutex<Option<HardwareDevice>>>,
     pub network: Option<NetworkContext>,
     pub proxy: EventLoopProxy<UserEvent>,
-    pub pending_connect: Arc<Mutex<Option<PendingConnect>>>,
+    pub pending_connect: Arc<Mutex<VecDeque<PendingConnect>>>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
     pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,

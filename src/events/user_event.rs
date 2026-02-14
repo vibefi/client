@@ -120,17 +120,21 @@ pub fn handle_walletconnect_result(
     // If there is a pending eth_requestAccounts from a dapp,
     // resolve it now that the wallet is connected.
     if let Ok(ref session) = result {
-        let pending = state.pending_connect.lock().unwrap().take();
-        if let Some(pc) = pending {
-            if pc.webview_id != webview_id {
-                if let Some(dapp_wv) = manager.webview_for_id(&pc.webview_id) {
-                    let accounts: Vec<serde_json::Value> = session
-                        .accounts
-                        .iter()
-                        .map(|a| serde_json::Value::String(a.clone()))
-                        .collect();
-                    let _ = ipc::respond_ok(dapp_wv, pc.ipc_id, serde_json::Value::Array(accounts));
-                }
+        let pending: Vec<_> = {
+            let mut guard = state.pending_connect.lock().unwrap();
+            guard.drain(..).collect()
+        };
+        for pc in pending {
+            if pc.webview_id == webview_id && pc.ipc_id == ipc_id {
+                continue;
+            }
+            if let Some(dapp_wv) = manager.webview_for_id(&pc.webview_id) {
+                let accounts: Vec<serde_json::Value> = session
+                    .accounts
+                    .iter()
+                    .map(|a| serde_json::Value::String(a.clone()))
+                    .collect();
+                let _ = ipc::respond_ok(dapp_wv, pc.ipc_id, serde_json::Value::Array(accounts));
             }
         }
     }
