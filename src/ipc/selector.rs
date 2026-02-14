@@ -23,7 +23,7 @@ pub(super) fn handle_wallet_selector_ipc(
 
     match req.wallet_selector_method() {
         Some(WalletSelectorMethod::ConnectLocal) => {
-            eprintln!("[wallet-selector] connecting local signer");
+            tracing::info!("wallet-selector connecting local signer");
             let network = state.network.as_ref();
             let is_local = network.map(|n| n.config.localNetwork).unwrap_or(false);
             let explicit_key = network.and_then(|n| n.config.developerPrivateKey.clone());
@@ -67,7 +67,7 @@ pub(super) fn handle_wallet_selector_ipc(
             Ok(Some(Value::Bool(true)))
         }
         Some(WalletSelectorMethod::ConnectWalletConnect) => {
-            eprintln!("[wallet-selector] connecting walletconnect");
+            tracing::info!("wallet-selector connecting walletconnect");
             let wc_config = state
                 .network
                 .as_ref()
@@ -130,7 +130,7 @@ pub(super) fn handle_wallet_selector_ipc(
             Ok(None)
         }
         Some(WalletSelectorMethod::ConnectHardware) => {
-            eprintln!("[wallet-selector] connecting hardware wallet");
+            tracing::info!("wallet-selector connecting hardware wallet");
             let chain_id = state.wallet.lock().unwrap().chain.chain_id;
             let proxy = state.proxy.clone();
             let hardware_signer = state.hardware_signer.clone();
@@ -148,7 +148,7 @@ pub(super) fn handle_wallet_selector_ipc(
                 {
                     Ok(rt) => rt,
                     Err(e) => {
-                        eprintln!("[hardware] failed to create tokio runtime: {e}");
+                        tracing::error!(error = %e, "hardware failed to create tokio runtime");
                         let _ = proxy.send_event(UserEvent::HardwareSignResult {
                             webview_id: wv_id,
                             ipc_id,
@@ -161,7 +161,7 @@ pub(super) fn handle_wallet_selector_ipc(
                 match rt.block_on(crate::hardware::detect_and_connect(chain_id)) {
                     Ok(device) => {
                         let account = crate::hardware::get_address(&device);
-                        eprintln!("[hardware] connected: {account}");
+                        tracing::info!(account, "hardware connected");
 
                         // Store hardware signer
                         {
@@ -204,7 +204,7 @@ pub(super) fn handle_wallet_selector_ipc(
                         let _ = proxy.send_event(UserEvent::CloseWalletSelector);
                     }
                     Err(e) => {
-                        eprintln!("[hardware] connection failed: {e}");
+                        tracing::warn!(error = %e, "hardware connection failed");
                         let _ = proxy.send_event(UserEvent::HardwareSignResult {
                             webview_id: wv_id,
                             ipc_id,

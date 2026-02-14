@@ -14,7 +14,10 @@ export type HostDispatchHandlers = {
 };
 
 export function handleHostDispatch(message: unknown, handlers: HostDispatchHandlers) {
-  if (!message || typeof message !== "object") return;
+  if (!message || typeof message !== "object") {
+    console.debug("[vibefi:host-dispatch] ignoring non-object message");
+    return;
+  }
 
   const candidate = message as Partial<HostDispatchMessage> & {
     kind?: unknown;
@@ -35,5 +38,11 @@ export function handleHostDispatch(message: unknown, handlers: HostDispatchHandl
   }
   if (candidate.kind === "tabbarUpdate") {
     handlers.onTabbarUpdate?.((candidate.payload ?? {}) as TabbarUpdatePayload);
+    return;
   }
+
+  console.warn(
+    "[vibefi:host-dispatch] unknown dispatch kind",
+    candidate.kind
+  );
 }

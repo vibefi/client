@@ -368,3 +368,28 @@ pub fn resolve_default_config() -> Option<PathBuf> {
 
     None
 }
+
+/// Resolve the directory for application log files.
+///
+/// Resolution order:
+/// 1. `VIBEFI_LOG_DIR` environment variable (explicit override)
+/// 2. Platform local data dir via `dirs::data_local_dir()` (preferred for user installs)
+/// 3. Platform cache dir via `dirs::cache_dir()`
+/// 4. Current working directory fallback (`./.vibefi/logs`)
+pub fn resolve_log_dir() -> PathBuf {
+    if let Ok(path) = env::var("VIBEFI_LOG_DIR") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(dir) = dirs::data_local_dir() {
+        return dir.join("VibeFi").join("logs");
+    }
+    if let Some(dir) = dirs::cache_dir() {
+        return dir.join("VibeFi").join("logs");
+    }
+
+    PathBuf::from(".").join(".vibefi").join("logs")
+}

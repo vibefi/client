@@ -69,6 +69,10 @@ alloy-sol-types = "1.5"
 tokio = { version = "1", features = ["rt", "net", "time"] }
 dirs = "6"
 base64 = "0.22"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

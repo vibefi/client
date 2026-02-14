@@ -1,6 +1,6 @@
-use alloy_primitives::{Address, Bytes, Log, B256, U256};
-use alloy_sol_types::{sol, SolEvent};
-use anyhow::{anyhow, Context, Result};
+use alloy_primitives::{Address, B256, Bytes, Log, U256};
+use alloy_sol_types::{SolEvent, sol};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -10,7 +10,7 @@ use std::{
     str::FromStr,
 };
 
-use crate::bundle::{build_bundle, verify_manifest, BundleManifest};
+use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
 use crate::config::{IpfsFetchBackend, NetworkContext};
 use crate::ipfs_helper::{IpfsHelperBridge, IpfsHelperConfig};
 use crate::state::{AppState, TabAction, UserEvent};
@@ -350,7 +350,7 @@ pub fn handle_launcher_ipc(
                         .network
                         .as_ref()
                         .ok_or_else(|| anyhow!("Network not configured"))?;
-                    println!("launcher: fetching dapp list from logs");
+                    tracing::info!("launcher: fetching dapp list from logs");
                     let dapps = list_dapps(devnet)?;
                     Ok(serde_json::to_value(dapps)?)
                 })()
@@ -404,10 +404,10 @@ fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -
         .network
         .as_ref()
         .ok_or_else(|| anyhow!("Network not configured"))?;
-    println!("launcher: fetch bundle {root_cid}");
+    tracing::info!(root_cid, "launcher: fetch bundle");
     let bundle_dir = devnet.cache_dir.join(root_cid);
     let ipfs = resolve_effective_ipfs_config(state, devnet);
-    println!("[ipfs] backend={}", ipfs.fetch_backend.as_str());
+    tracing::info!(backend = ipfs.fetch_backend.as_str(), "ipfs backend");
 
     emit_launch_progress(
         state,
@@ -420,7 +420,7 @@ fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -
         ensure_bundle_cached(devnet, &ipfs, root_cid, &bundle_dir, &mut emit)?;
     }
 
-    println!("launcher: verify bundle manifest");
+    tracing::info!("launcher: verify bundle manifest");
     emit_launch_progress(
         state,
         webview_id,
@@ -430,14 +430,14 @@ fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -
 
     let dist_dir = bundle_dir.join(".vibefi").join("dist");
     if dist_dir.join("index.html").exists() {
-        println!("launcher: using cached build");
+        tracing::info!("launcher: using cached build");
         emit_launch_progress(
             state,
             webview_id,
             LaunchProgress::simple("build", "Using cached build artifacts.", 96),
         );
     } else {
-        println!("launcher: build bundle");
+        tracing::info!("launcher: build bundle");
         emit_launch_progress(
             state,
             webview_id,
@@ -487,8 +487,9 @@ fn ensure_bundle_cached(
                 return Ok(());
             }
             Err(err) => {
-                println!(
-                    "launcher: cached bundle invalid, purging cache and re-downloading: {err:#}"
+                tracing::warn!(
+                    error = %err,
+                    "launcher: cached bundle invalid, purging cache and re-downloading"
                 );
                 on_progress(LaunchProgress::simple(
                     "download",
@@ -528,7 +529,7 @@ fn ensure_bundle_cached_local_node(
     bundle_dir: &Path,
     on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
-    println!("launcher: download bundle from local IPFS node");
+    tracing::info!("launcher: download bundle from local IPFS node");
     on_progress(LaunchProgress::simple(
         "download",
         "Downloading bundle from local IPFS node...",
@@ -554,7 +555,7 @@ fn ensure_bundle_cached_helia(
     bundle_dir: &Path,
     on_progress: &mut dyn FnMut(LaunchProgress),
 ) -> Result<()> {
-    println!("launcher: download bundle via Helia verified fetch");
+    tracing::info!("launcher: download bundle via Helia verified fetch");
     on_progress(LaunchProgress::simple(
         "download",
         "Fetching manifest from IPFS...",

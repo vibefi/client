@@ -55,6 +55,11 @@ pub(super) fn handle_hardware_ipc(
             } else {
                 msg.as_bytes().to_vec()
             };
+            tracing::debug!(
+                webview_id,
+                ipc_id = req.id,
+                "hardware personal_sign request"
+            );
 
             spawn_hardware_async(state, webview_id, req.id, move |rt, hardware_signer| {
                 with_connected_hardware_device(hardware_signer, |device| {
@@ -72,6 +77,11 @@ pub(super) fn handle_hardware_ipc(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("invalid params for eth_signTypedData_v4"))?
                 .to_string();
+            tracing::debug!(
+                webview_id,
+                ipc_id = req.id,
+                "hardware eth_signTypedData_v4 request"
+            );
 
             spawn_hardware_async(state, webview_id, req.id, move |rt, hardware_signer| {
                 let hash = alloy_primitives::keccak256(typed_data_json.as_bytes());
@@ -99,6 +109,11 @@ pub(super) fn handle_hardware_ipc(
             // Sign and broadcast the typed transaction via the connected hardware device.
             let state_for_rpc = state.clone();
             let ipc_id = req.id;
+            tracing::info!(
+                webview_id,
+                ipc_id,
+                "hardware spawning eth_sendTransaction worker"
+            );
 
             spawn_hardware_async(state, webview_id, ipc_id, move |rt, hardware_signer| {
                 // Build and fill the tx request inside the thread to avoid blocking
@@ -140,6 +155,7 @@ where
     let proxy = state.proxy.clone();
     let hardware_signer = state.hardware_signer.clone();
     let wv_id = webview_id.to_string();
+    tracing::debug!(webview_id, ipc_id, "spawning hardware async worker");
 
     std::thread::spawn(move || {
         let result = tokio::runtime::Builder::new_current_thread()
@@ -148,11 +164,30 @@ where
             .map_err(|e| format!("runtime error: {e}"))
             .and_then(|rt| task(&rt, &hardware_signer));
 
-        let _ = proxy.send_event(UserEvent::HardwareSignResult {
+        if let Err(err) = &result {
+            tracing::warn!(
+                webview_id = %wv_id,
+                ipc_id,
+                error = %err,
+                "hardware async worker failed"
+            );
+        } else {
+            tracing::debug!(
+                webview_id = %wv_id,
+                ipc_id,
+                "hardware async worker succeeded"
+            );
+        }
+        if let Err(err) = proxy.send_event(UserEvent::HardwareSignResult {
             webview_id: wv_id,
             ipc_id,
             result,
-        });
+        }) {
+            tracing::warn!(
+                error = %err,
+                "failed to send HardwareSignResult from worker"
+            );
+        }
     });
 }
 
