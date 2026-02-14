@@ -97,29 +97,46 @@ impl WebViewManager {
 
     pub fn switch_to(&mut self, index: usize) {
         if index >= self.apps.len() {
+            tracing::debug!(
+                index,
+                app_count = self.apps.len(),
+                "switch_to ignored out-of-range index"
+            );
             return;
         }
         if let Some(old) = self.active_app_index {
             if old < self.apps.len() {
-                let _ = self.apps[old].webview.set_visible(false);
+                if let Err(err) = self.apps[old].webview.set_visible(false) {
+                    tracing::warn!(index = old, error = %err, "failed to hide previous webview");
+                }
             }
         }
-        let _ = self.apps[index].webview.set_visible(true);
+        if let Err(err) = self.apps[index].webview.set_visible(true) {
+            tracing::warn!(index, error = %err, "failed to show target webview");
+        }
         #[cfg(target_os = "macos")]
         bring_webview_to_front(&self.apps[index].webview);
         self.active_app_index = Some(index);
+        tracing::debug!(index, "switched active webview");
         self.update_tab_bar();
     }
 
     pub fn close_app(&mut self, index: usize) {
         if index >= self.apps.len() {
+            tracing::debug!(
+                index,
+                app_count = self.apps.len(),
+                "close_app ignored out-of-range index"
+            );
             return;
         }
         // Don't close the last tab (launcher)
         if self.apps.len() <= 1 {
+            tracing::debug!("close_app ignored because only one tab exists");
             return;
         }
         self.apps.remove(index);
+        tracing::debug!(index, remaining_tabs = self.apps.len(), "closed app tab");
         // Adjust active index
         let new_active = if self.apps.is_empty() {
             None
@@ -136,7 +153,9 @@ impl WebViewManager {
         };
         self.active_app_index = new_active;
         if let Some(i) = new_active {
-            let _ = self.apps[i].webview.set_visible(true);
+            if let Err(err) = self.apps[i].webview.set_visible(true) {
+                tracing::warn!(index = i, error = %err, "failed to show active webview after close");
+            }
         }
         self.update_tab_bar();
     }
@@ -160,7 +179,9 @@ impl WebViewManager {
             size: PhysicalSize::new(phys_width, tb_h).into(),
         };
         if let Some(tb) = &self.tab_bar {
-            let _ = tb.set_bounds(tab_rect);
+            if let Err(err) = tb.set_bounds(tab_rect) {
+                tracing::warn!(error = %err, "failed to set tab bar bounds");
+            }
         }
 
         let app_height = phys_height.saturating_sub(tb_h);
@@ -169,7 +190,9 @@ impl WebViewManager {
             size: PhysicalSize::new(phys_width, app_height).into(),
         };
         for entry in &self.apps {
-            let _ = entry.webview.set_bounds(app_rect);
+            if let Err(err) = entry.webview.set_bounds(app_rect) {
+                tracing::warn!(id = %entry.id, error = %err, "failed to set app webview bounds");
+            }
         }
     }
 
@@ -184,7 +207,9 @@ impl WebViewManager {
             .map(|e| serde_json::json!({ "id": e.id, "label": e.label }))
             .collect();
         let active = self.active_app_index.unwrap_or(0);
-        let _ = crate::ui_bridge::update_tabs(tb, tabs, active);
+        if let Err(err) = crate::ui_bridge::update_tabs(tb, tabs, active) {
+            tracing::warn!(error = %err, "failed to update tab bar");
+        }
     }
 
     pub fn tab_bar_rect(&self, phys_width: u32) -> Rect {

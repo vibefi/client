@@ -146,6 +146,7 @@ function App() {
       await walletIpc("vibefi_connectLocal");
       setPhase("done");
     } catch (err: any) {
+      console.warn("[vibefi:wallet-selector] local connect failed", err);
       setError(err?.message || String(err));
       setPhase("select");
     }
@@ -158,6 +159,7 @@ function App() {
       await walletIpc("vibefi_connectWalletConnect");
       setPhase("done");
     } catch (err: any) {
+      console.warn("[vibefi:wallet-selector] walletconnect connect failed", err);
       setError(err?.message || String(err));
       setPhase("select");
     }
@@ -170,6 +172,7 @@ function App() {
       await walletIpc("vibefi_connectHardware");
       setPhase("done");
     } catch (err: any) {
+      console.warn("[vibefi:wallet-selector] hardware connect failed", err);
       setError(err?.message || String(err));
       setPhase("select");
     }

@@ -14,7 +14,12 @@ declare global {
 }
 
 function postIpc(message: IpcRequestMessage) {
-  window.ipc.postMessage(JSON.stringify(message));
+  try {
+    window.ipc.postMessage(JSON.stringify(message));
+  } catch (error) {
+    console.error("[vibefi:ipc] failed to post message", error);
+    throw error;
+  }
 }
 
 export class IpcClient {
@@ -45,7 +50,10 @@ export class IpcClient {
 
   resolve(id: number, result: unknown, error: unknown) {
     const callback = this.callbacks.get(id);
-    if (!callback) return;
+    if (!callback) {
+      console.warn("[vibefi:ipc] unresolved callback id", id);
+      return;
+    }
     this.callbacks.delete(id);
     if (error) callback.reject(error);
     else callback.resolve(result);

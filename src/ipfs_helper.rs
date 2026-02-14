@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use crate::runtime_paths;
+use crate::{logging, runtime_paths};
 
 #[derive(Debug, Clone)]
 pub struct IpfsHelperConfig {
@@ -55,10 +55,10 @@ impl IpfsHelperBridge {
     pub fn spawn(config: IpfsHelperConfig) -> Result<Self> {
         let helper_script = runtime_paths::resolve_ipfs_helper_script()?;
         let node_path = runtime_paths::resolve_node_binary()?;
-        println!(
-            "[ipfs] spawning helper: {} {}",
-            node_path,
-            helper_script.display()
+        tracing::info!(
+            node = %node_path,
+            script = %helper_script.display(),
+            "spawning ipfs helper"
         );
         let gateways_json =
             serde_json::to_string(&config.gateways).context("serialize helper gateways")?;
@@ -71,9 +71,15 @@ impl IpfsHelperBridge {
             .env("VIBEFI_IPFS_HELIA_ROUTERS", routers_json)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("failed to spawn ipfs helper via {}", node_path))?;
+
+        if let Some(stderr) = child.stderr.take() {
+            logging::forward_child_stderr("ipfs", stderr);
+        } else {
+            tracing::warn!("ipfs helper stderr unavailable");
+        }
 
         let stdin = child
             .stdin
@@ -127,7 +133,7 @@ impl IpfsHelperBridge {
             "params": params
         });
         let line = serde_json::to_string(&payload)?;
-        println!("[ipfs] >> send {method} id={id}");
+        tracing::debug!(method, id, "ipfs helper send");
         self.stdin
             .write_all(line.as_bytes())
             .context("failed writing helper request")?;
@@ -137,7 +143,7 @@ impl IpfsHelperBridge {
         self.stdin
             .flush()
             .context("failed flushing helper request")?;
-        println!("[ipfs] >> flushed, waiting for response...");
+        tracing::debug!(method, id, "ipfs helper request flushed");
 
         loop {
             let mut raw = String::new();
@@ -154,11 +160,11 @@ impl IpfsHelperBridge {
             }
             let response: HelperResponse =
                 serde_json::from_str(raw).context("invalid helper response payload")?;
-            println!(
-                "[ipfs] << recv id={} ok={} err={}",
-                response.id,
-                response.result.is_some(),
-                response.error.is_some()
+            tracing::debug!(
+                id = response.id,
+                ok = response.result.is_some(),
+                has_error = response.error.is_some(),
+                "ipfs helper recv"
             );
             if response.id != id {
                 bail!(

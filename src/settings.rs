@@ -43,8 +43,25 @@ pub fn load_settings(config_path: &Path) -> UserSettings {
         return UserSettings::default();
     }
     match fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
-        Err(_) => UserSettings::default(),
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(settings) => settings,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "failed to parse settings.json; using defaults"
+                );
+                UserSettings::default()
+            }
+        },
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "failed to read settings.json; using defaults"
+            );
+            UserSettings::default()
+        }
     }
 }
 

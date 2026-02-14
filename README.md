@@ -23,6 +23,32 @@ This assumes you've got the devnet running.
 cargo run -- --config ../contracts/.devnet/devnet.json
 ```
 
+## Logging
+
+- Logging uses `tracing` with stderr + rolling file output.
+- Default log file directory:
+  - Linux: `~/.local/share/VibeFi/logs`
+  - macOS: `~/Library/Application Support/VibeFi/logs`
+  - Windows: `%LOCALAPPDATA%\\VibeFi\\logs`
+- Log profile defaults:
+  - `cargo run`: verbose for VibeFi-only targets (`vibefi=trace`)
+  - packaged/user app runs: quieter (`info`)
+- Built-in profiles via `VIBEFI_LOG_PROFILE`:
+  - `dev`: verbose VibeFi logs only (suppresses noisy dependency logs)
+  - `user`: quieter defaults for end users
+  - `all`: everything (`trace`) including dependency crates (`reqwest`, `hyper`, etc.)
+- Overrides:
+  - `RUST_LOG` (highest priority)
+  - `VIBEFI_LOG`
+  - `VIBEFI_LOG_PROFILE=dev|user|all`
+  - `VIBEFI_LOG_DIR=/custom/path`
+
+Show everything example:
+
+```bash
+VIBEFI_LOG_PROFILE=all cargo run -- --config ../contracts/.devnet/devnet.json
+```
+
 
 ## Internal UI (React)
 

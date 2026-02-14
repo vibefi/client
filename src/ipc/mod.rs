@@ -69,6 +69,12 @@ pub fn try_spawn_rpc_passthrough(state: &AppState, webview_id: &str, req: &IpcRe
     let method = req.method.clone();
     let params = req.params.clone();
     let wv_id = webview_id.to_string();
+    tracing::debug!(
+        webview_id,
+        ipc_id = ipc_id,
+        method = %method,
+        "spawning rpc passthrough worker"
+    );
     std::thread::spawn(move || {
         let request = IpcRequest {
             id: ipc_id,
@@ -77,11 +83,29 @@ pub fn try_spawn_rpc_passthrough(state: &AppState, webview_id: &str, req: &IpcRe
             params,
         };
         let result = rpc::proxy_rpc(&state_clone, &request).map_err(|e| e.to_string());
-        let _ = proxy.send_event(UserEvent::RpcResult {
+        if let Err(err) = &result {
+            tracing::warn!(
+                webview_id = %wv_id,
+                ipc_id,
+                method = %request.method,
+                error = %err,
+                "rpc passthrough worker failed"
+            );
+        } else {
+            tracing::debug!(
+                webview_id = %wv_id,
+                ipc_id,
+                method = %request.method,
+                "rpc passthrough worker succeeded"
+            );
+        }
+        if let Err(err) = proxy.send_event(UserEvent::RpcResult {
             webview_id: wv_id,
             ipc_id,
             result,
-        });
+        }) {
+            tracing::warn!(error = %err, "failed to send RpcResult event from passthrough worker");
+        }
     });
 
     true

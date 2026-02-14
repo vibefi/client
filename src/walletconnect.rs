@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use crate::runtime_paths;
+use crate::{logging, runtime_paths};
 
 #[derive(Debug, Clone)]
 pub struct WalletConnectConfig {
@@ -74,9 +74,15 @@ impl WalletConnectBridge {
             .env("VIBEFI_WC_RELAY_URL", config.relay_url.unwrap_or_default())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("failed to spawn walletconnect helper via {}", node_path))?;
+
+        if let Some(stderr) = child.stderr.take() {
+            logging::forward_child_stderr("walletconnect", stderr);
+        } else {
+            tracing::warn!("walletconnect helper stderr unavailable");
+        }
 
         let stdin = child
             .stdin
@@ -107,9 +113,9 @@ impl WalletConnectBridge {
     where
         F: FnMut(&HelperEvent),
     {
-        eprintln!(
-            "[walletconnect] connect requested for chain_id=0x{:x}; waiting for wallet approval",
-            chain_id
+        tracing::info!(
+            chain_id = format!("0x{:x}", chain_id),
+            "walletconnect connect requested; waiting for wallet approval"
         );
         let result = self.send_command_with_event_handler(
             "connect",
@@ -252,24 +258,37 @@ fn log_helper_event(event: &HelperEvent) {
     match event.event.as_str() {
         "display_uri" => {
             if let Some(uri) = event.uri.as_deref() {
-                eprintln!("[walletconnect] pairing uri: {uri}");
+                tracing::info!(pairing_uri = %redact_uri(uri), "walletconnect pairing uri");
             } else {
-                eprintln!("[walletconnect] pairing uri event received");
+                tracing::info!("walletconnect pairing uri event received");
             }
         }
         "accountsChanged" => {
             let count = event.accounts.as_ref().map(|a| a.len()).unwrap_or(0);
-            eprintln!("[walletconnect] accountsChanged ({count} accounts)");
+            tracing::info!(count, "walletconnect accountsChanged");
         }
         "chainChanged" => {
             let chain = event.chain_id.as_deref().unwrap_or("unknown");
-            eprintln!("[walletconnect] chainChanged {chain}");
+            tracing::info!(chain, "walletconnect chainChanged");
         }
         "disconnect" => {
-            eprintln!("[walletconnect] disconnect");
+            tracing::info!("walletconnect disconnect");
         }
         _ => {
-            eprintln!("[walletconnect] event {}", event.event);
+            tracing::debug!(event = %event.event, "walletconnect event");
         }
     }
+}
+
+fn redact_uri(uri: &str) -> String {
+    const PREFIX_LEN: usize = 18;
+    const SUFFIX_LEN: usize = 6;
+    if uri.len() <= PREFIX_LEN + SUFFIX_LEN {
+        return "<redacted>".to_string();
+    }
+    format!(
+        "{}...{}",
+        &uri[..PREFIX_LEN],
+        &uri[uri.len().saturating_sub(SUFFIX_LEN)..]
+    )
 }

@@ -31,6 +31,7 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                 Some(m) => m.get_endpoints(),
                 None => Vec::new(),
             };
+            tracing::debug!(count = endpoints.len(), "settings get rpc endpoints");
             Ok(serde_json::to_value(endpoints)?)
         }
         "vibefi_setEndpoints" => {
@@ -40,6 +41,7 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                     .cloned()
                     .ok_or_else(|| anyhow!("missing endpoints parameter"))?,
             )?;
+            tracing::info!(count = endpoints.len(), "settings set rpc endpoints");
 
             // Update the live manager
             {
@@ -80,6 +82,10 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                 .ipfs
                 .gateway_endpoint
                 .unwrap_or_else(|| default_gateway_endpoint.clone());
+            tracing::debug!(
+                backend = fetch_backend.as_str(),
+                "settings get ipfs settings"
+            );
 
             Ok(serde_json::to_value(IpfsSettingsResponse {
                 fetch_backend,
@@ -94,6 +100,10 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                     .cloned()
                     .ok_or_else(|| anyhow!("missing ipfs settings parameter"))?,
             )?;
+            tracing::info!(
+                backend = params.fetch_backend.as_str(),
+                "settings set ipfs settings"
+            );
 
             if let Some(ref config_path) = state.config_path {
                 let mut settings = crate::settings::load_settings(config_path);

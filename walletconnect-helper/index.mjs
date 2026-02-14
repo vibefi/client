@@ -179,7 +179,7 @@ async function ensureProvider(requiredChainId) {
   });
 
   provider.on("display_uri", async (uri) => {
-    log(`display_uri ${uri}`);
+    log("display_uri received");
     let qrSvg = "";
     try {
       qrSvg = await QRCode.toString(uri, { type: "svg", margin: 2, width: 200, errorCorrectionLevel: "L" });
@@ -308,6 +308,7 @@ rl.on("line", async (line) => {
     const response = await handleCommand(msg);
     writeResponse(response);
   } catch (error) {
+    log(`cmd error id=${id}: ${error instanceof Error ? error.message : String(error)}`);
     writeResponse({
       id,
       error: {

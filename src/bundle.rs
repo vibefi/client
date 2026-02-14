@@ -24,19 +24,32 @@ pub struct BundleManifestFile {
 }
 
 pub fn verify_manifest(bundle_dir: &Path) -> Result<()> {
+    tracing::info!(bundle_dir = %bundle_dir.display(), "verifying bundle manifest");
     let manifest_path = bundle_dir.join("manifest.json");
     if !manifest_path.exists() {
+        tracing::warn!(
+            path = %manifest_path.display(),
+            "bundle manifest missing"
+        );
         return Err(anyhow!("manifest.json missing in bundle"));
     }
     let content = fs::read_to_string(&manifest_path).context("read manifest.json")?;
     let manifest: BundleManifest = serde_json::from_str(&content).context("parse manifest.json")?;
+    tracing::debug!(files = manifest.files.len(), "bundle manifest parsed");
     for entry in manifest.files {
         let file_path = bundle_dir.join(&entry.path);
         if !file_path.exists() {
+            tracing::warn!(path = %entry.path, "bundle file listed in manifest is missing");
             return Err(anyhow!("bundle missing file {}", entry.path));
         }
         let meta = fs::metadata(&file_path).context("stat bundle file")?;
         if meta.len() != entry.bytes {
+            tracing::warn!(
+                path = %entry.path,
+                expected = entry.bytes,
+                actual = meta.len(),
+                "bundle file size mismatch"
+            );
             return Err(anyhow!(
                 "bundle file size mismatch {} expected {} got {}",
                 entry.path,
@@ -45,6 +58,7 @@ pub fn verify_manifest(bundle_dir: &Path) -> Result<()> {
             ));
         }
     }
+    tracing::info!(bundle_dir = %bundle_dir.display(), "bundle manifest verified");
     Ok(())
 }
 
@@ -105,11 +119,18 @@ fn write_standard_build_files(bundle_dir: &Path) -> Result<()> {
 }
 
 pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
+    tracing::info!(
+        bundle_dir = %bundle_dir.display(),
+        dist_dir = %dist_dir.display(),
+        "building bundle"
+    );
     write_standard_build_files(bundle_dir)?;
     let bun_bin = resolve_bun_binary().context("resolve bun runtime")?;
+    tracing::debug!(bun = %bun_bin, "resolved bun runtime");
 
     let node_modules = bundle_dir.join("node_modules");
     if !node_modules.exists() {
+        tracing::info!("bundle dependencies missing; running bun install");
         let status = Command::new(&bun_bin)
             .arg("install")
             .arg("--no-save")
@@ -117,15 +138,18 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
             .status()
             .with_context(|| format!("bun install failed (runtime: {bun_bin})"))?;
         if !status.success() {
+            tracing::warn!(status = %status, bun = %bun_bin, "bun install failed");
             return Err(anyhow!(
                 "bun install failed with status {status} (runtime: {bun_bin})"
             ));
         }
+        tracing::debug!("bun install completed");
     }
 
     fs::create_dir_all(dist_dir).context("create dist dir")?;
     // Use relative path from bundle_dir for vite's outDir since vite runs in bundle_dir
     let relative_dist = PathBuf::from(".vibefi").join("dist");
+    tracing::info!(out_dir = %relative_dist.display(), "running vite build for bundle");
     let status = Command::new(&bun_bin)
         .arg("x")
         .arg("vite")
@@ -137,10 +161,12 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
         .status()
         .with_context(|| format!("bun vite build failed (runtime: {bun_bin})"))?;
     if !status.success() {
+        tracing::warn!(status = %status, bun = %bun_bin, "vite build failed");
         return Err(anyhow!(
             "bun vite build failed with status {status} (runtime: {bun_bin})"
         ));
     }
+    tracing::info!(dist_dir = %dist_dir.display(), "bundle build completed");
     Ok(())
 }
 
