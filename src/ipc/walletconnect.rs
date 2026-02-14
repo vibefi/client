@@ -17,7 +17,12 @@ pub(super) fn handle_walletconnect_ipc(
 ) -> Result<Option<Value>> {
     match req.method.as_str() {
         "eth_requestAccounts" => {
-            let chain_id = state.wallet.lock().unwrap().chain.chain_id;
+            let chain_id = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while handling walletconnect eth_requestAccounts")
+                .chain
+                .chain_id;
             tracing::info!(
                 chain_id = format!("0x{:x}", chain_id),
                 "walletconnect eth_requestAccounts received"
@@ -25,7 +30,7 @@ pub(super) fn handle_walletconnect_ipc(
             let bridge = state
                 .walletconnect
                 .lock()
-                .unwrap()
+                .expect("poisoned walletconnect lock while retrieving bridge")
                 .as_ref()
                 .ok_or_else(|| anyhow!("walletconnect bridge unavailable"))?
                 .clone();
@@ -35,7 +40,9 @@ pub(super) fn handle_walletconnect_ipc(
 
             std::thread::spawn(move || {
                 let result = {
-                    let mut bridge = bridge.lock().unwrap();
+                    let mut bridge = bridge
+                        .lock()
+                        .expect("poisoned walletconnect bridge lock during connect");
                     let proxy_for_events = proxy.clone();
                     bridge.connect_with_event_handler(chain_id, move |event| {
                         if event.event == "display_uri" {
@@ -67,7 +74,10 @@ pub(super) fn handle_walletconnect_ipc(
             } else {
                 vec![]
             };
-            let mut ws = state.wallet.lock().unwrap();
+            let mut ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while applying walletconnect eth_accounts");
             ws.authorized = !accounts.is_empty();
             ws.account = accounts.first().cloned();
             Ok(Some(value))
@@ -77,7 +87,10 @@ pub(super) fn handle_walletconnect_ipc(
                 walletconnect_request(webview, state, req.method.as_str(), req.params.clone())?;
             if let Some(chain_hex) = value.as_str() {
                 if let Some(chain_id) = parse_hex_u64(chain_hex) {
-                    let mut ws = state.wallet.lock().unwrap();
+                    let mut ws = state
+                        .wallet
+                        .lock()
+                        .expect("poisoned wallet lock while applying walletconnect chainId");
                     ws.chain.chain_id = chain_id;
                 }
             }
@@ -89,13 +102,19 @@ pub(super) fn handle_walletconnect_ipc(
             let chain_hex = chain_hex.as_str().unwrap_or("0x1");
             let chain_id = parse_hex_u64(chain_hex).unwrap_or(1);
             {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while handling walletconnect net_version");
                 ws.chain.chain_id = chain_id;
             }
             Ok(Some(Value::String(chain_id.to_string())))
         }
         "wallet_getProviderInfo" => {
-            let ws = state.wallet.lock().unwrap();
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while building walletconnect provider info");
             let info = ProviderInfo {
                 name: "vibefi-walletconnect".to_string(),
                 chain_id: format!("0x{:x}", ws.chain.chain_id),
@@ -115,7 +134,10 @@ pub(super) fn handle_walletconnect_ipc(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("invalid params for wallet_switchEthereumChain"))?;
             if let Some(chain_id) = parse_hex_u64(chain_id_hex) {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while switching walletconnect chain");
                 ws.chain.chain_id = chain_id;
                 emit_chain_changed(webview, format!("0x{:x}", chain_id));
             }
@@ -136,11 +158,13 @@ fn walletconnect_request(
     let bridge = state
         .walletconnect
         .lock()
-        .unwrap()
+        .expect("poisoned walletconnect lock while issuing walletconnect request")
         .as_ref()
         .ok_or_else(|| anyhow!("walletconnect bridge unavailable"))?
         .clone();
-    let mut bridge = bridge.lock().unwrap();
+    let mut bridge = bridge
+        .lock()
+        .expect("poisoned walletconnect bridge lock while issuing request");
     let (result, events) = bridge.request(method, params)?;
     drop(bridge);
 
@@ -161,7 +185,10 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
                 let qr_svg = event.qr_svg.clone().unwrap_or_default();
                 tracing::info!("walletconnect pairing uri emitted");
                 {
-                    let mut ws = state.wallet.lock().unwrap();
+                    let mut ws = state
+                        .wallet
+                        .lock()
+                        .expect("poisoned wallet lock while storing walletconnect URI");
                     ws.walletconnect_uri = Some(uri.clone());
                 }
                 let _ = state
@@ -172,7 +199,10 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
         "accountsChanged" => {
             let accounts = event.accounts.clone().unwrap_or_default();
             {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while applying walletconnect accountsChanged");
                 ws.authorized = !accounts.is_empty();
                 ws.account = accounts.first().cloned();
             }
@@ -181,7 +211,10 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
         "chainChanged" => {
             if let Some(chain_hex) = event.chain_id.clone() {
                 if let Some(chain_id) = parse_hex_u64(&chain_hex) {
-                    let mut ws = state.wallet.lock().unwrap();
+                    let mut ws = state
+                        .wallet
+                        .lock()
+                        .expect("poisoned wallet lock while applying walletconnect chainChanged");
                     ws.chain.chain_id = chain_id;
                 }
                 emit_chain_changed(webview, chain_hex);
@@ -189,7 +222,10 @@ fn apply_walletconnect_event(webview: &WebView, state: &AppState, event: &Helper
         }
         "disconnect" => {
             {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while applying walletconnect disconnect");
                 ws.authorized = false;
                 ws.account = None;
             }
@@ -208,14 +244,24 @@ pub fn handle_walletconnect_connect_result(
     match result {
         Ok(session) => {
             let chain_id = parse_hex_u64(&session.chain_id_hex)
-                .unwrap_or(state.wallet.lock().unwrap().chain.chain_id);
+                .unwrap_or(
+                    state
+                        .wallet
+                        .lock()
+                        .expect("poisoned wallet lock while resolving walletconnect result")
+                        .chain
+                        .chain_id,
+                );
             let accounts = session
                 .accounts
                 .iter()
                 .map(|a| Value::String(a.clone()))
                 .collect::<Vec<_>>();
             {
-                let mut ws = state.wallet.lock().unwrap();
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while storing walletconnect session state");
                 ws.authorized = !session.accounts.is_empty();
                 ws.account = session.accounts.first().cloned();
                 ws.chain.chain_id = chain_id;
@@ -223,7 +269,10 @@ pub fn handle_walletconnect_connect_result(
             }
             // Set backend to WalletConnect if not already set
             {
-                let mut wb = state.wallet_backend.lock().unwrap();
+                let mut wb = state
+                    .wallet_backend
+                    .lock()
+                    .expect("poisoned wallet_backend lock while setting walletconnect backend");
                 if wb.is_none() {
                     *wb = Some(WalletBackend::WalletConnect);
                 }

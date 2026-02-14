@@ -26,7 +26,10 @@ struct SetIpfsSettingsRequest {
 pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<Value> {
     match req.method.as_str() {
         "vibefi_getEndpoints" => {
-            let mgr = state.rpc_manager.lock().unwrap();
+            let mgr = state
+                .rpc_manager
+                .lock()
+                .expect("poisoned rpc_manager lock while reading settings endpoints");
             let endpoints = match mgr.as_ref() {
                 Some(m) => m.get_endpoints(),
                 None => Vec::new(),
@@ -45,7 +48,10 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
 
             // Update the live manager
             {
-                let mut mgr = state.rpc_manager.lock().unwrap();
+                let mut mgr = state
+                    .rpc_manager
+                    .lock()
+                    .expect("poisoned rpc_manager lock while updating settings endpoints");
                 if let Some(m) = mgr.as_mut() {
                     m.set_endpoints(endpoints.clone());
                 }
