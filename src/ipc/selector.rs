@@ -24,9 +24,9 @@ pub(super) fn handle_wallet_selector_ipc(
     match req.wallet_selector_method() {
         Some(WalletSelectorMethod::ConnectLocal) => {
             tracing::info!("wallet-selector connecting local signer");
-            let network = state.network.as_ref();
-            let is_local = network.map(|n| n.config.localNetwork).unwrap_or(false);
-            let explicit_key = network.and_then(|n| n.config.developerPrivateKey.clone());
+            let resolved = state.resolved.as_ref();
+            let is_local = resolved.map(|r| r.local_network).unwrap_or(false);
+            let explicit_key = resolved.and_then(|r| r.developer_private_key.clone());
             let signer_hex = if is_local {
                 explicit_key.unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string())
             } else if let Some(key) = explicit_key {
@@ -68,23 +68,13 @@ pub(super) fn handle_wallet_selector_ipc(
         }
         Some(WalletSelectorMethod::ConnectWalletConnect) => {
             tracing::info!("wallet-selector connecting walletconnect");
-            let wc_config = state
-                .network
-                .as_ref()
-                .and_then(|n| n.config.walletConnect.clone());
-            let project_id = wc_config
-                .as_ref()
-                .and_then(|wc| wc.projectId.clone())
-                .or_else(|| std::env::var("VIBEFI_WC_PROJECT_ID").ok())
-                .or_else(|| std::env::var("WC_PROJECT_ID").ok())
+            let resolved = state.resolved.as_ref();
+            let project_id = resolved
+                .and_then(|r| r.walletconnect_project_id.clone())
                 .ok_or_else(|| {
                     anyhow!("WalletConnect requires walletConnect.projectId in config or VIBEFI_WC_PROJECT_ID env var")
                 })?;
-            let relay_url = wc_config
-                .as_ref()
-                .and_then(|wc| wc.relayUrl.clone())
-                .or_else(|| std::env::var("VIBEFI_WC_RELAY_URL").ok())
-                .or_else(|| std::env::var("WC_RELAY_URL").ok());
+            let relay_url = resolved.and_then(|r| r.walletconnect_relay_url.clone());
 
             let bridge = WalletConnectBridge::spawn(WalletConnectConfig {
                 project_id,

@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::bundle::{BundleManifest, build_bundle, verify_manifest};
-use crate::config::{IpfsFetchBackend, NetworkContext};
+use crate::config::{IpfsFetchBackend, ResolvedConfig};
 use crate::ipfs_helper::{IpfsHelperBridge, IpfsHelperConfig};
 use crate::state::{AppState, TabAction, UserEvent};
 
@@ -112,11 +112,11 @@ impl LaunchProgress {
     }
 }
 
-pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
-    if devnet.config.dappRegistry.is_empty() {
+pub fn list_dapps(devnet: &ResolvedConfig) -> Result<Vec<DappInfo>> {
+    if devnet.dapp_registry.is_empty() {
         return Err(anyhow!("config missing dappRegistry"));
     }
-    let address = devnet.config.dappRegistry.clone();
+    let address = devnet.dapp_registry.clone();
     let published = rpc_get_logs(devnet, &address, DappPublished::SIGNATURE_HASH)?;
     let upgraded = rpc_get_logs(devnet, &address, DappUpgraded::SIGNATURE_HASH)?;
     let metadata = rpc_get_logs(devnet, &address, DappMetadata::SIGNATURE_HASH)?;
@@ -259,11 +259,10 @@ pub fn list_dapps(devnet: &NetworkContext) -> Result<Vec<DappInfo>> {
     Ok(result)
 }
 
-fn rpc_get_logs(devnet: &NetworkContext, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
+fn rpc_get_logs(devnet: &ResolvedConfig, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
     let topics = vec![format!("0x{}", hex::encode(topic0))];
     let from_block = devnet
-        .config
-        .deployBlock
+        .deploy_block
         .map(|b| format!("0x{:x}", b))
         .unwrap_or_else(|| "0x0".to_string());
     let payload = serde_json::json!({
@@ -278,7 +277,7 @@ fn rpc_get_logs(devnet: &NetworkContext, address: &str, topic0: B256) -> Result<
         }]
     });
     let res = devnet
-        .http
+        .http_client
         .post(&devnet.rpc_url)
         .json(&payload)
         .send()
@@ -353,7 +352,7 @@ pub fn handle_launcher_ipc(
             std::thread::spawn(move || {
                 let result = (|| -> Result<serde_json::Value> {
                     let devnet = state_clone
-                        .network
+                        .resolved
                         .as_ref()
                         .ok_or_else(|| anyhow!("Network not configured"))?;
                     tracing::info!("launcher: fetching dapp list from logs");
@@ -407,7 +406,7 @@ pub fn handle_launcher_ipc(
 
 fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -> Result<()> {
     let devnet = state
-        .network
+        .resolved
         .as_ref()
         .ok_or_else(|| anyhow!("Network not configured"))?;
     tracing::info!(root_cid, "launcher: fetch bundle");
@@ -476,7 +475,7 @@ fn emit_launch_progress(state: &AppState, webview_id: &str, progress: LaunchProg
 }
 
 fn ensure_bundle_cached(
-    devnet: &NetworkContext,
+    devnet: &ResolvedConfig,
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     bundle_dir: &Path,
@@ -529,7 +528,7 @@ fn ensure_bundle_cached(
 }
 
 fn ensure_bundle_cached_local_node(
-    devnet: &NetworkContext,
+    devnet: &ResolvedConfig,
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     bundle_dir: &Path,
@@ -623,13 +622,13 @@ fn ensure_bundle_cached_helia(
 }
 
 fn fetch_dapp_manifest_local_node(
-    devnet: &NetworkContext,
+    devnet: &ResolvedConfig,
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
 ) -> Result<(BundleManifest, Vec<u8>)> {
     let gateway = normalize_gateway(&ipfs.gateway_endpoint);
     let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
-    let res = devnet.http.get(url).send().context("fetch manifest")?;
+    let res = devnet.http_client.get(url).send().context("fetch manifest")?;
     if !res.status().is_success() {
         let text = res.text().unwrap_or_default();
         return Err(anyhow!("fetch manifest failed: {}", text));
@@ -643,7 +642,7 @@ fn fetch_dapp_manifest_local_node(
 }
 
 fn download_dapp_bundle_local_node(
-    devnet: &NetworkContext,
+    devnet: &ResolvedConfig,
     ipfs: &EffectiveIpfsConfig,
     root_cid: &str,
     out_dir: &Path,
@@ -662,7 +661,7 @@ fn download_dapp_bundle_local_node(
     ));
     for (idx, entry) in manifest.files.iter().enumerate() {
         let url = format!("{}/ipfs/{}/{}", gateway, root_cid, entry.path);
-        let res = devnet.http.get(url).send().context("fetch bundle file")?;
+        let res = devnet.http_client.get(url).send().context("fetch bundle file")?;
         if !res.status().is_success() {
             let text = res.text().unwrap_or_default();
             return Err(anyhow!("bundle fetch failed: {}", text));
@@ -694,10 +693,10 @@ fn download_percent(completed: usize, total: usize) -> u8 {
     pct.min(82) as u8
 }
 
-fn resolve_effective_ipfs_config(state: &AppState, devnet: &NetworkContext) -> EffectiveIpfsConfig {
+fn resolve_effective_ipfs_config(state: &AppState, devnet: &ResolvedConfig) -> EffectiveIpfsConfig {
     let mut fetch_backend = devnet.ipfs_fetch_backend;
     let mut gateway_endpoint = devnet.ipfs_gateway.clone();
-    if let Some(config_path) = state.config_path.as_ref() {
+    if let Some(config_path) = state.resolved.as_ref().and_then(|r| r.config_path.as_ref()) {
         let settings = crate::settings::load_settings(config_path);
         if let Some(backend) = settings.ipfs.fetch_backend {
             fetch_backend = backend;

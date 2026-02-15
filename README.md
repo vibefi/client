@@ -1,54 +1,152 @@
-# Wry + EIP-1193 injected provider
+# VibeFi Client
 
-This is a minimal example of:
+Desktop application (Wry/Rust) that fetches, builds, and runs approved dapps from the VibeFi on-chain registry.
 
-- A **Wry** desktop app that embeds a WebView
-- Injects a **`window.ethereum`** provider shim (EIP-1193-style)
+- Embeds a **WebView** with an injected **`window.ethereum`** provider (EIP-1193)
 - Bridges `ethereum.request(...)` to a Rust backend via Wry IPC
 - Uses **Alloy** for local dev-key signing (default)
 - Supports **WalletConnect v2** via a local helper process (`walletconnect-helper/`)
-- **Blocks outbound network**: only loads `app://...` assets and sets `connect-src 'none'`.
+- **Blocks outbound network**: only loads `app://...` assets and sets `connect-src 'none'`
 
-## Run (local signer)
+## Usage
 
 ```bash
-cargo run
+cargo run                                                     # no config, home screen only
+cargo run -- --config config/sepolia.json                     # connect to Sepolia testnet
+cargo run -- --config ../contracts/.devnet/devnet.json        # local devnet
+cargo run -- --config config/sepolia.json --bundle ../dapp-examples/counter  # bundle a local dapp
+cargo run -- --help                                           # show all CLI flags
 ```
 
-## Run (devnet)
+| Flag | Description |
+|------|-------------|
+| `--config <PATH>` | Path to a network config JSON file (e.g. `config/sepolia.json`) |
+| `--bundle <PATH>` | Path to a local dapp project directory to bundle and serve |
+| `--no-build` | Skip the `bun build` step when using `--bundle` |
 
-This assumes you've got the devnet running.
+If `--config` is omitted, the client looks for a default config via `runtime_paths::resolve_default_config()`.
 
-```bash
-cargo run -- --config ../contracts/.devnet/devnet.json
+## Configuration
+
+The client resolves configuration from multiple layers. Later layers override earlier ones. Everything is merged into a single `ResolvedConfig` struct at startup.
+
+### Layer 1 — Deployment JSON (`AppConfig`)
+
+A JSON file passed via `--config`. This is the primary source for network and contract settings. Fields use camelCase to match deployment tooling output.
+
+```jsonc
+{
+  "chainId": 11155111,                // required, must be > 0
+  "rpcUrl": "https://...",            // default: "http://127.0.0.1:8546"
+  "dappRegistry": "0xFb84...",        // hex address of the DappRegistry contract
+  "deployBlock": 10239268,            // starting block for event log queries
+  "localNetwork": false,              // true for local devnets (enables demo wallet key)
+  "developerPrivateKey": null,        // optional private key for local signing
+  "ipfsApi": null,                    // IPFS API endpoint (default: "http://127.0.0.1:5001")
+  "ipfsGateway": null,                // IPFS gateway endpoint (default: "http://127.0.0.1:8080")
+  "ipfsFetchBackend": "helia",        // "helia" (verified fetch) or "localnode"
+  "ipfsHeliaGateways": [...],         // list of Helia trustless gateways
+  "ipfsHeliaRouters": [...],          // list of Helia DHT routers
+  "ipfsHeliaTimeoutMs": 30000,        // Helia fetch timeout in milliseconds
+  "cacheDir": null,                   // bundle cache directory (default: OS cache dir / VibeFi)
+  "walletConnect": {                  // optional WalletConnect settings
+    "projectId": "...",
+    "relayUrl": "..."
+  }
+}
+```
+
+Extra fields (e.g. `deployer`, `vfiGovernor`) are silently ignored, so deployment output can be used as-is.
+
+Validation runs at load time: `chainId` must not be 0, `dappRegistry` (if non-empty) must be valid hex, and `rpcUrl` must use an `http://`, `https://`, `ws://`, or `wss://` scheme.
+
+### Layer 2 — Environment variables (`VIBEFI_*`)
+
+Environment variables override specific values from the deployment JSON.
+
+| Variable | Overrides | Type |
+|----------|-----------|------|
+| `VIBEFI_RPC_URL` | `rpcUrl` | URL string |
+| `VIBEFI_WC_PROJECT_ID` | `walletConnect.projectId` | string |
+| `VIBEFI_WC_RELAY_URL` | `walletConnect.relayUrl` | string |
+| `VIBEFI_ENABLE_DEVTOOLS` | WebView devtools (release builds) | bool (`1`/`true`/`yes`/`on`) |
+
+In debug builds (`cfg!(debug_assertions)`), devtools are always enabled regardless of the env var.
+
+### Layer 3 — Compile-time flags
+
+| Flag | Effect |
+|------|--------|
+| `cfg!(debug_assertions)` | Enables devtools, selects `Dev` log profile |
+
+### Layer 4 — User settings (runtime, not in `ResolvedConfig`)
+
+A `settings.json` file stored alongside the config file (e.g. `config/settings.json`). These are **not** baked into `ResolvedConfig` because they can change at runtime through the Settings panel.
+
+```jsonc
+{
+  "rpcEndpoints": [                   // ordered list with failover
+    { "url": "https://...", "label": "Primary" },
+    { "url": "https://...", "label": "Fallback" }
+  ],
+  "ipfs": {
+    "fetchBackend": "helia",          // overrides config ipfsFetchBackend
+    "gatewayEndpoint": "https://..."  // overrides config ipfsGateway
+  }
+}
+```
+
+User settings are merged at the point of use (e.g. launching a dapp, reading IPFS settings), not at startup.
+
+### Resolution flow
+
+```
+CLI args (--config, --bundle, --no-build)
+  |
+  v
+Deployment JSON (AppConfig)          -- deserialized, validated
+  |
+  v
+Environment variables (VIBEFI_*)     -- override specific fields
+  |
+  v
+Compile-time flags                   -- debug_assertions -> devtools
+  |
+  v
+ResolvedConfig                       -- built once, stored as Arc<ResolvedConfig> in AppState
+  :
+  : (at call sites, not startup)
+  v
+User settings (settings.json)       -- runtime-mutable via Settings panel
 ```
 
 ## Logging
 
-- Logging uses `tracing` with stderr + rolling file output.
-- Default log file directory:
-  - Linux: `~/.local/share/VibeFi/logs`
-  - macOS: `~/Library/Application Support/VibeFi/logs`
-  - Windows: `%LOCALAPPDATA%\\VibeFi\\logs`
-- Log profile defaults:
-  - `cargo run`: verbose for VibeFi-only targets (`vibefi=trace`)
-  - packaged/user app runs: quieter (`info`)
-- Built-in profiles via `VIBEFI_LOG_PROFILE`:
-  - `dev`: verbose VibeFi logs only (suppresses noisy dependency logs)
-  - `user`: quieter defaults for end users
-  - `all`: everything (`trace`) including dependency crates (`reqwest`, `hyper`, etc.)
-- Overrides:
-  - `RUST_LOG` (highest priority)
-  - `VIBEFI_LOG`
-  - `VIBEFI_LOG_PROFILE=dev|user|all`
-  - `VIBEFI_LOG_DIR=/custom/path`
+Logging initializes **before** config loading and resolves its own env vars independently.
 
-Show everything example:
+| Variable | Description |
+|----------|-------------|
+| `RUST_LOG` | Standard tracing filter (highest priority) |
+| `VIBEFI_LOG` | VibeFi-specific filter (if `RUST_LOG` is unset) |
+| `VIBEFI_LOG_PROFILE` | `dev`, `user`, or `all` — selects a preset filter |
+| `VIBEFI_LOG_DIR` | Override the log file directory |
+
+Default profiles:
+
+| Profile | When | Filter |
+|---------|------|--------|
+| Dev | Debug builds or `CARGO` env present | `off,vibefi=trace,vibefi::helper=debug` |
+| User | Release builds | `info` |
+| All | `VIBEFI_LOG_PROFILE=all` | `trace` |
+
+Log output goes to stderr and rolling daily files:
+- Linux: `~/.local/share/VibeFi/logs`
+- macOS: `~/Library/Application Support/VibeFi/logs`
+- Windows: `%LOCALAPPDATA%\VibeFi\logs`
 
 ```bash
 VIBEFI_LOG_PROFILE=all cargo run -- --config ../contracts/.devnet/devnet.json
 ```
-
 
 ## Internal UI (React)
 
@@ -66,20 +164,18 @@ bun install
 bun run build
 ```
 
-## Run with WalletConnect
+## WalletConnect
 
 Install helper dependencies once:
 
 ```bash
-cd walletconnect-helper
-bun install
-cd ..
+cd walletconnect-helper && bun install && cd ..
 ```
 
-Run the client with WalletConnect enabled:
+WalletConnect is configured via `walletConnect.projectId` in the config JSON, or the `VIBEFI_WC_PROJECT_ID` env var:
 
 ```bash
-VIBEFI_WC_PROJECT_ID=your_project_id cargo run -- --wallet walletconnect
+VIBEFI_WC_PROJECT_ID=your_project_id cargo run -- --config config/sepolia.json
 ```
 
 Optional relay override:
@@ -87,15 +183,12 @@ Optional relay override:
 ```bash
 VIBEFI_WC_PROJECT_ID=your_project_id \
 VIBEFI_WC_RELAY_URL=wss://your-relay.example \
-cargo run -- --wallet walletconnect
+cargo run -- --config config/sepolia.json
 ```
 
-Linux build deps (Ubuntu/Debian):
+## Linux build deps (Ubuntu/Debian)
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
 sudo apt-get update
 sudo apt-get install -y \
   pkg-config \
@@ -104,8 +197,9 @@ sudo apt-get install -y \
   libglib2.0-dev \
   libgobject-2.0-dev \
   libwebkit2gtk-4.0-dev
-
 ```
+
+## Bundled dapps
 
 Run a bundled dapp (expects `manifest.json` in the bundle directory):
 
@@ -113,16 +207,8 @@ Run a bundled dapp (expects `manifest.json` in the bundle directory):
 cargo run -- --bundle /path/to/bundle
 ```
 
-Run a bundled dapp with WalletConnect (for example, a bundle produced from `dapp-examples/uniswap-v2`):
-
-```bash
-VIBEFI_WC_PROJECT_ID=your_project_id \
-cargo run -- --bundle /path/to/packaged-bundle --wallet walletconnect
-```
-
-You can produce `/path/to/packaged-bundle` with the CLI `package` command.
-
 The bundle build step uses `bun` and `vite` from the bundle's `package.json`.
+You can produce bundles with the CLI `package` command.
 
 ## IPFS retrieval
 

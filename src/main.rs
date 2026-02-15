@@ -17,11 +17,11 @@ mod walletconnect;
 mod webview;
 mod webview_manager;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
+use clap::Parser;
 use std::{
     collections::VecDeque,
     env,
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tao::{
@@ -32,7 +32,7 @@ use tao::{
 };
 
 use bundle::{BundleConfig, build_bundle, verify_manifest};
-use config::{build_network_context, load_config};
+use config::{CliArgs, ConfigBuilder, load_config};
 use rpc_manager::{RpcEndpoint, RpcEndpointManager};
 use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, WebViewHost, build_app_webview, build_tab_bar_webview};
@@ -63,14 +63,18 @@ fn main() -> Result<()> {
     apply_linux_env_defaults();
     logging::init_logging()?;
 
-    let args = parse_args()?;
-    let bundle = args.bundle;
-    let config_path = args
-        .config_path
+    let cli = CliArgs::parse();
+    let bundle = resolve_bundle(&cli)?;
+    let config_path = cli
+        .config
         .or_else(|| runtime_paths::resolve_default_config());
 
-    let network = match config_path.as_ref().map(|p| (p, load_config(p))) {
-        Some((_, Ok(cfg))) => Some(build_network_context(cfg)),
+    let resolved = match config_path.as_ref().map(|p| (p, load_config(p))) {
+        Some((_, Ok(cfg))) => {
+            let resolved = ConfigBuilder::new(cfg, config_path.clone()).build();
+            resolved.log_startup_summary();
+            Some(Arc::new(resolved))
+        }
         Some((path, Err(e))) => {
             tracing::warn!(path = ?path, error = %e, "failed to load config");
             None
@@ -78,23 +82,24 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    let initial_chain_id = network.as_ref().map(|n| n.config.chainId).unwrap_or(1);
+    let initial_chain_id = resolved.as_ref().map(|r| r.chain_id).unwrap_or(1);
 
     // --- Load user settings + build RPC manager ---
-    let rpc_manager = if let Some(ref net) = network {
-        let user_settings = config_path
+    let rpc_manager = if let Some(ref res) = resolved {
+        let user_settings = res
+            .config_path
             .as_ref()
             .map(|p| settings::load_settings(p))
             .unwrap_or_default();
         let endpoints = if user_settings.rpc_endpoints.is_empty() {
             vec![RpcEndpoint {
-                url: net.rpc_url.clone(),
+                url: res.rpc_url.clone(),
                 label: Some("Default".to_string()),
             }]
         } else {
             user_settings.rpc_endpoints
         };
-        Some(RpcEndpointManager::new(endpoints, net.http.clone()))
+        Some(RpcEndpointManager::new(endpoints, res.http_client.clone()))
     } else {
         None
     };
@@ -125,12 +130,11 @@ fn main() -> Result<()> {
         signer: Arc::new(Mutex::new(None)),
         walletconnect: Arc::new(Mutex::new(None)),
         hardware_signer: Arc::new(Mutex::new(None)),
-        network,
+        resolved,
         proxy: proxy.clone(),
         pending_connect: Arc::new(Mutex::new(VecDeque::new())),
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
-        config_path: config_path.clone(),
         settings_webview_id: Arc::new(Mutex::new(None)),
     };
     let mut manager = WebViewManager::new(1.0);
@@ -300,16 +304,21 @@ fn main() -> Result<()> {
                     let h = size.height;
 
                     // 1. Build tab bar
-                    match build_tab_bar_webview(&host, proxy.clone(), manager.tab_bar_rect(w)) {
+                    let enable_devtools = state
+                        .resolved
+                        .as_ref()
+                        .map(|r| r.enable_devtools)
+                        .unwrap_or(cfg!(debug_assertions));
+                    match build_tab_bar_webview(&host, proxy.clone(), manager.tab_bar_rect(w), enable_devtools) {
                         Ok(tb) => manager.tab_bar = Some(tb),
                         Err(e) => tracing::error!(error = ?e, "tab bar error"),
                     }
 
                     // 2. Build initial app webview
                     let has_registry = state
-                        .network
+                        .resolved
                         .as_ref()
-                        .map(|n| !n.config.dappRegistry.is_empty())
+                        .map(|r| !r.dapp_registry.is_empty())
                         .unwrap_or(false);
                     let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
                     let embedded = if dist_dir.is_some() {
@@ -393,53 +402,19 @@ fn apply_linux_env_defaults() {
 #[cfg(not(target_os = "linux"))]
 fn apply_linux_env_defaults() {}
 
-struct CliArgs {
-    bundle: Option<BundleConfig>,
-    config_path: Option<PathBuf>,
-}
-
-fn parse_args() -> Result<CliArgs> {
-    let mut args = env::args().skip(1).peekable();
-    let mut bundle_dir: Option<PathBuf> = None;
-    let mut config_path: Option<PathBuf> = None;
-    let mut no_build = false;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--bundle" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--bundle requires a path"))?;
-                bundle_dir = Some(PathBuf::from(value));
-            }
-            "--config" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--config requires a path"))?;
-                config_path = Some(PathBuf::from(value));
-            }
-            "--no-build" => no_build = true,
-            _ => {}
-        }
-    }
-
-    let Some(source_dir) = bundle_dir else {
-        return Ok(CliArgs {
-            bundle: None,
-            config_path,
-        });
+fn resolve_bundle(cli: &CliArgs) -> Result<Option<BundleConfig>> {
+    let Some(ref source) = cli.bundle else {
+        return Ok(None);
     };
-    let source_dir = source_dir
+    let source_dir = source
         .canonicalize()
         .context("bundle path does not exist")?;
     let dist_dir = source_dir.join(".vibefi").join("dist");
 
     verify_manifest(&source_dir)?;
-    if !no_build {
+    if !cli.no_build {
         build_bundle(&source_dir, &dist_dir)?;
     }
 
-    Ok(CliArgs {
-        bundle: Some(BundleConfig { dist_dir }),
-        config_path,
-    })
+    Ok(Some(BundleConfig { dist_dir }))
 }
