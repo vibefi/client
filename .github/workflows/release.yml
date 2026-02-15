@@ -177,3 +177,74 @@ jobs:
       with:
         files: artifacts/*
         fail_on_unmatched_files: true
+
+  build-windows:
+    name: Build Windows (x86_64)
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install Bun
+      uses: oven-sh/setup-bun@v1
+      with:
+        bun-version: latest
+
+    - name: Install cargo-packager
+      run: cargo install cargo-packager --locked
+
+    - name: Install WiX Toolset
+      shell: pwsh
+      run: |
+        choco install wixtoolset -y
+        $wixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+        if (Test-Path $wixBin) {
+          Add-Content -Path $env:GITHUB_PATH -Value $wixBin
+        }
+
+    - name: Fetch Bun binaries for packaging
+      shell: pwsh
+      run: .\vendor\fetch-bun.ps1
+
+    - name: Prepare Bun binary for MSVC target
+      shell: pwsh
+      run: Copy-Item -Path .\vendor\bun\bun-x86_64-pc-windows-gnu.exe -Destination .\vendor\bun\bun-x86_64-pc-windows-msvc.exe -Force
+
+    - name: Build release binary
+      run: cargo build --release
+
+    - name: Package application
+      run: cargo packager --release --formats msi
+
+    - name: List packaged outputs
+      shell: pwsh
+      run: Get-ChildItem -Recurse .\target\packager\ | Format-List FullName, Length
+
+    - name: Prepare artifacts
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+        $msiFiles = Get-ChildItem .\target\packager\*.msi -ErrorAction SilentlyContinue
+        if (-not $msiFiles) {
+          Write-Error "No MSI files found in target/packager/"
+          exit 1
+        }
+        Copy-Item -Path .\target\packager\*.msi -Destination .\artifacts\ -Force
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: vibefi-x86_64-pc-windows-msvc
+        path: artifacts/*
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Upload to release
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: artifacts/*
+        fail_on_unmatched_files: true
