@@ -51,6 +51,22 @@ fn build_internal_ui() -> Result<(), Box<dyn std::error::Error>> {
     // Create dist directory
     fs::create_dir_all(&dist_dir)?;
 
+    // Install dependencies if node_modules doesn't exist
+    let node_modules = internal_ui.join("node_modules");
+    if !node_modules.exists() {
+        print_console_line("[internal-ui] Installing dependencies with bun...");
+        use std::process::Command;
+        let output = Command::new("bun")
+            .arg("install")
+            .current_dir(internal_ui)
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("[internal-ui] bun install failed: {stderr}");
+            return Err("bun install failed".into());
+        }
+    }
+
     // Define entry points matching the original build.ts
     let entries = vec![
         ("preload-app", "./internal-ui/src/preload-app.ts"),
@@ -65,6 +81,11 @@ fn build_internal_ui() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     print_console_line("[internal-ui] Building with Rolldown...");
+
+    // Create tokio runtime once for all bundling operations
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
 
     for (name, entry) in entries {
         print_console_line(&format!("[internal-ui] Bundling {name}..."));
@@ -91,11 +112,6 @@ fn build_internal_ui() -> Result<(), Box<dyn std::error::Error>> {
 
         // Build with Rolldown
         let mut bundler = Bundler::new(options)?;
-        
-        // Use tokio to run async
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
         
         let output = runtime.block_on(async {
             bundler.write().await
