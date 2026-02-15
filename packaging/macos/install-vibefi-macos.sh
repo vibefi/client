@@ -11,17 +11,12 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-for cmd in curl shasum tar awk uname mktemp; do
+for cmd in curl shasum tar awk uname mktemp osascript; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Missing required command: $cmd" >&2
     exit 1
   fi
 done
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required to parse GitHub release metadata." >&2
-  exit 1
-fi
 
 arch="$(uname -m)"
 case "$arch" in
@@ -47,26 +42,16 @@ echo "Fetching latest release metadata..."
 release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$LATEST_RELEASE_API")"
 
 asset_info="$(
-  printf '%s' "$release_json" | python3 -c '
-import json
-import sys
-
-suffix = sys.argv[1]
-release = json.load(sys.stdin)
-
-for asset in release.get("assets", []):
-    name = asset.get("name", "")
-    if not name.endswith(suffix):
-        continue
-    digest = asset.get("digest") or ""
-    sha = digest.split(":", 1)[1] if digest.lower().startswith("sha256:") else ""
-    print(asset.get("browser_download_url", ""))
-    print(sha)
-    print(name)
-    sys.exit(0)
-
-sys.exit(1)
-  ' "$asset_suffix"
+  RELEASE_JSON="$release_json" ASSET_SUFFIX="$asset_suffix" osascript -l JavaScript <<'JSCODE'
+ObjC.import('stdlib');
+var env = $.NSProcessInfo.processInfo.environment;
+var release = JSON.parse(env.objectForKey('RELEASE_JSON').js);
+var suffix = env.objectForKey('ASSET_SUFFIX').js;
+var asset = release.assets.find(function(a) { return a.name.endsWith(suffix); });
+if (!asset) $.exit(1);
+var sha = (asset.digest || "").replace(/^sha256:/i, "");
+asset.browser_download_url + "\n" + sha + "\n" + asset.name;
+JSCODE
 )" || {
   echo "Could not find a matching macOS artifact (${asset_suffix}) in the latest release." >&2
   exit 1
