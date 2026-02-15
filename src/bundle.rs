@@ -195,7 +195,52 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
             for warning in &bundle_output.warnings {
                 tracing::warn!("Rolldown warning: {warning:?}");
             }
-            tracing::info!(dist_dir = %dist_dir.display(), "bundle build completed");
+            
+            // Handle index.html - either copy from bundle or generate
+            let html_src = bundle_dir.join("index.html");
+            let html_dest = dist_dir.join("index.html");
+            
+            if html_src.exists() {
+                // Copy existing index.html and update script references
+                tracing::debug!("Copying index.html from bundle");
+                let html_content = fs::read_to_string(&html_src)
+                    .context("Failed to read index.html")?;
+                
+                // Update script references to point to bundled files
+                // Replace common Vite patterns like /src/main.tsx with /index.js
+                let updated_html = html_content
+                    .replace(r#"<script type="module" src="/src/main.tsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
+                    .replace(r#"<script type="module" src="/src/index.tsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
+                    .replace(r#"<script type="module" src="/src/main.ts"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
+                    .replace(r#"<script type="module" src="/src/index.ts"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
+                    .replace(r#"<script type="module" src="/src/main.jsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
+                    .replace(r#"<script type="module" src="/src/index.jsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
+                    .replace(r#"<script type="module" src="/src/main.js"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
+                    .replace(r#"<script type="module" src="/src/index.js"></script>"#, r#"<script type="module" src="/index.js"></script>"#);
+                
+                fs::write(&html_dest, updated_html)
+                    .context("Failed to write index.html to dist")?;
+            } else {
+                // Generate a simple index.html
+                tracing::debug!("Generating index.html");
+                let html = r#"<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>dApp</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/index.js"></script>
+</body>
+</html>
+"#;
+                fs::write(&html_dest, html)
+                    .context("Failed to generate index.html")?;
+            }
+            
+            tracing::info!(dist_dir = %dist_dir.display(), html = %html_dest.display(), "bundle build completed with index.html");
             Ok(())
         }
         Err(e) => {
