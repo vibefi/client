@@ -178,6 +178,7 @@ jobs:
       run: ls -lRh target/packager/
     
     - name: Prepare artifacts
+      if: github.event_name == 'workflow_dispatch'
       run: |
         mkdir -p artifacts
         # Check for DEB packages
@@ -201,6 +202,7 @@ jobs:
         fi
     
     - name: Upload artifacts
+      if: github.event_name == 'workflow_dispatch'
       uses: actions/upload-artifact@v4
       with:
         name: vibefi-x86_64-unknown-linux-gnu
@@ -212,7 +214,9 @@ jobs:
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
-        files: artifacts/*
+        files: |
+          target/packager/*.deb
+          target/packager/*.AppImage
         fail_on_unmatched_files: true
 
   build-windows:
@@ -278,6 +282,7 @@ jobs:
       run: Get-ChildItem -Recurse .\target\packager\ | Format-List FullName, Length
 
     - name: Prepare artifacts
+      if: github.event_name == 'workflow_dispatch'
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Force -Path artifacts | Out-Null
@@ -289,6 +294,7 @@ jobs:
         Copy-Item -Path .\target\packager\*.msi -Destination .\artifacts\ -Force
 
     - name: Upload artifacts
+      if: github.event_name == 'workflow_dispatch'
       uses: actions/upload-artifact@v4
       with:
         name: vibefi-x86_64-pc-windows-msvc
@@ -300,5 +306,5 @@ jobs:
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
-        files: artifacts/*
+        files: target/packager/*.msi
         fail_on_unmatched_files: true
