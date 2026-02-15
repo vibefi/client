@@ -35,7 +35,7 @@ application-folder-position = { x = 480, y = 220 }
 [package.metadata.packager.deb]
 section = "utils"
 priority = "optional"
-depends = "libgtk-3-0, libwebkit2gtk-4.1-0"
+depends = ["libgtk-3-0", "libwebkit2gtk-4.1-0"]
 
 [package.metadata.packager.windows]
 allow-downgrades = true
