@@ -21,3 +21,5 @@ internal-ui/dist/
 
 # Vendored Bun binaries (downloaded via vendor/fetch-bun.sh)
 vendor/bun/bun-*
+
+.claude/
