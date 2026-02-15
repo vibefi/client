@@ -126,21 +126,33 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     );
     write_standard_build_files(bundle_dir)?;
     let bun_bin = resolve_bun_binary().context("resolve bun runtime")?;
-    tracing::debug!(bun = %bun_bin, "resolved bun runtime");
+    tracing::debug!(
+        bun = %bun_bin,
+        "resolved bun runtime"
+    );
 
     let node_modules = bundle_dir.join("node_modules");
     if !node_modules.exists() {
         tracing::info!("bundle dependencies missing; running bun install");
-        let status = Command::new(&bun_bin)
+        let output = Command::new(&bun_bin)
             .arg("install")
             .arg("--no-save")
             .current_dir(bundle_dir)
-            .status()
+            .output()
             .with_context(|| format!("bun install failed (runtime: {bun_bin})"))?;
-        if !status.success() {
-            tracing::warn!(status = %status, bun = %bun_bin, "bun install failed");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            tracing::warn!(
+                status = %output.status,
+                bun = %bun_bin,
+                %stderr,
+                %stdout,
+                "bun install failed"
+            );
             return Err(anyhow!(
-                "bun install failed with status {status} (runtime: {bun_bin})"
+                "bun install failed with status {} (runtime: {bun_bin})\nstdout: {stdout}\nstderr: {stderr}",
+                output.status
             ));
         }
         tracing::debug!("bun install completed");
@@ -150,20 +162,30 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     // Use relative path from bundle_dir for vite's outDir since vite runs in bundle_dir
     let relative_dist = PathBuf::from(".vibefi").join("dist");
     tracing::info!(out_dir = %relative_dist.display(), "running vite build for bundle");
-    let status = Command::new(&bun_bin)
+    let output = Command::new(&bun_bin)
         .arg("x")
+        .arg("--bun")
         .arg("vite")
         .arg("build")
         .arg("--emptyOutDir")
         .arg("--outDir")
         .arg(&relative_dist)
         .current_dir(bundle_dir)
-        .status()
+        .output()
         .with_context(|| format!("bun vite build failed (runtime: {bun_bin})"))?;
-    if !status.success() {
-        tracing::warn!(status = %status, bun = %bun_bin, "vite build failed");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        tracing::warn!(
+            status = %output.status,
+            bun = %bun_bin,
+            %stderr,
+            %stdout,
+            "vite build failed"
+        );
         return Err(anyhow!(
-            "bun vite build failed with status {status} (runtime: {bun_bin})"
+            "bun vite build failed with status {} (runtime: {bun_bin})\nstdout: {stdout}\nstderr: {stderr}",
+            output.status
         ));
     }
     tracing::info!(dist_dir = %dist_dir.display(), "bundle build completed");
