@@ -177,43 +177,12 @@ jobs:
     - name: List packaged outputs
       run: ls -lRh target/packager/
     
-    - name: Prepare artifacts
-      if: github.event_name == 'workflow_dispatch'
-      run: |
-        mkdir -p artifacts
-        # Check for DEB packages
-        if ls target/packager/*.deb 1> /dev/null 2>&1; then
-          cp target/packager/*.deb artifacts/
-          echo "DEB packages copied successfully"
-        else
-          echo "Warning: No DEB packages found in target/packager/"
-        fi
-        # Check for AppImage files
-        if ls target/packager/*.AppImage 1> /dev/null 2>&1; then
-          cp target/packager/*.AppImage artifacts/
-          echo "AppImage files copied successfully"
-        else
-          echo "Warning: No AppImage files found in target/packager/"
-        fi
-        # Verify we have at least some artifacts
-        if [ ! "$(ls -A artifacts)" ]; then
-          echo "Error: No artifacts were produced"
-          exit 1
-        fi
-    
-    - name: Upload artifacts
-      if: github.event_name == 'workflow_dispatch'
-      uses: actions/upload-artifact@v4
-      with:
-        name: vibefi-x86_64-unknown-linux-gnu
-        path: artifacts/*
-        if-no-files-found: error
-        retention-days: 7
-    
     - name: Upload to release
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
+        tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        target_commitish: ${{ github.sha }}
         files: |
           target/packager/*.deb
           target/packager/*.AppImage
@@ -281,30 +250,11 @@ jobs:
       shell: pwsh
       run: Get-ChildItem -Recurse .\target\packager\ | Format-List FullName, Length
 
-    - name: Prepare artifacts
-      if: github.event_name == 'workflow_dispatch'
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-        $msiFiles = Get-ChildItem .\target\packager\*.msi -ErrorAction SilentlyContinue
-        if (-not $msiFiles) {
-          Write-Error "No MSI files found in target/packager/"
-          exit 1
-        }
-        Copy-Item -Path .\target\packager\*.msi -Destination .\artifacts\ -Force
-
-    - name: Upload artifacts
-      if: github.event_name == 'workflow_dispatch'
-      uses: actions/upload-artifact@v4
-      with:
-        name: vibefi-x86_64-pc-windows-msvc
-        path: artifacts/*
-        if-no-files-found: error
-        retention-days: 7
-
     - name: Upload to release
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
+        tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        target_commitish: ${{ github.sha }}
         files: target/packager/*.msi
         fail_on_unmatched_files: true
