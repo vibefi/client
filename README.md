@@ -163,4 +163,7 @@ This triggers the release workflow which builds and uploads:
 - `.deb` package
 - `.AppImage` portable executable
 
+**Windows (x86_64):**
+- `.msi` installer
+
 All artifacts are attached to the GitHub release and available for download.
