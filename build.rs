@@ -121,6 +121,7 @@ fn build_internal_ui() -> Result<(), Box<dyn std::error::Error>> {
 fn main() {
     let internal_ui = Path::new("internal-ui");
     emit_rerun_for_path(&internal_ui.join("package.json"));
+    emit_rerun_for_path(&internal_ui.join("bun.lock"));
     emit_rerun_for_dir(&internal_ui.join("src"));
     emit_rerun_for_dir(&internal_ui.join("scripts"));
     emit_rerun_for_dir(&internal_ui.join("static"));

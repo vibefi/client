@@ -18,8 +18,9 @@ resources = [
   "vendor/WebView2Loader.dll",
 ]
 
-# Note: Bun binary still used for package management (bun install)
-# but bundling is now handled by Rolldown (Rust-based)
+# Bun binary vendored for package management (bun install)
+# Bundling handled by Rolldown (Rust-based, no external binary needed)
+external-binaries = ["vendor/bun/bun"]
 
 before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile && bun install --cwd ipfs-helper --frozen-lockfile && cd walletconnect-helper && bun run build:dist && cd ../ipfs-helper && bun run build:dist"
 
