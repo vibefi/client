@@ -10,7 +10,7 @@ use std::{
 
 use tao::event_loop::EventLoopProxy;
 
-use crate::config::NetworkContext;
+use crate::config::ResolvedConfig;
 use crate::hardware::HardwareDevice;
 use crate::rpc_manager::RpcEndpointManager;
 use crate::walletconnect::{WalletConnectBridge, WalletConnectSession};
@@ -109,13 +109,12 @@ pub struct AppState {
     pub signer: Arc<Mutex<Option<Arc<PrivateKeySigner>>>>,
     pub walletconnect: Arc<Mutex<Option<Arc<Mutex<WalletConnectBridge>>>>>,
     pub hardware_signer: Arc<Mutex<Option<HardwareDevice>>>,
-    pub network: Option<NetworkContext>,
+    pub resolved: Option<Arc<ResolvedConfig>>,
     pub proxy: EventLoopProxy<UserEvent>,
     pub pending_connect: Arc<Mutex<VecDeque<PendingConnect>>>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
     pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,
-    pub config_path: Option<PathBuf>,
     pub settings_webview_id: Arc<Mutex<Option<String>>>,
 }
 

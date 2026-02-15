@@ -58,7 +58,7 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
             }
 
             // Persist to disk
-            if let Some(ref config_path) = state.config_path {
+            if let Some(ref config_path) = state.resolved.as_ref().and_then(|r| r.config_path.clone()) {
                 let mut settings = crate::settings::load_settings(config_path);
                 settings.rpc_endpoints = endpoints;
                 crate::settings::save_settings(config_path, &settings)?;
@@ -68,19 +68,20 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
         }
         "vibefi_getIpfsSettings" => {
             let default_backend = state
-                .network
+                .resolved
                 .as_ref()
-                .map(|n| n.ipfs_fetch_backend)
+                .map(|r| r.ipfs_fetch_backend)
                 .unwrap_or_default();
             let default_gateway_endpoint = state
-                .network
+                .resolved
                 .as_ref()
-                .map(|n| n.ipfs_gateway.clone())
+                .map(|r| r.ipfs_gateway.clone())
                 .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
 
             let user_settings = state
-                .config_path
+                .resolved
                 .as_ref()
+                .and_then(|r| r.config_path.as_ref())
                 .map(|p| crate::settings::load_settings(p))
                 .unwrap_or_default();
             let fetch_backend = user_settings.ipfs.fetch_backend.unwrap_or(default_backend);
@@ -111,7 +112,7 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                 "settings set ipfs settings"
             );
 
-            if let Some(ref config_path) = state.config_path {
+            if let Some(ref config_path) = state.resolved.as_ref().and_then(|r| r.config_path.clone()) {
                 let mut settings = crate::settings::load_settings(config_path);
                 settings.ipfs.fetch_backend = Some(params.fetch_backend);
                 settings.ipfs.gateway_endpoint = params
