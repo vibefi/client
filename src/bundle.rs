@@ -6,6 +6,14 @@ use std::{
 };
 
 use crate::runtime_paths::resolve_bun_binary;
+use brk_rolldown::{Bundler, BundlerOptions};
+use brk_rolldown_common::bundler_options::{
+    InputItem,
+    OutputFormat,
+    Platform,
+    RawMinifyOptions,
+};
+use brk_rolldown_utils::indexmap::FxIndexMap;
 
 #[derive(Debug, Clone)]
 pub struct BundleConfig {
@@ -76,45 +84,14 @@ const STANDARD_PACKAGE_JSON: &str = r#"{
     "@tanstack/react-query": "5.90.20"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "5.1.2",
     "@types/react": "19.2.4",
-    "typescript": "5.9.3",
-    "vite": "7.2.4"
+    "typescript": "5.9.3"
   }
-}
-"#;
-
-const STANDARD_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig({
-  plugins: [react()],
-});
-"#;
-
-const STANDARD_TSCONFIG: &str = r#"{
-  "compilerOptions": {
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true
-  },
-  "include": ["src"]
 }
 "#;
 
 fn write_standard_build_files(bundle_dir: &Path) -> Result<()> {
     fs::write(bundle_dir.join("package.json"), STANDARD_PACKAGE_JSON)?;
-    fs::write(bundle_dir.join("vite.config.ts"), STANDARD_VITE_CONFIG)?;
-    fs::write(bundle_dir.join("tsconfig.json"), STANDARD_TSCONFIG)?;
     Ok(())
 }
 
@@ -159,37 +136,73 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     }
 
     fs::create_dir_all(dist_dir).context("create dist dir")?;
-    // Use relative path from bundle_dir for vite's outDir since vite runs in bundle_dir
-    let relative_dist = PathBuf::from(".vibefi").join("dist");
-    tracing::info!(out_dir = %relative_dist.display(), "running vite build for bundle");
-    let output = Command::new(&bun_bin)
-        .arg("x")
-        .arg("--bun")
-        .arg("vite")
-        .arg("build")
-        .arg("--emptyOutDir")
-        .arg("--outDir")
-        .arg(&relative_dist)
-        .current_dir(bundle_dir)
-        .output()
-        .with_context(|| format!("bun vite build failed (runtime: {bun_bin})"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        tracing::warn!(
-            status = %output.status,
-            bun = %bun_bin,
-            %stderr,
-            %stdout,
-            "vite build failed"
-        );
-        return Err(anyhow!(
-            "bun vite build failed with status {} (runtime: {bun_bin})\nstdout: {stdout}\nstderr: {stderr}",
-            output.status
-        ));
+    
+    tracing::info!(dist_dir = %dist_dir.display(), "running Rolldown build for bundle");
+    
+    // Find the entry point (typically src/index.tsx or src/main.tsx or index.html)
+    let src_dir = bundle_dir.join("src");
+    let possible_entries = vec![
+        src_dir.join("index.tsx"),
+        src_dir.join("index.ts"),
+        src_dir.join("index.jsx"),
+        src_dir.join("index.js"),
+        src_dir.join("main.tsx"),
+        src_dir.join("main.ts"),
+        bundle_dir.join("index.html"),
+    ];
+    
+    let entry = possible_entries
+        .iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| anyhow!("No entry point found in bundle"))?;
+    
+    tracing::debug!(entry = %entry.display(), "found entry point");
+    
+    // Configure Rolldown for bundle build
+    let mut define_map = FxIndexMap::default();
+    define_map.insert("process.env.NODE_ENV".to_string(), "\"production\"".to_string());
+    
+    let options = BundlerOptions {
+        input: Some(vec![InputItem {
+            name: Some("index".to_string()),
+            import: entry.to_string_lossy().to_string(),
+        }]),
+        cwd: Some(bundle_dir.to_path_buf()),
+        platform: Some(Platform::Browser),
+        format: Some(OutputFormat::Esm),
+        dir: Some(dist_dir.to_string_lossy().to_string()),
+        minify: Some(RawMinifyOptions::Bool(true)),
+        define: Some(define_map),
+        ..Default::default()
+    };
+
+    // Build with Rolldown
+    let mut bundler = Bundler::new(options)
+        .context("Failed to create Rolldown bundler")?;
+    
+    // Use tokio to run async
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to create tokio runtime")?;
+    
+    let output = runtime.block_on(async {
+        bundler.write().await
+    });
+
+    match output {
+        Ok(bundle_output) => {
+            for warning in &bundle_output.warnings {
+                tracing::warn!("Rolldown warning: {warning:?}");
+            }
+            tracing::info!(dist_dir = %dist_dir.display(), "bundle build completed");
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("Rolldown build failed: {e:?}");
+            Err(anyhow!("Rolldown build failed: {e:?}"))
+        }
     }
-    tracing::info!(dist_dir = %dist_dir.display(), "bundle build completed");
-    Ok(())
 }
 
 pub fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
