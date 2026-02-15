@@ -1,7 +1,14 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use brk_rolldown::{Bundler, BundlerOptions};
+use brk_rolldown_common::bundler_options::{
+    InputItem,
+    OutputFormat,
+    Platform,
+    RawMinifyOptions,
+};
+use brk_rolldown_utils::indexmap::FxIndexMap;
 
 fn emit_rerun_for_path(path: &Path) {
     if let Some(s) = path.to_str() {
@@ -37,80 +44,94 @@ fn print_console_line(line: &str) {
     }
 }
 
-fn run_bun_step(
-    args: &[&str],
-    cwd: &Path,
-    start_message: &str,
-    success_message: Option<&str>,
-    step_label: &str,
-) {
-    print_console_line(start_message);
+fn build_internal_ui() -> Result<(), Box<dyn std::error::Error>> {
+    let internal_ui = Path::new("internal-ui");
+    let dist_dir = internal_ui.join("dist");
 
-    let mut cmd = Command::new("bun");
-    cmd.args(args).current_dir(cwd);
+    // Create dist directory
+    fs::create_dir_all(&dist_dir)?;
 
-    run_with_console_handling(cmd, success_message, step_label);
-}
+    // Define entry points matching the original build.ts
+    let entries = vec![
+        ("preload-app", "./internal-ui/src/preload-app.ts"),
+        ("preload-wallet-selector", "./internal-ui/src/preload-wallet-selector.ts"),
+        ("preload-tabbar", "./internal-ui/src/preload-tabbar.ts"),
+        ("home", "./internal-ui/src/home.tsx"),
+        ("launcher", "./internal-ui/src/launcher.tsx"),
+        ("wallet-selector", "./internal-ui/src/wallet-selector.tsx"),
+        ("tabbar", "./internal-ui/src/tabbar.tsx"),
+        ("preload-settings", "./internal-ui/src/preload-settings.ts"),
+        ("settings", "./internal-ui/src/settings.tsx"),
+    ];
 
-fn run_with_console_handling(mut cmd: Command, success_message: Option<&str>, step_label: &str) {
-    if let Some(console) = try_open_console() {
-        let stdout_console = console
-            .try_clone()
-            .unwrap_or_else(|_| panic!("failed to clone console handle for {step_label} stdout"));
-        cmd.stdout(Stdio::from(stdout_console));
-        cmd.stderr(Stdio::from(console));
+    print_console_line("[internal-ui] Building with Rolldown...");
 
-        let status = cmd
-            .status()
-            .unwrap_or_else(|_| panic!("failed to execute bun for {step_label}"));
-        if !status.success() {
-            panic!("{step_label} failed with status: {status}");
-        }
-        if let Some(msg) = success_message {
-            print_console_line(msg);
-        }
-    } else {
-        let output = cmd
-            .output()
-            .unwrap_or_else(|_| panic!("failed to execute bun for {step_label}"));
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!(
-                "{step_label} failed with status: {}.\nstdout:\n{}\nstderr:\n{}",
-                output.status, stdout, stderr
-            );
+    for (name, entry) in entries {
+        print_console_line(&format!("[internal-ui] Bundling {name}..."));
+        
+        let outfile = dist_dir.join(format!("{name}.js"));
+        
+        // Configure Rolldown options to match Bun's build settings
+        let mut define_map = FxIndexMap::default();
+        define_map.insert("process.env.NODE_ENV".to_string(), "\"production\"".to_string());
+        
+        let options = BundlerOptions {
+            input: Some(vec![InputItem {
+                name: None,
+                import: entry.to_string(),
+            }]),
+            cwd: Some(std::env::current_dir()?),
+            platform: Some(Platform::Browser),
+            format: Some(OutputFormat::Iife),
+            file: Some(outfile.to_string_lossy().to_string()),
+            minify: Some(RawMinifyOptions::Bool(true)),
+            define: Some(define_map),
+            ..Default::default()
+        };
+
+        // Build with Rolldown
+        let mut bundler = Bundler::new(options)?;
+        
+        // Use tokio to run async
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        
+        let output = runtime.block_on(async {
+            bundler.write().await
+        });
+
+        match output {
+            Ok(bundle_output) => {
+                for warning in &bundle_output.warnings {
+                    print_console_line(&format!("[internal-ui] Warning: {warning:?}"));
+                }
+            }
+            Err(e) => {
+                eprintln!("[internal-ui] Error building {name}: {e:?}");
+                return Err(format!("Failed to build {name}").into());
+            }
         }
     }
+
+    print_console_line("[internal-ui] Rolldown build completed successfully");
+    Ok(())
 }
 
 fn main() {
     let internal_ui = Path::new("internal-ui");
     emit_rerun_for_path(&internal_ui.join("package.json"));
-    emit_rerun_for_path(&internal_ui.join("bun.lock"));
     emit_rerun_for_dir(&internal_ui.join("src"));
     emit_rerun_for_dir(&internal_ui.join("scripts"));
     emit_rerun_for_dir(&internal_ui.join("static"));
     println!("cargo:rerun-if-env-changed=SKIP_UI_BUILD");
 
     if std::env::var("SKIP_UI_BUILD").is_ok() {
-        print_console_line("[internal-ui] SKIP_UI_BUILD set, skipping bun build");
+        print_console_line("[internal-ui] SKIP_UI_BUILD set, skipping build");
         return;
     }
 
-    run_bun_step(
-        &["install"],
-        internal_ui,
-        "[internal-ui] running: bun install",
-        Some("[internal-ui] bun install completed successfully"),
-        "internal-ui install",
-    );
-
-    run_bun_step(
-        &["run", "build"],
-        internal_ui,
-        "[internal-ui] running: bun run build",
-        Some("[internal-ui] bun build completed successfully"),
-        "internal-ui build",
-    );
+    if let Err(e) = build_internal_ui() {
+        panic!("[internal-ui] Build failed: {e}");
+    }
 }
