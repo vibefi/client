@@ -99,6 +99,9 @@ jobs:
           echo "Warning: No .app bundles found in target/packager/"
         fi
         cd ../..
+        if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+          cp packaging/macos/install-vibefi-macos.sh artifacts/install-vibefi-macos.sh
+        fi
         # Verify we have at least some artifacts
         if [ ! "$(ls -A artifacts)" ]; then
           echo "Error: No artifacts were produced"
