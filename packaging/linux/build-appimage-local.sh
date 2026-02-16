@@ -128,7 +128,7 @@ echo "    Done (${SECONDS}s)"
 echo ""
 echo "==> [8/8] Patching AppImage for portability..."
 SECONDS=0
-APPIMAGE=$(find target/packager -name "*.AppImage" -type f | head -1)
+APPIMAGE=$(find target/packager -name "*.AppImage" -type f -printf "%T@ %p\n" | sort -nr | awk "NR==1 {print \$2}")
 if [ -z "$APPIMAGE" ]; then
     echo "Error: No AppImage found in target/packager/"
     ls -lRh target/packager/ 2>/dev/null
@@ -142,9 +142,8 @@ echo "    Done (${SECONDS}s)"
 
 echo ""
 echo "==> Copying output..."
-# Skip copy if source and destination are the same mount
-cp -v --no-clobber target/packager/*.AppImage /output/ 2>/dev/null \
-    || echo "    (output already in place)"
+# Always replace old artifact so test runs never use stale AppImages.
+cp -vf target/packager/*.AppImage /output/
 
 ELAPSED=$(( SECONDS - TOTAL_START + SECONDS ))
 echo ""

@@ -121,6 +121,11 @@ EXCLUDE_LIBS=(
     "libvulkan.so"
     "libnvidia"
     "libdrm.so"
+    # Must come from host to stay ABI-compatible with host EGL/Wayland stack.
+    "libwayland-client.so"
+    "libwayland-cursor.so"
+    "libwayland-egl.so"
+    "libwayland-server.so"
 )
 
 should_exclude() {

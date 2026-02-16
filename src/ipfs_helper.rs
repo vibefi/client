@@ -4,6 +4,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use crate::{logging, runtime_paths};
@@ -47,7 +49,7 @@ struct FetchResponseBody {
 pub struct IpfsHelperBridge {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdout_rx: Receiver<std::io::Result<String>>,
     next_id: u64,
 }
 
@@ -89,10 +91,11 @@ impl IpfsHelperBridge {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("ipfs helper stdout unavailable"))?;
+        let stdout_rx = spawn_stdout_reader(stdout);
         let mut bridge = Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            stdout_rx,
             next_id: 1,
         };
 
@@ -107,7 +110,10 @@ impl IpfsHelperBridge {
         if let Some(timeout_ms) = timeout_ms {
             payload["timeoutMs"] = Value::from(timeout_ms);
         }
-        let result = self.send_command("fetch", payload)?;
+        let helper_timeout = timeout_ms
+            .and_then(|ms| ms.checked_add(10_000))
+            .unwrap_or(40_000);
+        let result = self.send_command("fetch", payload, Duration::from_millis(helper_timeout))?;
         let parsed: FetchResponseBody =
             serde_json::from_value(result).context("invalid fetch response from helper")?;
         let body = base64::engine::general_purpose::STANDARD
@@ -120,11 +126,11 @@ impl IpfsHelperBridge {
     }
 
     fn ping(&mut self) -> Result<()> {
-        let _ = self.send_command("ping", Value::Null)?;
+        let _ = self.send_command("ping", Value::Null, Duration::from_secs(10))?;
         Ok(())
     }
 
-    fn send_command(&mut self, method: &str, params: Value) -> Result<Value> {
+    fn send_command(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
         let payload = serde_json::json!({
@@ -145,15 +151,37 @@ impl IpfsHelperBridge {
             .context("failed flushing helper request")?;
         tracing::debug!(method, id, "ipfs helper request flushed");
 
+        let deadline = Instant::now() + timeout;
         loop {
-            let mut raw = String::new();
-            let n = self
-                .stdout
-                .read_line(&mut raw)
-                .context("failed reading helper response")?;
-            if n == 0 {
-                bail!("ipfs helper closed pipe unexpectedly");
+            let now = Instant::now();
+            if now >= deadline {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                bail!(
+                    "ipfs helper timed out waiting for {} response after {}ms",
+                    method,
+                    timeout.as_millis()
+                );
             }
+            let wait_for = deadline.saturating_duration_since(now);
+            let raw = match self.stdout_rx.recv_timeout(wait_for) {
+                Ok(line) => line.context("failed reading helper response")?,
+                Err(RecvTimeoutError::Timeout) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    bail!(
+                        "ipfs helper timed out waiting for {} response after {}ms",
+                        method,
+                        timeout.as_millis()
+                    );
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    if let Ok(Some(status)) = self.child.try_wait() {
+                        bail!("ipfs helper exited unexpectedly: {}", status);
+                    }
+                    bail!("ipfs helper closed pipe unexpectedly");
+                }
+            };
             let raw = raw.trim();
             if raw.is_empty() {
                 continue;
@@ -179,6 +207,21 @@ impl IpfsHelperBridge {
             return Ok(response.result.unwrap_or(Value::Null));
         }
     }
+}
+
+fn spawn_stdout_reader(stdout: ChildStdout) -> Receiver<std::io::Result<String>> {
+    let (tx, rx) = mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("ipfs-helper-stdout".to_string())
+        .spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    rx
 }
 
 impl Drop for IpfsHelperBridge {

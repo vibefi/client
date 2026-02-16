@@ -6,7 +6,8 @@
 # 2. Copies WebKit subprocess executables into the AppDir
 # 3. Binary-patches libwebkit/libjavascriptcore to replace /usr with ././
 # 4. Replaces AppRun with a custom script that cd's into $APPDIR/usr/
-# 5. Repacks using appimagetool
+# 5. Removes bundled Wayland libs so host EGL/Wayland ABI stays consistent
+# 6. Repacks using appimagetool
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -92,6 +93,14 @@ echo "==> Installing custom AppRun..."
 rm -f "$APPDIR/AppRun"
 cp "$SCRIPT_DIR/AppRun" "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"
+
+# --- Remove ABI-sensitive Wayland libs ---
+echo "==> Removing bundled Wayland libraries (use host-provided versions)..."
+rm -f \
+  "$APPDIR/usr/lib/libwayland-client.so"* \
+  "$APPDIR/usr/lib/libwayland-cursor.so"* \
+  "$APPDIR/usr/lib/libwayland-egl.so"* \
+  "$APPDIR/usr/lib/libwayland-server.so"* || true
 
 # --- Repack with appimagetool ---
 echo "==> Downloading appimagetool (if needed)..."
