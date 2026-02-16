@@ -162,18 +162,19 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     let mut define_map = FxIndexMap::default();
     define_map.insert("process.env.NODE_ENV".to_string(), "\"production\"".to_string());
     
-    // Define import.meta.env with common properties to prevent "Cannot read properties of undefined" errors
-    // Vite automatically provides these, but Rolldown needs explicit definitions
-    define_map.insert("import.meta.env.MODE".to_string(), "\"production\"".to_string());
-    define_map.insert("import.meta.env.DEV".to_string(), "false".to_string());
-    define_map.insert("import.meta.env.PROD".to_string(), "true".to_string());
-    define_map.insert("import.meta.env.SSR".to_string(), "false".to_string());
-    
-    // Define common custom env vars as undefined to prevent crashes when accessed
-    // Users can override these via actual environment variables if needed
-    define_map.insert("import.meta.env.RPC_URL".to_string(), "undefined".to_string());
-    define_map.insert("import.meta.env.VITE_RPC_URL".to_string(), "undefined".to_string());
-    define_map.insert("import.meta.env.BASE_URL".to_string(), "\"/\"".to_string());
+    // Define import.meta.env as a complete object to prevent "Cannot read properties of undefined" errors
+    // This ensures the env object exists even when properties are accessed dynamically
+    // Matches Vite's behavior where import.meta.env is always an object
+    let env_object = r#"{
+  "MODE": "production",
+  "DEV": false,
+  "PROD": true,
+  "SSR": false,
+  "BASE_URL": "/",
+  "RPC_URL": undefined,
+  "VITE_RPC_URL": undefined
+}"#;
+    define_map.insert("import.meta.env".to_string(), env_object.to_string());
     
     let options = BundlerOptions {
         input: Some(vec![InputItem {
