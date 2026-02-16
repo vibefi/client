@@ -36,9 +36,6 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
-
     - name: Install cargo-binstall
       uses: cargo-bins/cargo-binstall@main
 
@@ -48,22 +45,22 @@ jobs:
       with:
         path: ~/.cargo/bin/cargo-packager
         key: cargo-packager-${{ runner.os }}-${{ env.CARGO_PACKAGER_VERSION }}
-    
+
     - name: Install Bun
       uses: oven-sh/setup-bun@v1
       with:
         bun-version: latest
-    
+
     - name: Install cargo-packager
       if: steps.cache-cargo-packager.outputs.cache-hit != 'true'
       run: cargo binstall --no-confirm cargo-packager@${{ env.CARGO_PACKAGER_VERSION }}
 
     - name: Verify cargo-packager
       run: cargo packager --version
-    
+
     - name: Fetch Bun binaries for packaging
       run: ./vendor/fetch-bun.sh
-    
+
     - name: Build release binary
       run: cargo build --release --target ${{ matrix.target }}
     
@@ -129,15 +126,12 @@ jobs:
   build-linux:
     name: Build Linux (x86_64)
     runs-on: ubuntu-22.04
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
 
     - name: Install cargo-binstall
       uses: cargo-bins/cargo-binstall@main
@@ -148,7 +142,7 @@ jobs:
       with:
         path: ~/.cargo/bin/cargo-packager
         key: cargo-packager-${{ runner.os }}-${{ env.CARGO_PACKAGER_VERSION }}
-    
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
@@ -203,9 +197,6 @@ jobs:
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
 
     - name: Install cargo-binstall
       uses: cargo-bins/cargo-binstall@main
