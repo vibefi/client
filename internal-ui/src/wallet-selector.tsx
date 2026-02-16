@@ -65,7 +65,11 @@ const localStyles = `
     justify-content: center;
     margin-bottom: 16px;
   }
-  .qr-container svg { max-width: 240px; max-height: 240px; }
+  .qr-container img {
+    width: 240px;
+    height: 240px;
+    max-width: 100%;
+  }
   textarea {
     width: 100%;
     height: 64px;
@@ -104,6 +108,10 @@ window.__WryEthereumResolve = (id: number, result: unknown, error: unknown) => {
 
 function walletIpc(method: string, params: unknown[] = []): Promise<unknown> {
   return walletClient.request(PROVIDER_IDS.wallet, method, params);
+}
+
+function svgToDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
 }
 
 async function copyText(value: string) {
@@ -243,7 +251,9 @@ function App() {
           <h2>Scan QR Code</h2>
           <div className="desc">Open a WalletConnect-compatible wallet and scan the QR code below.</div>
           {qrSvg && (
-            <div className="qr-container" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+            <div className="qr-container">
+              <img src={svgToDataUrl(qrSvg)} alt="WalletConnect QR code" />
+            </div>
           )}
           <textarea id="uri" value={uri} readOnly />
           <div className="actions">
