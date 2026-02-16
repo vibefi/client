@@ -27,10 +27,6 @@ impl ConfigBuilder {
         let rpc_url = parse_string_env("VIBEFI_RPC_URL").unwrap_or_else(|| config.rpcUrl.clone());
 
         // -- IPFS --
-        let ipfs_api = config
-            .ipfsApi
-            .clone()
-            .unwrap_or_else(|| "http://127.0.0.1:5001".to_string());
         let ipfs_gateway = config
             .ipfsGateway
             .clone()
@@ -84,7 +80,6 @@ impl ConfigBuilder {
             dapp_registry: config.dappRegistry.clone(),
             local_network: config.localNetwork,
             rpc_url,
-            ipfs_api,
             ipfs_gateway,
             ipfs_fetch_backend,
             ipfs_helia_gateways,

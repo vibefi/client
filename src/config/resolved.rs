@@ -20,7 +20,6 @@ pub struct ResolvedConfig {
     pub rpc_url: String,
 
     // -- IPFS (deploy + client override) --
-    pub ipfs_api: String,
     pub ipfs_gateway: String,
     pub ipfs_fetch_backend: IpfsFetchBackend,
     pub ipfs_helia_gateways: Vec<String>,

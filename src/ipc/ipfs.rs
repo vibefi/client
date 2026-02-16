@@ -356,7 +356,7 @@ fn handle_head(
 ) -> Result<Option<Value>> {
     let params = parse_array_params(req)?;
     let (cid, path) = parse_cid_path(params)?;
-    let mut emit = |phase: &str, percent: u8, message: &str| {
+    let emit = |phase: &str, percent: u8, message: &str| {
         emit_ipfs_progress(
             state,
             webview_id,
@@ -404,7 +404,7 @@ fn handle_list(
         .filter(|v| !v.is_empty())
         .ok_or_else(|| anyhow!("cid is required"))?;
     let base_path = normalize_path(params.get(1).and_then(|v| v.as_str()))?;
-    let mut emit = |phase: &str, percent: u8, message: &str| {
+    let emit = |phase: &str, percent: u8, message: &str| {
         emit_ipfs_progress(
             state,
             webview_id,
@@ -469,7 +469,7 @@ fn handle_read(
     if !matches!(as_kind.as_str(), "json" | "text" | "snippet" | "image") {
         bail!("options.as must be one of json|text|snippet|image");
     }
-    let mut emit = |phase: &str, percent: u8, message: &str| {
+    let emit = |phase: &str, percent: u8, message: &str| {
         emit_ipfs_progress(
             state,
             webview_id,

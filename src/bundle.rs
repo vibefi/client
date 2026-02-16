@@ -140,25 +140,19 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     tracing::info!(dist_dir = %dist_dir.display(), "running Rolldown build for bundle");
     
     // Find the entry point (main.tsx)
-    let src_dir = bundle_dir.join("src");
-    let possible_entries = vec![
-        src_dir.join("main.tsx"),
-    ];
-    
-    let entry = possible_entries
-        .iter()
-        .find(|p| p.exists())
-        .ok_or_else(|| anyhow!("No entry point found in bundle"))?;
-    
-    tracing::debug!(entry = %entry.display(), "found entry point");
+    let entry = bundle_dir.join("src").join("main.tsx");
+    if entry.exists() {
+        tracing::debug!(entry = %entry.display(), "found entry point");
+    } else {
+        return Err(anyhow!("No main.tsx entry point found in bundle"));
+    }
     
     // Configure Rolldown for bundle build
     let mut define_map = FxIndexMap::default();
     define_map.insert("process.env.NODE_ENV".to_string(), "\"production\"".to_string());
     
-    // Define import.meta.env as a complete object to prevent "Cannot read properties of undefined" errors
-    // This ensures the env object exists even when properties are accessed dynamically
-    // Matches Vite's behavior where import.meta.env is always an object
+    // Define import.meta.env as a complete object matching 
+    // Vite's behavior where import.meta.env is always an object
     let env_object = r#"{
   "MODE": "production",
   "DEV": false,
@@ -203,7 +197,7 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
                 tracing::warn!("Rolldown warning: {warning:?}");
             }
             
-            // Handle index.html - either copy from bundle or generate
+            // Handle index.html
             let html_src = bundle_dir.join("index.html");
             let html_dest = dist_dir.join("index.html");
             
@@ -221,23 +215,7 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
                 fs::write(&html_dest, updated_html)
                     .context("Failed to write index.html to dist")?;
             } else {
-                // Generate a simple index.html
-                tracing::debug!("Generating index.html");
-                let html = r#"<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>dApp</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/index.js"></script>
-</body>
-</html>
-"#;
-                fs::write(&html_dest, html)
-                    .context("Failed to generate index.html")?;
+                return Err(anyhow!("No index.html found in bundle"));
             }
             
             tracing::info!(dist_dir = %dist_dir.display(), html = %html_dest.display(), "bundle build completed with index.html");
@@ -248,32 +226,4 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
             Err(anyhow!("Rolldown build failed: {e:?}"))
         }
     }
-}
-
-pub fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        // Skip generated build files (not part of bundle content)
-        if name == "node_modules"
-            || name == ".git"
-            || name == ".vibefi"
-            || name == "package.json"
-            || name == "vite.config.ts"
-            || name == "tsconfig.json"
-            || name == "bun.lock"
-            || name == "bun.lockb"
-        {
-            continue;
-        }
-        if entry.file_type()?.is_dir() {
-            out.extend(walk_files(&path)?);
-        } else if entry.file_type()?.is_file() {
-            out.push(path);
-        }
-    }
-    Ok(out)
 }

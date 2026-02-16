@@ -53,7 +53,6 @@ mod tests {
             developerPrivateKey: None,
             rpcUrl: "http://127.0.0.1:8546".to_string(),
             localNetwork: false,
-            ipfsApi: None,
             ipfsGateway: None,
             ipfsFetchBackend: IpfsFetchBackend::default(),
             ipfsHeliaGateways: Vec::new(),

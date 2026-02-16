@@ -44,9 +44,6 @@ pub struct AppConfig {
     pub localNetwork: bool,
 
     #[serde(default)]
-    pub ipfsApi: Option<String>,
-
-    #[serde(default)]
     pub ipfsGateway: Option<String>,
 
     #[serde(default)]
