@@ -94,31 +94,25 @@ fn csp_response(
     body: Vec<u8>,
     mime: String,
 ) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+    let csp = "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default";
     Response::builder()
         .status(200)
         .header(CONTENT_TYPE, mime.as_str())
-        .header(
-            "Content-Security-Policy",
-            "default-src 'self' app: https://app.localhost; img-src 'self' data: app: https://app.localhost; style-src 'self' 'unsafe-inline' app: https://app.localhost; script-src 'self' 'unsafe-inline' app: https://app.localhost; connect-src 'none'; frame-src 'none'",
-        )
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", csp)
         .body(std::borrow::Cow::Owned(body))
         .expect("failed to build CSP response")
 }
 
-fn should_enable_devtools() -> bool {
-    if cfg!(debug_assertions) {
-        return true;
-    }
-
-    std::env::var("VIBEFI_ENABLE_DEVTOOLS")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
+fn should_enable_devtools(state: &AppState) -> bool {
+    state
+        .resolved
+        .as_ref()
+        .map(|r| r.enable_devtools)
+        .unwrap_or_else(|| {
+            // No config loaded — fall back to debug_assertions.
+            cfg!(debug_assertions)
         })
-        .unwrap_or(false)
 }
 
 fn allow_navigation(url: &str) -> bool {
@@ -235,7 +229,7 @@ pub fn build_app_webview(
         .with_id(id)
         .with_bounds(bounds)
         .with_initialization_script(init_script)
-        .with_devtools(should_enable_devtools())
+        .with_devtools(should_enable_devtools(state))
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://index.html")
         .with_navigation_handler(navigation_handler)
@@ -282,6 +276,7 @@ pub fn build_tab_bar_webview(
     host: &WebViewHost,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
+    enable_devtools: bool,
 ) -> Result<WebView> {
     tracing::debug!(?bounds, "build_tab_bar_webview");
 
@@ -322,7 +317,7 @@ pub fn build_tab_bar_webview(
         .with_id("tab-bar")
         .with_bounds(bounds)
         .with_initialization_script(PRELOAD_TAB_BAR_JS.to_string())
-        .with_devtools(should_enable_devtools())
+        .with_devtools(enable_devtools)
         .with_custom_protocol("app".into(), protocol)
         .with_url("app://tabbar.html")
         .with_ipc_handler(move |req: wry::http::Request<String>| {

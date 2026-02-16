@@ -1,4 +1,5 @@
 mod hardware;
+mod ipfs;
 mod local;
 mod router;
 mod rpc;
@@ -64,7 +65,7 @@ pub fn network_identity_response(state: &AppState, method: &str) -> Option<Value
 }
 
 pub fn try_spawn_rpc_passthrough(state: &AppState, webview_id: &str, req: &IpcRequest) -> bool {
-    if state.network.is_none() || !rpc::is_rpc_passthrough(req.method.as_str()) {
+    if state.resolved.is_none() || !rpc::is_rpc_passthrough(req.method.as_str()) {
         return false;
     }
 
