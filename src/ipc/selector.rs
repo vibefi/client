@@ -171,8 +171,11 @@ pub(super) fn handle_wallet_selector_ipc(
                         }
 
                         // Resolve pending connect if any
-                        let pending: Vec<_> =
-                            pending_connect.lock().expect("pending_connect").drain(..).collect();
+                        let pending: Vec<_> = pending_connect
+                            .lock()
+                            .expect("pending_connect")
+                            .drain(..)
+                            .collect();
                         for pc in pending {
                             let _ = proxy.send_event(UserEvent::WalletConnectResult {
                                 webview_id: pc.webview_id,
