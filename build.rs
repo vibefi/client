@@ -14,9 +14,6 @@ use brk_rolldown_utils::indexmap::FxIndexMap;
 const EMBED_WC_PROJECT_ID_ENV: &str = "VIBEFI_EMBED_WC_PROJECT_ID";
 const EMBEDDED_WC_PROJECT_ID_ENV: &str = "VIBEFI_EMBEDDED_WC_PROJECT_ID";
 
-const EMBED_WC_PROJECT_ID_ENV: &str = "VIBEFI_EMBED_WC_PROJECT_ID";
-const EMBEDDED_WC_PROJECT_ID_ENV: &str = "VIBEFI_EMBEDDED_WC_PROJECT_ID";
-
 fn emit_rerun_for_path(path: &Path) {
     if let Some(s) = path.to_str() {
         println!("cargo:rerun-if-changed={s}");
