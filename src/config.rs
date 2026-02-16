@@ -108,7 +108,7 @@ fn default_ipfs_helia_routers() -> Vec<String> {
 }
 
 fn default_ipfs_helia_timeout_ms() -> u64 {
-    30_000
+    3000
 }
 
 #[derive(Debug, Deserialize, Clone)]
