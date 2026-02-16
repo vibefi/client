@@ -182,10 +182,20 @@ jobs:
       run: |
         cargo packager --release \
           --formats deb,appimage
-    
+
+    - name: Patch AppImage for portability
+      run: |
+        APPIMAGE=$(find target/packager -name '*.AppImage' -type f | head -1)
+        if [ -n "$APPIMAGE" ]; then
+          bash packaging/linux/patch-appimage.sh "$APPIMAGE"
+        else
+          echo "Error: No AppImage found to patch"
+          exit 1
+        fi
+
     - name: List packaged outputs
       run: ls -lRh target/packager/
-    
+
     - name: Upload to release
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
