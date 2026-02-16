@@ -16,6 +16,7 @@ permissions:
 
 env:
   CARGO_PACKAGER_VERSION: "0.11.8"
+  VIBEFI_EMBED_WC_PROJECT_ID: ${{ secrets.VIBEFI_WC_PROJECT_ID }}
 
 jobs:
   build-macos:

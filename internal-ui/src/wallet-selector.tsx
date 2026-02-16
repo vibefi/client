@@ -18,6 +18,9 @@ declare global {
 }
 
 type Phase = "select" | "connecting" | "done";
+type SelectorCapabilities = {
+  localSignerAvailable: boolean;
+};
 
 const localStyles = `
   .options { display: flex; flex-direction: column; gap: 12px; }
@@ -125,6 +128,7 @@ function App() {
   const [error, setError] = useState("");
   const [uri, setUri] = useState("");
   const [qrSvg, setQrSvg] = useState("");
+  const [localSignerAvailable, setLocalSignerAvailable] = useState(false);
 
   useEffect(() => {
     const onPairing = (event: Event) => {
@@ -136,6 +140,32 @@ function App() {
     window.addEventListener("vibefi:walletconnect-pairing", onPairing);
     return () => {
       window.removeEventListener("vibefi:walletconnect-pairing", onPairing);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadCapabilities = async () => {
+      try {
+        const capabilities = await walletIpc("vibefi_getSelectorCapabilities");
+        const available =
+          !!capabilities &&
+          typeof capabilities === "object" &&
+          typeof (capabilities as SelectorCapabilities).localSignerAvailable === "boolean" &&
+          (capabilities as SelectorCapabilities).localSignerAvailable;
+        if (!cancelled) {
+          setLocalSignerAvailable(available);
+        }
+      } catch (err) {
+        console.warn("[vibefi:wallet-selector] failed to load capabilities", err);
+        if (!cancelled) {
+          setLocalSignerAvailable(false);
+        }
+      }
+    };
+    void loadCapabilities();
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -234,13 +264,15 @@ function App() {
         <div className="subtitle">Choose how you want to connect to this dapp.</div>
         {error && <div className="error mt-0 mb-12">{error}</div>}
         <div className="options">
-          <div className="option surface-card" onClick={connectLocal}>
-            <div className="option-icon local">&#x1F511;</div>
-            <div className="option-text">
-              <strong>Local Signer</strong>
-              <span>Use the built-in dev key for signing transactions.</span>
+          {localSignerAvailable && (
+            <div className="option surface-card" onClick={connectLocal}>
+              <div className="option-icon local">&#x1F511;</div>
+              <div className="option-text">
+                <strong>Local Signer</strong>
+                <span>Use the built-in dev key for signing transactions.</span>
+              </div>
             </div>
-          </div>
+          )}
           <div className="option surface-card" onClick={connectWalletConnect}>
             <div className="option-icon wc">&#x1F4F1;</div>
             <div className="option-text">

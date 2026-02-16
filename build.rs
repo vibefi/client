@@ -3,6 +3,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+const EMBED_WC_PROJECT_ID_ENV: &str = "VIBEFI_EMBED_WC_PROJECT_ID";
+const EMBEDDED_WC_PROJECT_ID_ENV: &str = "VIBEFI_EMBEDDED_WC_PROJECT_ID";
+
 fn emit_rerun_for_path(path: &Path) {
     if let Some(s) = path.to_str() {
         println!("cargo:rerun-if-changed={s}");
@@ -84,7 +87,24 @@ fn run_with_console_handling(mut cmd: Command, success_message: Option<&str>, st
     }
 }
 
+fn configure_embedded_walletconnect_project_id() {
+    println!("cargo:rerun-if-env-changed={EMBED_WC_PROJECT_ID_ENV}");
+
+    let Ok(raw) = std::env::var(EMBED_WC_PROJECT_ID_ENV) else {
+        return;
+    };
+    let project_id = raw.trim();
+    if project_id.is_empty() {
+        return;
+    }
+
+    println!("cargo:rustc-env={EMBEDDED_WC_PROJECT_ID_ENV}={project_id}");
+    print_console_line("[build] embedding WalletConnect project id into binary");
+}
+
 fn main() {
+    configure_embedded_walletconnect_project_id();
+
     let ipfs_helper = Path::new("ipfs-helper");
     emit_rerun_for_path(&ipfs_helper.join("package.json"));
     emit_rerun_for_path(&ipfs_helper.join("bun.lock"));

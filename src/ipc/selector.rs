@@ -22,20 +22,12 @@ pub(super) fn handle_wallet_selector_ipc(
     }
 
     match req.wallet_selector_method() {
+        Some(WalletSelectorMethod::GetCapabilities) => Ok(Some(serde_json::json!({
+            "localSignerAvailable": local_signer_available(state),
+        }))),
         Some(WalletSelectorMethod::ConnectLocal) => {
             tracing::info!("wallet-selector connecting local signer");
-            let resolved = state.resolved.as_ref();
-            let is_local = resolved.map(|r| r.local_network).unwrap_or(false);
-            let explicit_key = resolved.and_then(|r| r.developer_private_key.clone());
-            let signer_hex = if is_local {
-                explicit_key.unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string())
-            } else if let Some(key) = explicit_key {
-                key
-            } else {
-                return Err(anyhow!(
-                    "Local wallet requires either localNetwork: true or an explicit developerPrivateKey in config"
-                ));
-            };
+            let signer_hex = resolve_local_signer_hex(state)?;
             let signer: alloy_signer_local::PrivateKeySigner = signer_hex
                 .parse()
                 .context("failed to parse signing private key")?;
@@ -212,6 +204,29 @@ pub(super) fn handle_wallet_selector_ipc(
             Ok(None)
         }
         None => bail!("Unknown wallet selector method: {}", req.method),
+    }
+}
+
+fn local_signer_available(state: &AppState) -> bool {
+    let resolved = state.resolved.as_ref();
+    resolved.map(|r| r.local_network).unwrap_or(false)
+        || resolved
+            .and_then(|r| r.developer_private_key.as_ref())
+            .is_some()
+}
+
+fn resolve_local_signer_hex(state: &AppState) -> Result<String> {
+    let resolved = state.resolved.as_ref();
+    let is_local = resolved.map(|r| r.local_network).unwrap_or(false);
+    let explicit_key = resolved.and_then(|r| r.developer_private_key.clone());
+    if is_local {
+        Ok(explicit_key.unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string()))
+    } else if let Some(key) = explicit_key {
+        Ok(key)
+    } else {
+        Err(anyhow!(
+            "Local wallet requires either localNetwork: true or an explicit developerPrivateKey in config"
+        ))
     }
 }
 
