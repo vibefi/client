@@ -229,15 +229,6 @@ jobs:
     - name: Verify cargo-packager
       run: cargo packager --version
 
-    - name: Install WiX Toolset
-      shell: pwsh
-      run: |
-        choco install wixtoolset -y
-        $wixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
-        if (Test-Path $wixBin) {
-          Add-Content -Path $env:GITHUB_PATH -Value $wixBin
-        }
-
     - name: Fetch Bun binaries for packaging
       shell: pwsh
       run: .\vendor\fetch-bun.ps1
@@ -250,7 +241,7 @@ jobs:
       run: cargo build --release
 
     - name: Package application
-      run: cargo packager --release --formats wix
+      run: cargo packager --release --formats nsis
 
     - name: List packaged outputs
       shell: pwsh
@@ -262,5 +253,5 @@ jobs:
       with:
         tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
         target_commitish: ${{ github.sha }}
-        files: target/packager/*.msi
+        files: target/packager/*.exe
         fail_on_unmatched_files: true

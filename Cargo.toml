@@ -32,6 +32,9 @@ window-size = { width = 660, height = 420 }
 app-position = { x = 180, y = 220 }
 application-folder-position = { x = 480, y = 220 }
 
+[package.metadata.packager.appimage]
+excludedLibs = ["libwebkit2gtk*", "libjavascriptcoregtk*"]
+
 [package.metadata.packager.deb]
 section = "utils"
 priority = "optional"
