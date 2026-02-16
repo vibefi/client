@@ -139,16 +139,10 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     
     tracing::info!(dist_dir = %dist_dir.display(), "running Rolldown build for bundle");
     
-    // Find the entry point (typically src/index.tsx or src/main.tsx or index.html)
+    // Find the entry point (main.tsx)
     let src_dir = bundle_dir.join("src");
     let possible_entries = vec![
-        src_dir.join("index.tsx"),
-        src_dir.join("index.ts"),
-        src_dir.join("index.jsx"),
-        src_dir.join("index.js"),
         src_dir.join("main.tsx"),
-        src_dir.join("main.ts"),
-        bundle_dir.join("index.html"),
     ];
     
     let entry = possible_entries
@@ -171,8 +165,7 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
   "PROD": true,
   "SSR": false,
   "BASE_URL": "/",
-  "RPC_URL": undefined,
-  "VITE_RPC_URL": undefined
+  "RPC_URL": undefined
 }"#;
     define_map.insert("import.meta.env".to_string(), env_object.to_string());
     
@@ -221,16 +214,9 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
                     .context("Failed to read index.html")?;
                 
                 // Update script references to point to bundled files
-                // Replace common Vite patterns like /src/main.tsx with /index.js
+                // Replace common Vite pattern /src/main.tsx with /index.js
                 let updated_html = html_content
-                    .replace(r#"<script type="module" src="/src/main.tsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
-                    .replace(r#"<script type="module" src="/src/index.tsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
-                    .replace(r#"<script type="module" src="/src/main.ts"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
-                    .replace(r#"<script type="module" src="/src/index.ts"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
-                    .replace(r#"<script type="module" src="/src/main.jsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
-                    .replace(r#"<script type="module" src="/src/index.jsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
-                    .replace(r#"<script type="module" src="/src/main.js"></script>"#, r#"<script type="module" src="/index.js"></script>"#)
-                    .replace(r#"<script type="module" src="/src/index.js"></script>"#, r#"<script type="module" src="/index.js"></script>"#);
+                    .replace(r#"<script type="module" src="/src/main.tsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#);
                 
                 fs::write(&html_dest, updated_html)
                     .context("Failed to write index.html to dist")?;

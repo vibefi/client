@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use brk_rolldown::{Bundler, BundlerOptions};
 use brk_rolldown_common::bundler_options::{
     InputItem,
@@ -41,6 +42,53 @@ fn try_open_console() -> Option<std::fs::File> {
 fn print_console_line(line: &str) {
     if let Some(mut console) = try_open_console() {
         let _ = writeln!(console, "{line}");
+    }
+}
+
+fn run_bun_step(
+    args: &[&str],
+    cwd: &Path,
+    start_message: &str,
+    success_message: Option<&str>,
+    step_label: &str,
+) {
+    print_console_line(start_message);
+
+    let mut cmd = Command::new("bun");
+    cmd.args(args).current_dir(cwd);
+
+    run_with_console_handling(cmd, success_message, step_label);
+}
+
+fn run_with_console_handling(mut cmd: Command, success_message: Option<&str>, step_label: &str) {
+    if let Some(console) = try_open_console() {
+        let stdout_console = console
+            .try_clone()
+            .unwrap_or_else(|_| panic!("failed to clone console handle for {step_label} stdout"));
+        cmd.stdout(Stdio::from(stdout_console));
+        cmd.stderr(Stdio::from(console));
+
+        let status = cmd
+            .status()
+            .unwrap_or_else(|_| panic!("failed to execute bun for {step_label}"));
+        if !status.success() {
+            panic!("{step_label} failed with status: {status}");
+        }
+        if let Some(msg) = success_message {
+            print_console_line(msg);
+        }
+    } else {
+        let output = cmd
+            .output()
+            .unwrap_or_else(|_| panic!("failed to execute bun for {step_label}"));
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!(
+                "{step_label} failed with status: {}.\nstdout:\n{}\nstderr:\n{}",
+                output.status, stdout, stderr
+            );
+        }
     }
 }
 
@@ -152,7 +200,6 @@ fn main() {
     emit_rerun_for_path(&internal_ui.join("package.json"));
     emit_rerun_for_path(&internal_ui.join("bun.lock"));
     emit_rerun_for_dir(&internal_ui.join("src"));
-    emit_rerun_for_dir(&internal_ui.join("scripts"));
     emit_rerun_for_dir(&internal_ui.join("static"));
     println!("cargo:rerun-if-env-changed=SKIP_UI_BUILD");
 
