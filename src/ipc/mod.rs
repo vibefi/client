@@ -1,4 +1,5 @@
 mod hardware;
+mod ipfs;
 mod local;
 mod router;
 mod rpc;

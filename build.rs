@@ -105,6 +105,19 @@ fn configure_embedded_walletconnect_project_id() {
 fn main() {
     configure_embedded_walletconnect_project_id();
 
+    let ipfs_helper = Path::new("ipfs-helper");
+    emit_rerun_for_path(&ipfs_helper.join("package.json"));
+    emit_rerun_for_path(&ipfs_helper.join("bun.lock"));
+    emit_rerun_for_path(&ipfs_helper.join("index.mjs"));
+
+    run_bun_step(
+        &["install"],
+        ipfs_helper,
+        "[ipfs_helper] running: bun install",
+        Some("[ipfs_helper] bun install completed successfully"),
+        "ipfs_helper install",
+    );
+
     let internal_ui = Path::new("internal-ui");
     emit_rerun_for_path(&internal_ui.join("package.json"));
     emit_rerun_for_path(&internal_ui.join("bun.lock"));

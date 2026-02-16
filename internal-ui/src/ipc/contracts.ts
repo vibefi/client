@@ -4,6 +4,7 @@ export const PROVIDER_IDS = {
   launcher: "vibefi-launcher",
   tabbar: "vibefi-tabbar",
   settings: "vibefi-settings",
+  ipfs: "vibefi-ipfs",
 } as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[keyof typeof PROVIDER_IDS];
@@ -34,6 +35,9 @@ export type WalletconnectPairingPayload = {
 export type Tab = {
   id?: string;
   label?: string;
+  closable?: boolean;
+  clickable?: boolean;
+  loading?: boolean;
 };
 
 export type TabbarUpdatePayload = {

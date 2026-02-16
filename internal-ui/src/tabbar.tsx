@@ -50,6 +50,8 @@ html, body {
 }
 .tab:hover { background: #1e293b; color: #e2e8f0; }
 .tab.active { background: #1e293b; color: #e2e8f0; border-color: #334155; }
+.tab.disabled { cursor: default; opacity: 0.9; }
+.tab.disabled:hover { background: transparent; color: #94a3b8; }
 .tab-label { overflow: hidden; text-overflow: ellipsis; }
 .tab-close {
   display: flex;
@@ -64,6 +66,15 @@ html, body {
   cursor: pointer;
 }
 .tab-close:hover { opacity: 1; background: #334155; }
+.tab-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  border-top-color: #e2e8f0;
+  border-radius: 50%;
+  animation: tab-spin 0.8s linear infinite;
+}
+@keyframes tab-spin { to { transform: rotate(360deg); } }
 `;
 const styles = composeStyles(sharedStyles, localStyles);
 
@@ -100,11 +111,15 @@ function App() {
         {tabs.map((tab, index) => (
           <div
             key={`${tab.id ?? "tab"}:${index}`}
-            className={`tab${index === activeIndex ? " active" : ""}`}
-            onClick={() => postTabbarCommand("switchTab", index)}
+            className={`tab${index === activeIndex ? " active" : ""}${tab.clickable === false ? " disabled" : ""}`}
+            onClick={() => {
+              if (tab.clickable === false) return;
+              postTabbarCommand("switchTab", index);
+            }}
           >
             <span className="tab-label">{tab.label || tab.id || "Tab"}</span>
-            {tabs.length > 1 ? (
+            {tab.loading ? <span className="tab-spinner" aria-label="loading" /> : null}
+            {tabs.length > 1 && tab.closable !== false ? (
               <span
                 className="tab-close"
                 onClick={(event) => {

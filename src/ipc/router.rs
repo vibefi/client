@@ -9,7 +9,7 @@ use crate::state::{AppState, PendingConnect, ProviderInfo, UserEvent, WalletBack
 use crate::webview_manager::{AppWebViewKind, WebViewManager};
 
 use super::{
-    hardware, local, respond_option_result, respond_value_result, selector, walletconnect,
+    hardware, ipfs, local, respond_option_result, respond_value_result, selector, walletconnect,
 };
 
 pub fn handle_ipc(
@@ -54,16 +54,38 @@ pub fn handle_ipc(
     }
 
     if provider == Some(KnownProviderId::Launcher) {
-        if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::Launcher) {
+        let is_launcher_surface = matches!(
+            manager.app_kind_for_id(webview_id),
+            Some(AppWebViewKind::Launcher | AppWebViewKind::Studio)
+        );
+        if !is_launcher_surface {
             tracing::warn!(
                 webview_id,
                 method = %req.method,
-                "launcher ipc request rejected for non-launcher webview"
+                "launcher ipc request rejected for non-launcher/studio webview"
             );
-            bail!("launcher IPC is only available to the launcher webview");
+            bail!("launcher IPC is only available to launcher/studio webviews");
         }
         let result = handle_launcher_ipc(state, webview_id, &req);
         respond_option_result(webview, req.id, result)?;
+        return Ok(());
+    }
+
+    if provider == Some(KnownProviderId::Ipfs) {
+        let state_clone = state.clone();
+        let webview_id = webview_id.to_string();
+        let ipc_id = req.id;
+        let req_clone = req.clone();
+        std::thread::spawn(move || {
+            let result = ipfs::handle_ipfs_ipc(&state_clone, &webview_id, &req_clone)
+                .map(|value| value.unwrap_or(serde_json::Value::Null))
+                .map_err(|err| err.to_string());
+            let _ = state_clone.proxy.send_event(UserEvent::RpcResult {
+                webview_id,
+                ipc_id,
+                result,
+            });
+        });
         return Ok(());
     }
 

@@ -1,12 +1,13 @@
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
-
+use std::{fs, path::Path};
 use tao::event_loop::EventLoopProxy;
 
 use crate::ipc;
 use crate::ipc_contract::{IpcRequest, KnownProviderId, TabbarMethod};
 use crate::state::lock_or_err;
-use crate::state::{AppState, TabAction, UserEvent};
+use crate::state::{AppRuntimeCapabilities, AppState, IpfsCapabilityRule, TabAction, UserEvent};
 use crate::ui_bridge;
 use crate::webview::{EmbeddedContent, WebViewHost, build_app_webview};
 use crate::webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
@@ -19,6 +20,81 @@ fn lock_or_log<'a, T>(mutex: &'a Mutex<T>, name: &str) -> Option<MutexGuard<'a, 
             None
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct BundleManifest {
+    #[serde(default)]
+    capabilities: Option<BundleCapabilities>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BundleCapabilities {
+    #[serde(default)]
+    ipfs: Option<BundleIpfsCapabilities>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BundleIpfsCapabilities {
+    #[serde(default)]
+    allow: Vec<BundleIpfsAllowRule>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundleIpfsAllowRule {
+    #[serde(default)]
+    cid: Option<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(rename = "as", default)]
+    as_: Vec<String>,
+    #[serde(default)]
+    max_bytes: Option<usize>,
+}
+
+pub(crate) fn load_app_capabilities_from_dist(dist_dir: &Path) -> AppRuntimeCapabilities {
+    let Some(bundle_root) = dist_dir.parent().and_then(|p| p.parent()) else {
+        return AppRuntimeCapabilities::default();
+    };
+    let manifest_path = bundle_root.join("manifest.json");
+    let raw = match fs::read_to_string(&manifest_path) {
+        Ok(raw) => raw,
+        Err(_) => return AppRuntimeCapabilities::default(),
+    };
+    let parsed: BundleManifest = match serde_json::from_str(&raw) {
+        Ok(parsed) => parsed,
+        Err(_) => return AppRuntimeCapabilities::default(),
+    };
+
+    let rules = parsed
+        .capabilities
+        .and_then(|caps| caps.ipfs)
+        .map(|ipfs| ipfs.allow)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|rule| {
+            if rule.paths.is_empty() || rule.as_.is_empty() {
+                return None;
+            }
+            Some(IpfsCapabilityRule {
+                cid: rule
+                    .cid
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                paths: rule
+                    .paths
+                    .into_iter()
+                    .map(|p| p.trim_start_matches('/').to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect(),
+                as_kinds: rule.as_.into_iter().map(|k| k.to_lowercase()).collect(),
+                max_bytes: rule.max_bytes,
+            })
+        })
+        .collect();
+
+    AppRuntimeCapabilities { ipfs_allow: rules }
 }
 
 pub fn handle_ipc_event(
@@ -41,6 +117,21 @@ pub fn handle_ipc_event(
                         if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
                             let idx = idx as usize;
                             if let Some(entry) = manager.apps.get(idx) {
+                                if !entry.kind.is_closeable() {
+                                    tracing::debug!(
+                                        index = idx,
+                                        kind = ?entry.kind,
+                                        "ignoring close request for non-closeable tab"
+                                    );
+                                    return;
+                                }
+                                {
+                                    if let Some(mut caps) =
+                                        lock_or_log(&state.app_capabilities, "app_capabilities")
+                                    {
+                                        caps.remove(&entry.id);
+                                    }
+                                }
                                 if entry.kind == AppWebViewKind::Settings {
                                     if let Some(mut sel) = lock_or_log(
                                         &state.settings_webview_id,
@@ -293,6 +384,77 @@ pub fn handle_tab_action(
     }
 }
 
+pub fn handle_studio_bundle_resolved(
+    host: Option<&WebViewHost>,
+    state: &AppState,
+    manager: &mut WebViewManager,
+    proxy: &EventLoopProxy<UserEvent>,
+    placeholder_id: String,
+    result: Result<PathBuf, String>,
+) {
+    let Some(index) = manager.index_of_id(&placeholder_id) else {
+        return;
+    };
+
+    match result {
+        Ok(dist_dir) => {
+            let Some(host) = host else {
+                return;
+            };
+            let size = host.window.inner_size();
+            let bounds = manager.app_rect(size.width, size.height);
+            let studio_webview_id = manager.next_app_id();
+            match build_app_webview(
+                host,
+                &studio_webview_id,
+                Some(dist_dir.clone()),
+                EmbeddedContent::Default,
+                state,
+                proxy.clone(),
+                bounds,
+            ) {
+                Ok(webview) => {
+                    if let Err(err) = webview.set_visible(false) {
+                        tracing::warn!(error = %err, "failed to hide loaded studio webview");
+                    }
+                    if let Some(mut caps) = lock_or_log(&state.app_capabilities, "app_capabilities")
+                    {
+                        let studio_caps = load_app_capabilities_from_dist(&dist_dir);
+                        caps.remove(&placeholder_id);
+                        caps.insert(studio_webview_id.clone(), studio_caps);
+                    }
+                    manager.apps[index] = AppWebViewEntry {
+                        webview,
+                        id: studio_webview_id,
+                        label: "Studio".to_string(),
+                        kind: AppWebViewKind::Studio,
+                        selectable: true,
+                        loading: false,
+                    };
+                }
+                Err(err) => {
+                    tracing::error!(error = ?err, "failed to build loaded studio webview");
+                    if let Some(entry) = manager.apps.get_mut(index) {
+                        entry.label = "Studio (unavailable)".to_string();
+                        entry.selectable = false;
+                        entry.loading = false;
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to prepare studio dapp bundle");
+            if let Some(entry) = manager.apps.get_mut(index) {
+                entry.label = "Studio (unavailable)".to_string();
+                entry.selectable = false;
+                entry.loading = false;
+            }
+        }
+    }
+
+    manager.update_tab_bar();
+}
+
 fn open_app_tab(
     host: &WebViewHost,
     state: &AppState,
@@ -306,17 +468,26 @@ fn open_app_tab(
     let size = host.window.inner_size();
     let id = manager.next_app_id();
     let bounds = manager.app_rect(size.width, size.height);
+    let app_capabilities = dist_dir
+        .as_deref()
+        .map(load_app_capabilities_from_dist)
+        .unwrap_or_default();
     let webview = build_app_webview(host, &id, dist_dir, embedded, state, proxy.clone(), bounds)?;
 
     if let Some(active) = manager.active_app_webview() {
         let _ = active.set_visible(false);
     }
     let idx = manager.apps.len();
+    if let Some(mut caps) = lock_or_log(&state.app_capabilities, "app_capabilities") {
+        caps.insert(id.clone(), app_capabilities);
+    }
     manager.apps.push(AppWebViewEntry {
         webview,
         id,
         label,
         kind,
+        selectable: true,
+        loading: false,
     });
     manager.active_app_index = Some(idx);
     manager.update_tab_bar();
