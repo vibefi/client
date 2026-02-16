@@ -8,6 +8,7 @@ type Eip1193RequestArgs = {
 };
 
 type Listener = (...args: unknown[]) => void;
+type IpfsListener = (payload: unknown) => void;
 
 declare global {
   interface Window {
@@ -31,11 +32,21 @@ declare global {
     vibefi?: {
       request: (args: Eip1193RequestArgs) => Promise<unknown>;
     };
+    vibefiIpfs?: {
+      request: (args: Eip1193RequestArgs) => Promise<unknown>;
+      requestWithId: (
+        args: Eip1193RequestArgs
+      ) => { ipcId: number; response: Promise<unknown> };
+      on: (event: "progress", handler: IpfsListener) => void;
+      off: (event: "progress", handler: IpfsListener) => void;
+      removeListener: (event: "progress", handler: IpfsListener) => void;
+    };
     updateTabs?: (tabs: unknown[], activeIndex: number) => void;
   };
 
   const ipc = new IpcClient();
   const listeners = new Map<string, Set<Listener>>();
+  const ipfsListeners = new Map<string, Set<IpfsListener>>();
 
   function on(event: string, handler: Listener) {
     if (typeof handler !== "function") return;
@@ -63,10 +74,50 @@ declare global {
     }
   }
 
+  function onIpfs(event: string, handler: IpfsListener) {
+    if (typeof handler !== "function") return;
+    const set = ipfsListeners.get(event) ?? new Set<IpfsListener>();
+    set.add(handler);
+    ipfsListeners.set(event, set);
+  }
+
+  function offIpfs(event: string, handler: IpfsListener) {
+    const set = ipfsListeners.get(event);
+    if (!set) return;
+    set.delete(handler);
+  }
+
+  function emitIpfs(event: string, payload: unknown) {
+    const set = ipfsListeners.get(event);
+    if (!set) return;
+    for (const handler of Array.from(set)) {
+      try {
+        handler(payload);
+      } catch (error) {
+        console.warn("[vibefi:preload] ipfs listener threw during emit", event, error);
+      }
+    }
+  }
+
   async function request(args: Eip1193RequestArgs) {
     const method = args?.method;
     const params = Array.isArray(args?.params) ? args.params : [];
     return await ipc.request(PROVIDER_IDS.provider, method, params);
+  }
+
+  function requestIpfs(args: Eip1193RequestArgs): Promise<unknown> {
+    const method = args?.method;
+    const params = Array.isArray(args?.params) ? args.params : [];
+    return ipc.request(PROVIDER_IDS.ipfs, method, params);
+  }
+
+  function requestIpfsWithId(
+    args: Eip1193RequestArgs
+  ): { ipcId: number; response: Promise<unknown> } {
+    const method = args?.method;
+    const params = Array.isArray(args?.params) ? args.params : [];
+    const { id, promise } = ipc.requestWithId(PROVIDER_IDS.ipfs, method, params);
+    return { ipcId: id, response: promise };
   }
 
   globalWindow.__WryEthereumEmit = (event: string, payload: unknown) => {
@@ -83,6 +134,10 @@ declare global {
         ipc.resolve(payload.id, payload.result ?? null, payload.error ?? null);
       },
       onProviderEvent: (payload) => {
+        if (payload.event === "vibefiIpfsProgress") {
+          emitIpfs("progress", payload.value);
+          return;
+        }
         emit(payload.event, payload.value);
       },
       onWalletconnectPairing: (payload) => {
@@ -122,6 +177,14 @@ declare global {
       const list = Array.isArray(params) ? params : [];
       return ipc.request(PROVIDER_IDS.launcher, method, list);
     },
+  };
+
+  globalWindow.vibefiIpfs = {
+    request: requestIpfs,
+    requestWithId: requestIpfsWithId,
+    on: onIpfs,
+    off: offIpfs,
+    removeListener: offIpfs,
   };
 
   Promise.resolve().then(async () => {

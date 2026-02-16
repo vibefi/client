@@ -1,12 +1,12 @@
-use anyhow::{Result, anyhow};
 use alloy_signer_local::PrivateKeySigner;
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     collections::VecDeque,
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
 };
-
 
 use tao::event_loop::EventLoopProxy;
 
@@ -59,6 +59,10 @@ pub enum UserEvent {
         event: String,
         value: serde_json::Value,
     },
+    StudioBundleResolved {
+        placeholder_id: String,
+        result: Result<PathBuf, String>,
+    },
     CloseWalletSelector,
     TabAction(TabAction),
 }
@@ -102,6 +106,19 @@ pub struct PendingConnect {
     pub ipc_id: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct IpfsCapabilityRule {
+    pub cid: Option<String>,
+    pub paths: Vec<String>,
+    pub as_kinds: Vec<String>,
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AppRuntimeCapabilities {
+    pub ipfs_allow: Vec<IpfsCapabilityRule>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub wallet: Arc<Mutex<WalletState>>,
@@ -112,6 +129,7 @@ pub struct AppState {
     pub resolved: Option<Arc<ResolvedConfig>>,
     pub proxy: EventLoopProxy<UserEvent>,
     pub pending_connect: Arc<Mutex<VecDeque<PendingConnect>>>,
+    pub app_capabilities: Arc<Mutex<HashMap<String, AppRuntimeCapabilities>>>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
     pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,
@@ -148,10 +166,16 @@ impl AppState {
     pub fn get_wallet_backend(&self) -> Option<WalletBackend> {
         *self.wallet_backend.lock().expect("wallet_backend")
     }
+
+    pub fn app_capabilities_for(&self, webview_id: &str) -> Option<AppRuntimeCapabilities> {
+        self.app_capabilities
+            .lock()
+            .unwrap()
+            .get(webview_id)
+            .cloned()
+    }
 }
 
 pub(crate) fn lock_or_err<'a, T>(mutex: &'a Mutex<T>, name: &str) -> Result<MutexGuard<'a, T>> {
-    mutex
-        .lock()
-        .map_err(|_| anyhow!("poisoned lock: {}", name))
+    mutex.lock().map_err(|_| anyhow!("poisoned lock: {}", name))
 }

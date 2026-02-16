@@ -27,8 +27,16 @@ export class IpcClient {
   private nextId = 1;
 
   request(providerId: ProviderId, method: string, params: unknown[] = []): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const id = this.nextId++;
+    return this.requestWithId(providerId, method, params).promise;
+  }
+
+  requestWithId(
+    providerId: ProviderId,
+    method: string,
+    params: unknown[] = []
+  ): { id: number; promise: Promise<unknown> } {
+    const id = this.nextId++;
+    const promise = new Promise<unknown>((resolve, reject) => {
       this.callbacks.set(id, { resolve, reject });
       postIpc({
         id,
@@ -37,6 +45,7 @@ export class IpcClient {
         params: Array.isArray(params) ? params : [],
       });
     });
+    return { id, promise };
   }
 
   notify(providerId: ProviderId, method: string, params: unknown[] = []) {

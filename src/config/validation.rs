@@ -19,10 +19,7 @@ pub fn validate_app_config(config: &AppConfig) -> Result<()> {
             .strip_prefix("0x")
             .unwrap_or(&config.dappRegistry);
         if hex_str.is_empty() || hex::decode(hex_str).is_err() {
-            bail!(
-                "dappRegistry is not valid hex: {:?}",
-                config.dappRegistry
-            );
+            bail!("dappRegistry is not valid hex: {:?}", config.dappRegistry);
         }
     }
 
@@ -33,7 +30,10 @@ pub fn validate_app_config(config: &AppConfig) -> Result<()> {
             && !lower.starts_with("ws://")
             && !lower.starts_with("wss://")
         {
-            bail!("rpcUrl must start with http://, https://, ws://, or wss://: {:?}", config.rpcUrl);
+            bail!(
+                "rpcUrl must start with http://, https://, ws://, or wss://: {:?}",
+                config.rpcUrl
+            );
         }
     }
 

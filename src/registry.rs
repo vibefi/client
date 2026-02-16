@@ -405,57 +405,7 @@ pub fn handle_launcher_ipc(
 }
 
 fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -> Result<()> {
-    let devnet = state
-        .resolved
-        .as_ref()
-        .ok_or_else(|| anyhow!("Network not configured"))?;
-    tracing::info!(root_cid, "launcher: fetch bundle");
-    let bundle_dir = devnet.cache_dir.join(root_cid);
-    let ipfs = resolve_effective_ipfs_config(state, devnet);
-    tracing::info!(backend = ipfs.fetch_backend.as_str(), "ipfs backend");
-
-    emit_launch_progress(
-        state,
-        webview_id,
-        LaunchProgress::simple("prepare", "Preparing bundle retrieval...", 2),
-    );
-
-    {
-        let mut emit = |progress: LaunchProgress| emit_launch_progress(state, webview_id, progress);
-        ensure_bundle_cached(devnet, &ipfs, root_cid, &bundle_dir, &mut emit)?;
-    }
-
-    tracing::info!("launcher: verify bundle manifest");
-    emit_launch_progress(
-        state,
-        webview_id,
-        LaunchProgress::simple("verify", "Verifying downloaded bundle...", 88),
-    );
-    verify_manifest(&bundle_dir)?;
-
-    let dist_dir = bundle_dir.join(".vibefi").join("dist");
-    if dist_dir.join("index.html").exists() {
-        tracing::info!("launcher: using cached build");
-        emit_launch_progress(
-            state,
-            webview_id,
-            LaunchProgress::simple("build", "Using cached build artifacts.", 96),
-        );
-    } else {
-        tracing::info!("launcher: build bundle");
-        emit_launch_progress(
-            state,
-            webview_id,
-            LaunchProgress::simple("build", "Building bundle...", 94),
-        );
-        build_bundle(&bundle_dir, &dist_dir)?;
-    }
-    emit_launch_progress(
-        state,
-        webview_id,
-        LaunchProgress::simple("done", "Launch complete.", 100),
-    );
-
+    let dist_dir = prepare_dapp_dist(state, root_cid, Some(webview_id))?;
     let _ = state
         .proxy
         .send_event(UserEvent::TabAction(TabAction::OpenApp {
@@ -465,6 +415,66 @@ fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -
     Ok(())
 }
 
+pub fn prepare_dapp_dist(
+    state: &AppState,
+    root_cid: &str,
+    progress_webview_id: Option<&str>,
+) -> Result<PathBuf> {
+    let devnet = state
+        .resolved
+        .as_ref()
+        .ok_or_else(|| anyhow!("Network not configured"))?;
+    tracing::info!(root_cid, "prepare dapp: fetch bundle");
+    let bundle_dir = devnet.cache_dir.join(root_cid);
+    let ipfs = resolve_effective_ipfs_config(state, devnet);
+    tracing::info!(backend = ipfs.fetch_backend.as_str(), "ipfs backend");
+
+    emit_launch_progress_if(
+        state,
+        progress_webview_id,
+        LaunchProgress::simple("prepare", "Preparing bundle retrieval...", 2),
+    );
+
+    {
+        let mut emit = |progress: LaunchProgress| {
+            emit_launch_progress_if(state, progress_webview_id, progress)
+        };
+        ensure_bundle_cached(devnet, &ipfs, root_cid, &bundle_dir, &mut emit)?;
+    }
+
+    tracing::info!("prepare dapp: verify bundle manifest");
+    emit_launch_progress_if(
+        state,
+        progress_webview_id,
+        LaunchProgress::simple("verify", "Verifying downloaded bundle...", 88),
+    );
+    verify_manifest(&bundle_dir)?;
+
+    let dist_dir = bundle_dir.join(".vibefi").join("dist");
+    if dist_dir.join("index.html").exists() {
+        tracing::info!("prepare dapp: using cached build");
+        emit_launch_progress_if(
+            state,
+            progress_webview_id,
+            LaunchProgress::simple("build", "Using cached build artifacts.", 96),
+        );
+    } else {
+        tracing::info!("prepare dapp: build bundle");
+        emit_launch_progress_if(
+            state,
+            progress_webview_id,
+            LaunchProgress::simple("build", "Building bundle...", 94),
+        );
+        build_bundle(&bundle_dir, &dist_dir)?;
+    }
+    emit_launch_progress_if(
+        state,
+        progress_webview_id,
+        LaunchProgress::simple("done", "Launch complete.", 100),
+    );
+    Ok(dist_dir)
+}
+
 fn emit_launch_progress(state: &AppState, webview_id: &str, progress: LaunchProgress) {
     let value = serde_json::to_value(progress).unwrap_or(serde_json::Value::Null);
     let _ = state.proxy.send_event(UserEvent::ProviderEvent {
@@ -472,6 +482,12 @@ fn emit_launch_progress(state: &AppState, webview_id: &str, progress: LaunchProg
         event: LAUNCH_PROGRESS_EVENT.to_string(),
         value,
     });
+}
+
+fn emit_launch_progress_if(state: &AppState, webview_id: Option<&str>, progress: LaunchProgress) {
+    if let Some(webview_id) = webview_id {
+        emit_launch_progress(state, webview_id, progress);
+    }
 }
 
 fn ensure_bundle_cached(
@@ -628,7 +644,11 @@ fn fetch_dapp_manifest_local_node(
 ) -> Result<(BundleManifest, Vec<u8>)> {
     let gateway = normalize_gateway(&ipfs.gateway_endpoint);
     let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
-    let res = devnet.http_client.get(url).send().context("fetch manifest")?;
+    let res = devnet
+        .http_client
+        .get(url)
+        .send()
+        .context("fetch manifest")?;
     if !res.status().is_success() {
         let text = res.text().unwrap_or_default();
         return Err(anyhow!("fetch manifest failed: {}", text));
@@ -661,7 +681,11 @@ fn download_dapp_bundle_local_node(
     ));
     for (idx, entry) in manifest.files.iter().enumerate() {
         let url = format!("{}/ipfs/{}/{}", gateway, root_cid, entry.path);
-        let res = devnet.http_client.get(url).send().context("fetch bundle file")?;
+        let res = devnet
+            .http_client
+            .get(url)
+            .send()
+            .context("fetch bundle file")?;
         if !res.status().is_success() {
             let text = res.text().unwrap_or_default();
             return Err(anyhow!("bundle fetch failed: {}", text));

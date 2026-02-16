@@ -47,8 +47,15 @@ pub const TAB_BAR_HEIGHT_LOGICAL: f64 = 40.0;
 pub enum AppWebViewKind {
     Standard,
     Launcher,
+    Studio,
     WalletSelector,
     Settings,
+}
+
+impl AppWebViewKind {
+    pub fn is_closeable(self) -> bool {
+        !matches!(self, Self::Launcher | Self::Studio)
+    }
 }
 
 pub struct AppWebViewEntry {
@@ -56,6 +63,8 @@ pub struct AppWebViewEntry {
     pub id: String,
     pub label: String,
     pub kind: AppWebViewKind,
+    pub selectable: bool,
+    pub loading: bool,
 }
 
 pub struct WebViewManager {
@@ -104,6 +113,10 @@ impl WebViewManager {
             .map(|e| &e.webview)
     }
 
+    pub fn index_of_id(&self, id: &str) -> Option<usize> {
+        self.apps.iter().position(|e| e.id == id)
+    }
+
     pub fn switch_to(&mut self, index: usize) {
         if index >= self.apps.len() {
             tracing::debug!(
@@ -111,6 +124,10 @@ impl WebViewManager {
                 app_count = self.apps.len(),
                 "switch_to ignored out-of-range index"
             );
+            return;
+        }
+        if !self.apps[index].selectable {
+            tracing::debug!(index, "switch_to ignored for non-selectable tab");
             return;
         }
         if let Some(old) = self.active_app_index {
@@ -139,7 +156,15 @@ impl WebViewManager {
             );
             return;
         }
-        // Don't close the last tab (launcher)
+        if !self.apps[index].kind.is_closeable() {
+            tracing::debug!(
+                index,
+                kind = ?self.apps[index].kind,
+                "close_app ignored for non-closeable tab"
+            );
+            return;
+        }
+        // Don't close the last remaining tab.
         if self.apps.len() <= 1 {
             tracing::debug!("close_app ignored because only one tab exists");
             return;
@@ -215,7 +240,15 @@ impl WebViewManager {
         let tabs: Vec<serde_json::Value> = self
             .apps
             .iter()
-            .map(|e| serde_json::json!({ "id": e.id, "label": e.label }))
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "label": e.label,
+                    "closable": e.kind.is_closeable(),
+                    "clickable": e.selectable,
+                    "loading": e.loading,
+                })
+            })
             .collect();
         let active = self.active_app_index.unwrap_or(0);
         if let Err(err) = crate::ui_bridge::update_tabs(tb, tabs, active) {

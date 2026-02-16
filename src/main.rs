@@ -20,6 +20,7 @@ mod webview_manager;
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::{
+    collections::HashMap,
     collections::VecDeque,
     env,
     sync::{Arc, Mutex},
@@ -58,6 +59,16 @@ static PRELOAD_SETTINGS_JS: &str = include_str!("../internal-ui/dist/preload-set
 /// This matches a common dev key used across many tutorials.
 pub(crate) static DEMO_PRIVKEY_HEX: &str =
     "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
+const STUDIO_PLACEHOLDER_CID: &str =
+    "bafybeifillstudiofromdaoexecuteproposalreplacecidplaceholder0000";
+
+fn studio_root_cid() -> String {
+    env::var("VIBEFI_STUDIO_CID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| STUDIO_PLACEHOLDER_CID.to_string())
+}
 
 fn main() -> Result<()> {
     apply_linux_env_defaults();
@@ -65,6 +76,10 @@ fn main() -> Result<()> {
 
     let cli = CliArgs::parse();
     let bundle = resolve_bundle(&cli)?;
+    let studio_bundle = resolve_studio_bundle(&cli)?;
+    if bundle.is_some() && studio_bundle.is_some() {
+        tracing::warn!("--studio-bundle is ignored when --bundle is provided");
+    }
     let config_path = cli
         .config
         .or_else(|| runtime_paths::resolve_default_config());
@@ -133,6 +148,7 @@ fn main() -> Result<()> {
         resolved,
         proxy: proxy.clone(),
         pending_connect: Arc::new(Mutex::new(VecDeque::new())),
+        app_capabilities: Arc::new(Mutex::new(HashMap::new())),
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
         settings_webview_id: Arc::new(Mutex::new(None)),
@@ -227,6 +243,30 @@ fn main() -> Result<()> {
             }) => {
                 events::user_event::handle_provider_event(&manager, webview_id, event, value);
             }
+            Event::UserEvent(UserEvent::StudioBundleResolved {
+                placeholder_id,
+                result,
+            }) => {
+                let host = window.as_ref().map(|w| WebViewHost {
+                    window: w,
+                    #[cfg(target_os = "linux")]
+                    tab_bar_container: gtk_tab_bar_container
+                        .as_ref()
+                        .expect("linux tab bar container not initialized"),
+                    #[cfg(target_os = "linux")]
+                    app_container: gtk_app_container
+                        .as_ref()
+                        .expect("linux app container not initialized"),
+                });
+                events::user_event::handle_studio_bundle_resolved(
+                    host.as_ref(),
+                    &state,
+                    &mut manager,
+                    &proxy,
+                    placeholder_id,
+                    result,
+                );
+            }
             Event::UserEvent(UserEvent::CloseWalletSelector) => {
                 events::user_event::handle_close_wallet_selector(&state, &mut manager);
             }
@@ -309,62 +349,166 @@ fn main() -> Result<()> {
                         .as_ref()
                         .map(|r| r.enable_devtools)
                         .unwrap_or(cfg!(debug_assertions));
-                    match build_tab_bar_webview(&host, proxy.clone(), manager.tab_bar_rect(w), enable_devtools) {
+                    match build_tab_bar_webview(
+                        &host,
+                        proxy.clone(),
+                        manager.tab_bar_rect(w),
+                        enable_devtools,
+                    ) {
                         Ok(tb) => manager.tab_bar = Some(tb),
                         Err(e) => tracing::error!(error = ?e, "tab bar error"),
                     }
 
-                    // 2. Build initial app webview
+                    // 2. Build initial app webview(s)
                     let has_registry = state
                         .resolved
                         .as_ref()
                         .map(|r| !r.dapp_registry.is_empty())
                         .unwrap_or(false);
                     let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
-                    let embedded = if dist_dir.is_some() {
-                        EmbeddedContent::Default
-                    } else if has_registry {
-                        EmbeddedContent::Launcher
-                    } else {
-                        EmbeddedContent::Default
-                    };
-                    let label = if dist_dir.is_some() {
-                        "App".to_string()
-                    } else if has_registry {
-                        "Launcher".to_string()
-                    } else {
-                        "Home".to_string()
-                    };
-                    let kind = if has_registry && dist_dir.is_none() {
-                        AppWebViewKind::Launcher
-                    } else {
-                        AppWebViewKind::Standard
-                    };
-                    let app_id = manager.next_app_id();
+                    let studio_dist_dir = studio_bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
                     let bounds = manager.app_rect(w, h);
-                    match build_app_webview(
-                        &host,
-                        &app_id,
-                        dist_dir.clone(),
-                        embedded,
-                        &state,
-                        proxy.clone(),
-                        bounds,
-                    ) {
-                        Ok(wv) => {
-                            manager.apps.push(AppWebViewEntry {
-                                webview: wv,
-                                id: app_id,
-                                label,
-                                kind,
-                            });
-                            manager.active_app_index = Some(0);
-                            manager.update_tab_bar();
+                    if let Some(dist_dir) = dist_dir.clone() {
+                        let app_id = manager.next_app_id();
+                        match build_app_webview(
+                            &host,
+                            &app_id,
+                            Some(dist_dir),
+                            EmbeddedContent::Default,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                        ) {
+                            Ok(wv) => {
+                                manager.apps.push(AppWebViewEntry {
+                                    webview: wv,
+                                    id: app_id,
+                                    label: "App".to_string(),
+                                    kind: AppWebViewKind::Standard,
+                                    selectable: true,
+                                    loading: false,
+                                });
+                                manager.active_app_index = Some(0);
+                                manager.update_tab_bar();
+                            }
+                            Err(e) => {
+                                tracing::error!(error = ?e, "webview error");
+                                *control_flow = ControlFlow::Exit;
+                                return;
+                            }
                         }
-                        Err(e) => {
-                            tracing::error!(error = ?e, "webview error");
-                            *control_flow = ControlFlow::Exit;
-                            return;
+                    } else if has_registry {
+                        let launcher_id = manager.next_app_id();
+                        let launcher_webview = match build_app_webview(
+                            &host,
+                            &launcher_id,
+                            None,
+                            EmbeddedContent::Launcher,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                        ) {
+                            Ok(wv) => wv,
+                            Err(e) => {
+                                tracing::error!(error = ?e, "launcher webview error");
+                                *control_flow = ControlFlow::Exit;
+                                return;
+                            }
+                        };
+
+                        manager.apps.push(AppWebViewEntry {
+                            webview: launcher_webview,
+                            id: launcher_id,
+                            label: "Launcher".to_string(),
+                            kind: AppWebViewKind::Launcher,
+                            selectable: true,
+                            loading: false,
+                        });
+                        manager.active_app_index = Some(0);
+
+                        let studio_placeholder_id = manager.next_app_id();
+                        let studio_placeholder = match build_app_webview(
+                            &host,
+                            &studio_placeholder_id,
+                            None,
+                            EmbeddedContent::Default,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                        ) {
+                            Ok(wv) => wv,
+                            Err(e) => {
+                                tracing::error!(error = ?e, "studio placeholder webview error");
+                                *control_flow = ControlFlow::Exit;
+                                return;
+                            }
+                        };
+                        if let Err(err) = studio_placeholder.set_visible(false) {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to hide inactive studio placeholder tab"
+                            );
+                        }
+                        manager.apps.push(AppWebViewEntry {
+                            webview: studio_placeholder,
+                            id: studio_placeholder_id.clone(),
+                            label: "Studio".to_string(),
+                            kind: AppWebViewKind::Studio,
+                            selectable: false,
+                            loading: true,
+                        });
+
+                        manager.update_tab_bar();
+
+                        let state_clone = state.clone();
+                        let proxy_clone = proxy.clone();
+                        let studio_placeholder_id_clone = studio_placeholder_id.clone();
+                        std::thread::spawn(move || {
+                            let result = if let Some(studio_dist_dir) = studio_dist_dir {
+                                tracing::info!(
+                                    studio_dist_dir = %studio_dist_dir.display(),
+                                    "loading Studio from local --studio-bundle"
+                                );
+                                Ok(studio_dist_dir)
+                            } else {
+                                let studio_cid = studio_root_cid();
+                                tracing::info!(cid = %studio_cid, "loading Studio from CID");
+                                registry::prepare_dapp_dist(&state_clone, &studio_cid, None)
+                            }
+                            .map_err(|err| err.to_string());
+                            let _ = proxy_clone.send_event(UserEvent::StudioBundleResolved {
+                                placeholder_id: studio_placeholder_id_clone,
+                                result,
+                            });
+                        });
+                    } else {
+                        let app_id = manager.next_app_id();
+                        match build_app_webview(
+                            &host,
+                            &app_id,
+                            None,
+                            EmbeddedContent::Default,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                        ) {
+                            Ok(wv) => {
+                                manager.apps.push(AppWebViewEntry {
+                                    webview: wv,
+                                    id: app_id,
+                                    label: "Home".to_string(),
+                                    kind: AppWebViewKind::Standard,
+                                    selectable: true,
+                                    loading: false,
+                                });
+                                manager.active_app_index = Some(0);
+                                manager.update_tab_bar();
+                            }
+                            Err(e) => {
+                                tracing::error!(error = ?e, "webview error");
+                                *control_flow = ControlFlow::Exit;
+                                return;
+                            }
                         }
                     }
 
@@ -410,11 +554,24 @@ fn resolve_bundle(cli: &CliArgs) -> Result<Option<BundleConfig>> {
         .canonicalize()
         .context("bundle path does not exist")?;
     let dist_dir = source_dir.join(".vibefi").join("dist");
-
     verify_manifest(&source_dir)?;
     if !cli.no_build {
         build_bundle(&source_dir, &dist_dir)?;
     }
+    Ok(Some(BundleConfig { dist_dir }))
+}
 
+fn resolve_studio_bundle(cli: &CliArgs) -> Result<Option<BundleConfig>> {
+    let Some(ref source) = cli.studio_bundle else {
+        return Ok(None);
+    };
+    let source_dir = source
+        .canonicalize()
+        .context("studio bundle path does not exist")?;
+    let dist_dir = source_dir.join(".vibefi").join("dist");
+    verify_manifest(&source_dir)?;
+    if !cli.no_build {
+        build_bundle(&source_dir, &dist_dir)?;
+    }
     Ok(Some(BundleConfig { dist_dir }))
 }

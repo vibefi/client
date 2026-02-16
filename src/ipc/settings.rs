@@ -58,7 +58,9 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
             }
 
             // Persist to disk
-            if let Some(ref config_path) = state.resolved.as_ref().and_then(|r| r.config_path.clone()) {
+            if let Some(ref config_path) =
+                state.resolved.as_ref().and_then(|r| r.config_path.clone())
+            {
                 let mut settings = crate::settings::load_settings(config_path);
                 settings.rpc_endpoints = endpoints;
                 crate::settings::save_settings(config_path, &settings)?;
@@ -112,7 +114,9 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                 "settings set ipfs settings"
             );
 
-            if let Some(ref config_path) = state.resolved.as_ref().and_then(|r| r.config_path.clone()) {
+            if let Some(ref config_path) =
+                state.resolved.as_ref().and_then(|r| r.config_path.clone())
+            {
                 let mut settings = crate::settings::load_settings(config_path);
                 settings.ipfs.fetch_backend = Some(params.fetch_backend);
                 settings.ipfs.gateway_endpoint = params

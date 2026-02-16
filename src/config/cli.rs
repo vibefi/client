@@ -9,6 +9,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub bundle: Option<PathBuf>,
 
+    /// Path to a local studio bundle directory used for Studio tab dev loading.
+    #[arg(long = "studio-bundle")]
+    pub studio_bundle: Option<PathBuf>,
+
     /// Path to the network config JSON file (e.g. config/sepolia.json).
     #[arg(long)]
     pub config: Option<PathBuf>,

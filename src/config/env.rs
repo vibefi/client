@@ -69,7 +69,10 @@ mod tests {
     #[test]
     fn parse_string_env_trims_whitespace() {
         unsafe { std::env::set_var("_TEST_STR_TRIM", "  hello  ") };
-        assert_eq!(parse_string_env("_TEST_STR_TRIM"), Some("hello".to_string()));
+        assert_eq!(
+            parse_string_env("_TEST_STR_TRIM"),
+            Some("hello".to_string())
+        );
         unsafe { std::env::remove_var("_TEST_STR_TRIM") };
     }
 

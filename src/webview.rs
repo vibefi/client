@@ -94,13 +94,12 @@ fn csp_response(
     body: Vec<u8>,
     mime: String,
 ) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+    let csp = "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default";
     Response::builder()
         .status(200)
         .header(CONTENT_TYPE, mime.as_str())
-        .header(
-            "Content-Security-Policy",
-            "default-src 'self' app: https://app.localhost; img-src 'self' data: app: https://app.localhost; style-src 'self' 'unsafe-inline' app: https://app.localhost; script-src 'self' 'unsafe-inline' app: https://app.localhost; connect-src 'none'; frame-src 'none'",
-        )
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", csp)
         .body(std::borrow::Cow::Owned(body))
         .expect("failed to build CSP response")
 }

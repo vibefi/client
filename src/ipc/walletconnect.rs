@@ -243,15 +243,14 @@ pub fn handle_walletconnect_connect_result(
 ) {
     match result {
         Ok(session) => {
-            let chain_id = parse_hex_u64(&session.chain_id_hex)
-                .unwrap_or(
-                    state
-                        .wallet
-                        .lock()
-                        .expect("poisoned wallet lock while resolving walletconnect result")
-                        .chain
-                        .chain_id,
-                );
+            let chain_id = parse_hex_u64(&session.chain_id_hex).unwrap_or(
+                state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while resolving walletconnect result")
+                    .chain
+                    .chain_id,
+            );
             let accounts = session
                 .accounts
                 .iter()
