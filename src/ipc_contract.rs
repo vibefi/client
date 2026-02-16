@@ -59,6 +59,7 @@ impl IpcRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalletSelectorMethod {
+    GetCapabilities,
     ConnectLocal,
     ConnectWalletConnect,
     ConnectHardware,
@@ -67,6 +68,7 @@ pub enum WalletSelectorMethod {
 impl WalletSelectorMethod {
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
+            "vibefi_getSelectorCapabilities" => Some(Self::GetCapabilities),
             "vibefi_connectLocal" => Some(Self::ConnectLocal),
             "vibefi_connectWalletConnect" => Some(Self::ConnectWalletConnect),
             "vibefi_connectHardware" => Some(Self::ConnectHardware),

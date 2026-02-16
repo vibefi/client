@@ -31,7 +31,8 @@ pub fn handle_ipc(
 
     // Handle vibefi-wallet IPC from the wallet selector tab.
     if provider == Some(KnownProviderId::Wallet) {
-        let result = selector::handle_wallet_selector_ipc(webview, manager, state, webview_id, &req);
+        let result =
+            selector::handle_wallet_selector_ipc(webview, manager, state, webview_id, &req);
         respond_option_result(webview, req.id, result)?;
         return Ok(());
     }

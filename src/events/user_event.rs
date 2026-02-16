@@ -42,15 +42,17 @@ pub fn handle_ipc_event(
                             let idx = idx as usize;
                             if let Some(entry) = manager.apps.get(idx) {
                                 if entry.kind == AppWebViewKind::Settings {
-                                    if let Some(mut sel) =
-                                        lock_or_log(&state.settings_webview_id, "settings_webview_id")
-                                    {
+                                    if let Some(mut sel) = lock_or_log(
+                                        &state.settings_webview_id,
+                                        "settings_webview_id",
+                                    ) {
                                         *sel = None;
                                     }
                                 } else if entry.kind == AppWebViewKind::WalletSelector {
-                                    if let Some(mut sel) =
-                                        lock_or_log(&state.selector_webview_id, "selector_webview_id")
-                                    {
+                                    if let Some(mut sel) = lock_or_log(
+                                        &state.selector_webview_id,
+                                        "selector_webview_id",
+                                    ) {
                                         *sel = None;
                                     }
                                 }

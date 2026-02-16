@@ -628,7 +628,11 @@ fn fetch_dapp_manifest_local_node(
 ) -> Result<(BundleManifest, Vec<u8>)> {
     let gateway = normalize_gateway(&ipfs.gateway_endpoint);
     let url = format!("{}/ipfs/{}/manifest.json", gateway, root_cid);
-    let res = devnet.http_client.get(url).send().context("fetch manifest")?;
+    let res = devnet
+        .http_client
+        .get(url)
+        .send()
+        .context("fetch manifest")?;
     if !res.status().is_success() {
         let text = res.text().unwrap_or_default();
         return Err(anyhow!("fetch manifest failed: {}", text));
@@ -661,7 +665,11 @@ fn download_dapp_bundle_local_node(
     ));
     for (idx, entry) in manifest.files.iter().enumerate() {
         let url = format!("{}/ipfs/{}/{}", gateway, root_cid, entry.path);
-        let res = devnet.http_client.get(url).send().context("fetch bundle file")?;
+        let res = devnet
+            .http_client
+            .get(url)
+            .send()
+            .context("fetch bundle file")?;
         if !res.status().is_success() {
             let text = res.text().unwrap_or_default();
             return Err(anyhow!("bundle fetch failed: {}", text));

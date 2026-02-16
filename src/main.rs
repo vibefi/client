@@ -309,7 +309,12 @@ fn main() -> Result<()> {
                         .as_ref()
                         .map(|r| r.enable_devtools)
                         .unwrap_or(cfg!(debug_assertions));
-                    match build_tab_bar_webview(&host, proxy.clone(), manager.tab_bar_rect(w), enable_devtools) {
+                    match build_tab_bar_webview(
+                        &host,
+                        proxy.clone(),
+                        manager.tab_bar_rect(w),
+                        enable_devtools,
+                    ) {
                         Ok(tb) => manager.tab_bar = Some(tb),
                         Err(e) => tracing::error!(error = ?e, "tab bar error"),
                     }

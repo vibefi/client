@@ -1,12 +1,11 @@
-use anyhow::{Result, anyhow};
 use alloy_signer_local::PrivateKeySigner;
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::{
     collections::VecDeque,
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
 };
-
 
 use tao::event_loop::EventLoopProxy;
 
@@ -151,7 +150,5 @@ impl AppState {
 }
 
 pub(crate) fn lock_or_err<'a, T>(mutex: &'a Mutex<T>, name: &str) -> Result<MutexGuard<'a, T>> {
-    mutex
-        .lock()
-        .map_err(|_| anyhow!("poisoned lock: {}", name))
+    mutex.lock().map_err(|_| anyhow!("poisoned lock: {}", name))
 }
