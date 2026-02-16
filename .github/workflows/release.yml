@@ -73,6 +73,14 @@ jobs:
     - name: List packaged outputs
       run: ls -lRh target/packager/
     
+    - name: Determine arch label
+      id: arch
+      run: |
+        case "${{ matrix.target }}" in
+          aarch64-*) echo "label=aarch64" >> "$GITHUB_OUTPUT" ;;
+          x86_64-*)  echo "label=x64"     >> "$GITHUB_OUTPUT" ;;
+        esac
+
     - name: Prepare artifacts
       run: |
         mkdir -p artifacts
@@ -83,13 +91,14 @@ jobs:
         else
           echo "Warning: No DMG files found in target/packager/"
         fi
-        # Archive .app bundles as they are directories
+        # Archive .app bundles with arch-specific names
         cd target/packager
         found_app=false
         for app in *.app; do
           if [ -d "$app" ]; then
-            tar -czf "../../artifacts/${app}.tar.gz" "$app"
-            echo "Archived $app"
+            base="${app%.app}"
+            tar -czf "../../artifacts/${base}_${{ steps.arch.outputs.label }}.app.tar.gz" "$app"
+            echo "Archived $app as ${base}_${{ steps.arch.outputs.label }}.app.tar.gz"
             found_app=true
           fi
         done
