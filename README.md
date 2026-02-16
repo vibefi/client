@@ -62,12 +62,12 @@ Validation runs at load time: `chainId` must not be 0, `dappRegistry` (if non-em
 
 ### Layer 2 — Environment variables (`VIBEFI_*`)
 
-Environment variables override specific values from the deployment JSON.
+Environment variables override or fill specific values from the deployment JSON.
 
 | Variable | Overrides | Type |
 |----------|-----------|------|
 | `VIBEFI_RPC_URL` | `rpcUrl` | URL string |
-| `VIBEFI_WC_PROJECT_ID` | `walletConnect.projectId` | string |
+| `VIBEFI_WC_PROJECT_ID` | `walletConnect.projectId` (when config value is missing) | string |
 | `VIBEFI_WC_RELAY_URL` | `walletConnect.relayUrl` | string |
 | `VIBEFI_ENABLE_DEVTOOLS` | WebView devtools (release builds) | bool (`1`/`true`/`yes`/`on`) |
 
@@ -78,6 +78,7 @@ In debug builds (`cfg!(debug_assertions)`), devtools are always enabled regardle
 | Flag | Effect |
 |------|--------|
 | `cfg!(debug_assertions)` | Enables devtools, selects `Dev` log profile |
+| `option_env!("VIBEFI_EMBEDDED_WC_PROJECT_ID")` | Fallback WalletConnect project ID embedded into release binaries at build time |
 
 ### Layer 4 — User settings (runtime, not in `ResolvedConfig`)
 
@@ -186,6 +187,15 @@ VIBEFI_WC_RELAY_URL=wss://your-relay.example \
 cargo run -- --config config/sepolia.json
 ```
 
+For packaged installers, embed a compile-time fallback directly into the binary (without writing to config/settings files):
+
+```bash
+VIBEFI_EMBED_WC_PROJECT_ID=your_project_id cargo build --release
+VIBEFI_EMBED_WC_PROJECT_ID=your_project_id cargo packager --release
+```
+
+`VIBEFI_EMBED_WC_PROJECT_ID` is consumed by `build.rs` and baked into the binary as a fallback only. Runtime `VIBEFI_WC_PROJECT_ID` still works and takes precedence over the embedded value.
+
 ## Linux build deps (Ubuntu/Debian)
 
 ```bash
@@ -240,6 +250,8 @@ git push origin v0.1.0
 ```
 
 This triggers the release workflow which builds and uploads:
+
+- WalletConnect project id can be embedded from GitHub secret `VIBEFI_WC_PROJECT_ID` (wired to build env `VIBEFI_EMBED_WC_PROJECT_ID`)
 
 **macOS:**
 - `.dmg` installer (Apple Silicon and Intel)
