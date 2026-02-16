@@ -5,6 +5,13 @@ use super::app_config::{AppConfig, default_ipfs_helia_gateways, default_ipfs_hel
 use super::env::{parse_bool_env, parse_string_env};
 use super::resolved::ResolvedConfig;
 
+fn embedded_walletconnect_project_id() -> Option<String> {
+    option_env!("VIBEFI_EMBEDDED_WC_PROJECT_ID")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 /// Builds a `ResolvedConfig` by layering:
 /// CLI args → AppConfig (deployment JSON) → env var overrides → defaults.
 pub struct ConfigBuilder {
@@ -44,12 +51,13 @@ impl ConfigBuilder {
         };
         let ipfs_helia_timeout_ms = config.ipfsHeliaTimeoutMs;
 
-        // -- WalletConnect: config → env override --
+        // -- WalletConnect: config → runtime env → compile-time embedded fallback --
         let walletconnect_project_id = config
             .walletConnect
             .as_ref()
             .and_then(|wc| wc.projectId.clone())
-            .or_else(|| parse_string_env("VIBEFI_WC_PROJECT_ID"));
+            .or_else(|| parse_string_env("VIBEFI_WC_PROJECT_ID"))
+            .or_else(embedded_walletconnect_project_id);
         let walletconnect_relay_url = config
             .walletConnect
             .as_ref()
