@@ -306,6 +306,8 @@ fn main() -> Result<()> {
                             return;
                         }
                     };
+                    #[cfg(target_os = "macos")]
+                    menu::setup_macos_dock_icon();
 
                     manager.set_scale_factor(window_handle.scale_factor());
 

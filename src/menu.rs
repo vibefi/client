@@ -119,3 +119,56 @@ pub fn setup_macos_app_menu(app_name: &str) {
 
     app.setMainMenu(Some(&menubar));
 }
+
+#[cfg(target_os = "macos")]
+pub fn setup_macos_dock_icon() {
+    use objc2::AnyThread;
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::{MainThreadMarker, NSData, NSString};
+    use std::path::PathBuf;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        tracing::warn!("failed to acquire MainThreadMarker while setting macOS dock icon");
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+
+    // Primary path for `cargo run`: embed icon bytes at compile time.
+    let embedded_icns = include_bytes!("../packaging/icons/vibefi.icns");
+    let icon_data = NSData::with_bytes(embedded_icns);
+    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &icon_data) {
+        unsafe {
+            app.setApplicationIconImage(Some(&image));
+        }
+        tracing::info!("set macOS dock icon from embedded icns");
+        return;
+    }
+
+    // Fallback path in case embedded decode fails unexpectedly.
+    let mut candidates = Vec::new();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidates.push(manifest_dir.join("packaging/icons/vibefi.icns"));
+    candidates.push(manifest_dir.join("packaging/icons/vibefi.png"));
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("packaging/icons/vibefi.icns"));
+        candidates.push(cwd.join("packaging/icons/vibefi.png"));
+    }
+
+    for candidate in candidates {
+        if !candidate.exists() {
+            continue;
+        }
+        let candidate_str = candidate.to_string_lossy().to_string();
+        if let Some(image) =
+            NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&candidate_str))
+        {
+            unsafe {
+                app.setApplicationIconImage(Some(&image));
+            }
+            tracing::info!(path = %candidate.display(), "set macOS dock icon");
+            return;
+        }
+    }
+
+    tracing::warn!("macOS dock icon file not found or failed to load");
+}
