@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { IpcClient } from "./ipc/client";
 import { PROVIDER_IDS, type Tab } from "./ipc/contracts";
@@ -66,6 +66,22 @@ html, body {
   cursor: pointer;
 }
 .tab-close:hover { opacity: 1; background: #334155; }
+.tab-fork {
+  height: 18px;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 0 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tab-fork:hover { color: #e2e8f0; border-color: #475569; }
+.tab-fork:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 .tab-spinner {
   width: 12px;
   height: 12px;
@@ -85,6 +101,10 @@ function postTabbarCommand(method: "switchTab" | "closeTab", index: number) {
 function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [forkPendingByWebviewId, setForkPendingByWebviewId] = useState<Record<string, boolean>>(
+    {}
+  );
+  const forkInFlightRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     window.updateTabs = (nextTabs: unknown[], nextActiveIndex: number) => {
@@ -104,34 +124,81 @@ function App() {
     };
   }, []);
 
+  const handleForkClick = async (
+    event: React.MouseEvent<HTMLButtonElement>,
+    tab: Tab
+  ) => {
+    event.stopPropagation();
+    const webviewId = tab.id;
+    if (!webviewId) {
+      console.error("[vibefi:tabbar] missing tab id for code_forkDapp");
+      return;
+    }
+
+    if (forkInFlightRef.current.has(webviewId)) return;
+    forkInFlightRef.current.add(webviewId);
+    setForkPendingByWebviewId((current) => ({ ...current, [webviewId]: true }));
+
+    try {
+      await tabbarClient.request(PROVIDER_IDS.code, "code_forkDapp", [{ webviewId }]);
+      tabbarClient.notify(PROVIDER_IDS.tabbar, "switchToCodeTab", []);
+    } catch (error) {
+      console.error("[vibefi:tabbar] code_forkDapp failed", { webviewId, error });
+    } finally {
+      forkInFlightRef.current.delete(webviewId);
+      setForkPendingByWebviewId((current) => {
+        if (!current[webviewId]) return current;
+        const next = { ...current };
+        delete next[webviewId];
+        return next;
+      });
+    }
+  };
+
   return (
     <>
       <style>{styles}</style>
       <div id="tabs">
-        {tabs.map((tab, index) => (
-          <div
-            key={`${tab.id ?? "tab"}:${index}`}
-            className={`tab${index === activeIndex ? " active" : ""}${tab.clickable === false ? " disabled" : ""}`}
-            onClick={() => {
-              if (tab.clickable === false) return;
-              postTabbarCommand("switchTab", index);
-            }}
-          >
-            <span className="tab-label">{tab.label || tab.id || "Tab"}</span>
-            {tab.loading ? <span className="tab-spinner" aria-label="loading" /> : null}
-            {tabs.length > 1 && tab.closable !== false ? (
-              <span
-                className="tab-close"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  postTabbarCommand("closeTab", index);
-                }}
-              >
-                &times;
-              </span>
-            ) : null}
-          </div>
-        ))}
+        {tabs.map((tab, index) => {
+          const isForkPending = Boolean(tab.id && forkPendingByWebviewId[tab.id]);
+          return (
+            <div
+              key={`${tab.id ?? "tab"}:${index}`}
+              className={`tab${index === activeIndex ? " active" : ""}${tab.clickable === false ? " disabled" : ""}`}
+              onClick={() => {
+                if (tab.clickable === false) return;
+                postTabbarCommand("switchTab", index);
+              }}
+            >
+              <span className="tab-label">{tab.label || tab.id || "Tab"}</span>
+              {tab.loading ? <span className="tab-spinner" aria-label="loading" /> : null}
+              {tab.forkable ? (
+                <button
+                  type="button"
+                  className="tab-fork"
+                  disabled={!tab.id || isForkPending}
+                  aria-label={isForkPending ? "forking dapp" : "fork dapp"}
+                  onClick={(event) => {
+                    void handleForkClick(event, tab);
+                  }}
+                >
+                  {isForkPending ? "..." : "Fork"}
+                </button>
+              ) : null}
+              {tabs.length > 1 && tab.closable !== false ? (
+                <span
+                  className="tab-close"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    postTabbarCommand("closeTab", index);
+                  }}
+                >
+                  &times;
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </>
   );

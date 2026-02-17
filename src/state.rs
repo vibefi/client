@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     collections::VecDeque,
     path::PathBuf,
+    process::Child,
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -59,17 +60,17 @@ pub enum UserEvent {
         event: String,
         value: serde_json::Value,
     },
-    StudioBundleResolved {
-        placeholder_id: String,
-        result: Result<PathBuf, String>,
-    },
     CloseWalletSelector,
     TabAction(TabAction),
 }
 
 #[derive(Debug, Clone)]
 pub enum TabAction {
-    OpenApp { name: String, dist_dir: PathBuf },
+    OpenApp {
+        name: String,
+        dist_dir: PathBuf,
+        source_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +120,24 @@ pub struct AppRuntimeCapabilities {
     pub ipfs_allow: Vec<IpfsCapabilityRule>,
 }
 
+#[derive(Debug)]
+pub struct RunningCodeDevServer {
+    pub id: u64,
+    pub project_root: PathBuf,
+    pub webview_id: String,
+    pub port: u16,
+    pub child: Arc<Mutex<Child>>,
+    pub uses_process_group: bool,
+}
+
+#[derive(Debug)]
+pub struct CodeState {
+    pub active_project: Option<PathBuf>,
+    pub workspace_root: PathBuf,
+    pub dev_server: Option<RunningCodeDevServer>,
+    pub next_dev_server_id: u64,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub wallet: Arc<Mutex<WalletState>>,
@@ -130,6 +149,7 @@ pub struct AppState {
     pub proxy: EventLoopProxy<UserEvent>,
     pub pending_connect: Arc<Mutex<VecDeque<PendingConnect>>>,
     pub app_capabilities: Arc<Mutex<HashMap<String, AppRuntimeCapabilities>>>,
+    pub code: Arc<Mutex<CodeState>>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
     pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,

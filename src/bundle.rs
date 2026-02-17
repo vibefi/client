@@ -9,6 +9,7 @@ use crate::runtime_paths::resolve_bun_binary;
 
 #[derive(Debug, Clone)]
 pub struct BundleConfig {
+    pub source_dir: PathBuf,
     pub dist_dir: PathBuf,
 }
 

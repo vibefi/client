@@ -7,6 +7,7 @@ pub const PROVIDER_ID_TABBAR: &str = "vibefi-tabbar";
 pub const PROVIDER_ID_PROVIDER: &str = "vibefi-provider";
 pub const PROVIDER_ID_SETTINGS: &str = "vibefi-settings";
 pub const PROVIDER_ID_IPFS: &str = "vibefi-ipfs";
+pub const PROVIDER_ID_CODE: &str = "vibefi-code";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnownProviderId {
@@ -16,6 +17,7 @@ pub enum KnownProviderId {
     Tabbar,
     Settings,
     Ipfs,
+    Code,
 }
 
 impl KnownProviderId {
@@ -27,6 +29,7 @@ impl KnownProviderId {
             PROVIDER_ID_TABBAR => Some(Self::Tabbar),
             PROVIDER_ID_SETTINGS => Some(Self::Settings),
             PROVIDER_ID_IPFS => Some(Self::Ipfs),
+            PROVIDER_ID_CODE => Some(Self::Code),
             _ => None,
         }
     }
@@ -84,6 +87,7 @@ impl WalletSelectorMethod {
 pub enum TabbarMethod {
     SwitchTab,
     CloseTab,
+    SwitchToCodeTab,
 }
 
 impl TabbarMethod {
@@ -91,6 +95,7 @@ impl TabbarMethod {
         match value {
             "switchTab" => Some(Self::SwitchTab),
             "closeTab" => Some(Self::CloseTab),
+            "switchToCodeTab" => Some(Self::SwitchToCodeTab),
             _ => None,
         }
     }

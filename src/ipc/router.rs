@@ -71,6 +71,20 @@ pub fn handle_ipc(
         return Ok(());
     }
 
+    if provider == Some(KnownProviderId::Code) {
+        if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::Code) {
+            tracing::warn!(
+                webview_id,
+                method = %req.method,
+                "code ipc request rejected for non-code webview"
+            );
+            bail!("code IPC is only available to code webviews");
+        }
+        let result = crate::code::router::handle_code_ipc(state, manager, webview_id, &req);
+        respond_option_result(webview, req.id, result)?;
+        return Ok(());
+    }
+
     if provider == Some(KnownProviderId::Ipfs) {
         let state_clone = state.clone();
         let webview_id = webview_id.to_string();

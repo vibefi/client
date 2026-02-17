@@ -4,9 +4,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use crate::{logging, runtime_paths};
 
