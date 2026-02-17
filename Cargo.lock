@@ -1054,6 +1054,8 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 [[package]]
 name = "coins-ledger"
 version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab9bc0994d0aa0f4ade5f3a9baf4a8d936f250278c85a1124b401860454246ab"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -4986,6 +4988,8 @@ dependencies = [
 [[package]]
 name = "trezor-client"
 version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87873db279766278a7e56b01139943e00a45afc079fc8fa6651e949f2234c3f6"
 dependencies = [
  "byteorder",
  "hex",
@@ -5140,6 +5144,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "reqwest",
+ "rusb",
  "serde",
  "serde_json",
  "tao",
