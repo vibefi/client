@@ -24,10 +24,11 @@ pub(super) fn handle_wallet_selector_ipc(
     match req.wallet_selector_method() {
         Some(WalletSelectorMethod::GetCapabilities) => Ok(Some(serde_json::json!({
             "localSignerAvailable": local_signer_available(state),
+            "localSignerRequiresPrivateKey": local_signer_requires_private_key(state),
         }))),
         Some(WalletSelectorMethod::ConnectLocal) => {
             tracing::info!("wallet-selector connecting local signer");
-            let signer_hex = resolve_local_signer_hex(state)?;
+            let signer_hex = resolve_local_signer_hex(state, req)?;
             let signer: alloy_signer_local::PrivateKeySigner = signer_hex
                 .parse()
                 .context("failed to parse signing private key")?;
@@ -208,26 +209,65 @@ pub(super) fn handle_wallet_selector_ipc(
 }
 
 fn local_signer_available(state: &AppState) -> bool {
-    let resolved = state.resolved.as_ref();
-    resolved.map(|r| r.local_network).unwrap_or(false)
-        || resolved
-            .and_then(|r| r.developer_private_key.as_ref())
-            .is_some()
+    is_test_network(state)
 }
 
-fn resolve_local_signer_hex(state: &AppState) -> Result<String> {
-    let resolved = state.resolved.as_ref();
-    let is_local = resolved.map(|r| r.local_network).unwrap_or(false);
-    let explicit_key = resolved.and_then(|r| r.developer_private_key.clone());
-    if is_local {
-        Ok(explicit_key.unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string()))
-    } else if let Some(key) = explicit_key {
+fn local_signer_requires_private_key(state: &AppState) -> bool {
+    local_signer_available(state) && !has_configured_local_signer(state)
+}
+
+fn has_configured_local_signer(state: &AppState) -> bool {
+    state
+        .resolved
+        .as_ref()
+        .and_then(|r| r.developer_private_key.as_ref())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .is_some()
+}
+
+fn resolve_local_signer_hex(state: &AppState, req: &IpcRequest) -> Result<String> {
+    if !is_test_network(state) {
+        return Err(anyhow!(
+            "Local signer is only available on test networks"
+        ));
+    }
+
+    if let Some(private_key) = requested_local_private_key(req) {
+        return Ok(private_key);
+    }
+
+    let explicit_key = state
+        .resolved
+        .as_ref()
+        .and_then(|r| r.developer_private_key.clone())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(key) = explicit_key {
         Ok(key)
     } else {
         Err(anyhow!(
-            "Local wallet requires either localNetwork: true or an explicit developerPrivateKey in config"
+            "No local signer configured for this test network. Enter a private key in the wallet selector."
         ))
     }
+}
+
+fn requested_local_private_key(req: &IpcRequest) -> Option<String> {
+    req.params
+        .as_array()
+        .and_then(|params| params.first())
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_test_network(state: &AppState) -> bool {
+    state
+        .resolved
+        .as_ref()
+        .map(|resolved| resolved.test_network)
+        .unwrap_or(false)
 }
 
 /// Resolve a pending `eth_requestAccounts` from a dapp tab by sending the

@@ -54,11 +54,6 @@ static SETTINGS_HTML: &str = include_str!("../internal-ui/static/settings.html")
 static SETTINGS_JS: &str = include_str!("../internal-ui/dist/settings.js");
 static PRELOAD_SETTINGS_JS: &str = include_str!("../internal-ui/dist/preload-settings.js");
 
-/// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
-/// This matches a common dev key used across many tutorials.
-pub(crate) static DEMO_PRIVKEY_HEX: &str =
-    "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
-
 fn main() -> Result<()> {
     apply_linux_env_defaults();
     logging::init_logging()?;

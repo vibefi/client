@@ -4,7 +4,7 @@ Desktop application (Wry/Rust) that fetches, builds, and runs approved dapps fro
 
 - Embeds a **WebView** with an injected **`window.ethereum`** provider (EIP-1193)
 - Bridges `ethereum.request(...)` to a Rust backend via Wry IPC
-- Uses **Alloy** for local dev-key signing (default)
+- Uses **Alloy** for local private-key signing
 - Supports **WalletConnect v2** via a local helper process (`walletconnect-helper/`)
 - **Blocks outbound network**: only loads `app://...` assets and sets `connect-src 'none'`
 
@@ -40,7 +40,7 @@ A JSON file passed via `--config`. This is the primary source for network and co
   "rpcUrl": "https://...",            // default: "http://127.0.0.1:8546"
   "dappRegistry": "0xFb84...",        // hex address of the DappRegistry contract
   "deployBlock": 10239268,            // starting block for event log queries
-  "localNetwork": false,              // true for local devnets (enables demo wallet key)
+  "testNetwork": true,                // explicit network type for testnet-only features
   "developerPrivateKey": null,        // optional private key for local signing
   "ipfsApi": null,                    // IPFS API endpoint (default: "http://127.0.0.1:5001")
   "ipfsGateway": null,                // IPFS gateway endpoint (default: "http://127.0.0.1:8080")
@@ -238,7 +238,7 @@ Helia fetches also automatically retry up to 3 total attempts with short backoff
 
 ## Wallet backends
 
-- `local` (default): hard-coded/demo private key fallback for local testing only.
+- `local`: local private-key signer (from config key or manual entry on testnets).
 - `walletconnect`: remote signer via WalletConnect; `eth_requestAccounts` triggers pairing and logs a `wc:` URI.
 
 ## Releases

@@ -92,7 +92,7 @@ impl ConfigBuilder {
             deploy_block: config.deployBlock,
             dapp_registry: config.dappRegistry.clone(),
             studio_dapp_id,
-            local_network: config.localNetwork,
+            test_network: config.testNetwork,
             rpc_url,
             ipfs_api,
             ipfs_gateway,

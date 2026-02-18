@@ -44,7 +44,7 @@ pub struct AppConfig {
     pub rpcUrl: String,
 
     #[serde(default)]
-    pub localNetwork: bool,
+    pub testNetwork: bool,
 
     #[serde(default)]
     pub ipfsApi: Option<String>,
