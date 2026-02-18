@@ -240,7 +240,9 @@ fn resolve_local_signer_hex(state: &AppState, req: &IpcRequest) -> Result<String
     let explicit_key = state
         .resolved
         .as_ref()
-        .and_then(|r| r.developer_private_key.clone());
+        .and_then(|r| r.developer_private_key.clone())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     if let Some(key) = explicit_key {
         Ok(key)
     } else {
