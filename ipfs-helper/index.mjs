@@ -116,7 +116,7 @@ async function fetchIpfsInner(url, timeoutMs) {
 
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? Number(timeoutMs)
-    : 30_000;
+    : 3000;
 
   const controller = new AbortController();
   const { signal } = controller;
@@ -159,7 +159,7 @@ async function fetchIpfsInner(url, timeoutMs) {
 async function fetchIpfs(url, timeoutMs) {
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? Number(timeoutMs)
-    : 30_000;
+    : 3000;
 
   // Belt-and-suspenders: wrap the entire fetch in a hard timeout promise race
   // so we always respond even if the Helia internals swallow the abort.

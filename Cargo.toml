@@ -18,6 +18,8 @@ resources = [
   "vendor/WebView2Loader.dll",
 ]
 
+# Bun binary vendored for package management (bun install)
+# Bundling handled by Rolldown (Rust-based, no external binary needed)
 external-binaries = ["vendor/bun/bun"]
 
 before-packaging-command = "bun install --cwd walletconnect-helper --frozen-lockfile && bun install --cwd ipfs-helper --frozen-lockfile && cd walletconnect-helper && bun run build:dist && cd ../ipfs-helper && bun run build:dist"
@@ -50,6 +52,9 @@ serde_json = "1"
 hex = "0.4"
 mime_guess = "2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
+brk_rolldown = "0.8.0"
+brk_rolldown_common = "0.8.0"
+brk_rolldown_utils = "0.8.0"
 
 # Windowing + WebView
 wry = "0.54.1"
@@ -74,6 +79,12 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[build-dependencies]
+brk_rolldown = "0.8.0"
+brk_rolldown_common = "0.8.0"
+brk_rolldown_utils = "0.8.0"
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

@@ -35,10 +35,6 @@ impl ConfigBuilder {
         let studio_dapp_id = parse_u64_env("VIBEFI_STUDIO_DAPP_ID").or(config.studioDappId);
 
         // -- IPFS --
-        let ipfs_api = config
-            .ipfsApi
-            .clone()
-            .unwrap_or_else(|| "http://127.0.0.1:5001".to_string());
         let ipfs_gateway = config
             .ipfsGateway
             .clone()
@@ -94,7 +90,6 @@ impl ConfigBuilder {
             studio_dapp_id,
             local_network: config.localNetwork,
             rpc_url,
-            ipfs_api,
             ipfs_gateway,
             ipfs_fetch_backend,
             ipfs_helia_gateways,

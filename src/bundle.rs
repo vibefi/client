@@ -6,6 +6,14 @@ use std::{
 };
 
 use crate::runtime_paths::resolve_bun_binary;
+use brk_rolldown::{Bundler, BundlerOptions};
+use brk_rolldown_common::bundler_options::{
+    InputItem,
+    OutputFormat,
+    Platform,
+    RawMinifyOptions,
+};
+use brk_rolldown_utils::indexmap::FxIndexMap;
 
 #[derive(Debug, Clone)]
 pub struct BundleConfig {
@@ -76,45 +84,14 @@ const STANDARD_PACKAGE_JSON: &str = r#"{
     "@tanstack/react-query": "5.90.20"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "5.1.2",
     "@types/react": "19.2.4",
-    "typescript": "5.9.3",
-    "vite": "7.2.4"
+    "typescript": "5.9.3"
   }
-}
-"#;
-
-const STANDARD_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig({
-  plugins: [react()],
-});
-"#;
-
-const STANDARD_TSCONFIG: &str = r#"{
-  "compilerOptions": {
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true
-  },
-  "include": ["src"]
 }
 "#;
 
 fn write_standard_build_files(bundle_dir: &Path) -> Result<()> {
     fs::write(bundle_dir.join("package.json"), STANDARD_PACKAGE_JSON)?;
-    fs::write(bundle_dir.join("vite.config.ts"), STANDARD_VITE_CONFIG)?;
-    fs::write(bundle_dir.join("tsconfig.json"), STANDARD_TSCONFIG)?;
     Ok(())
 }
 
@@ -159,63 +136,94 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     }
 
     fs::create_dir_all(dist_dir).context("create dist dir")?;
-    // Use relative path from bundle_dir for vite's outDir since vite runs in bundle_dir
-    let relative_dist = PathBuf::from(".vibefi").join("dist");
-    tracing::info!(out_dir = %relative_dist.display(), "running vite build for bundle");
-    let output = Command::new(&bun_bin)
-        .arg("x")
-        .arg("--bun")
-        .arg("vite")
-        .arg("build")
-        .arg("--emptyOutDir")
-        .arg("--outDir")
-        .arg(&relative_dist)
-        .current_dir(bundle_dir)
-        .output()
-        .with_context(|| format!("bun vite build failed (runtime: {bun_bin})"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        tracing::warn!(
-            status = %output.status,
-            bun = %bun_bin,
-            %stderr,
-            %stdout,
-            "vite build failed"
-        );
-        return Err(anyhow!(
-            "bun vite build failed with status {} (runtime: {bun_bin})\nstdout: {stdout}\nstderr: {stderr}",
-            output.status
-        ));
+    
+    tracing::info!(dist_dir = %dist_dir.display(), "running Rolldown build for bundle");
+    
+    // Find the entry point (main.tsx)
+    let entry = bundle_dir.join("src").join("main.tsx");
+    if entry.exists() {
+        tracing::debug!(entry = %entry.display(), "found entry point");
+    } else {
+        return Err(anyhow!("No main.tsx entry point found in bundle"));
     }
-    tracing::info!(dist_dir = %dist_dir.display(), "bundle build completed");
-    Ok(())
-}
+    
+    // Configure Rolldown for bundle build
+    let mut define_map = FxIndexMap::default();
+    define_map.insert("process.env.NODE_ENV".to_string(), "\"production\"".to_string());
+    
+    // Define import.meta.env as a complete object matching 
+    // Vite's behavior where import.meta.env is always an object
+    let env_object = r#"{
+  "MODE": "production",
+  "DEV": false,
+  "PROD": true,
+  "SSR": false,
+  "BASE_URL": "/",
+  "RPC_URL": undefined
+}"#;
+    define_map.insert("import.meta.env".to_string(), env_object.to_string());
+    
+    let options = BundlerOptions {
+        input: Some(vec![InputItem {
+            name: Some("index".to_string()),
+            import: entry.to_string_lossy().to_string(),
+        }]),
+        cwd: Some(bundle_dir.to_path_buf()),
+        platform: Some(Platform::Browser),
+        format: Some(OutputFormat::Esm),
+        dir: Some(dist_dir.to_string_lossy().to_string()),
+        minify: Some(RawMinifyOptions::Bool(true)),
+        define: Some(define_map),
+        ..Default::default()
+    };
 
-pub fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        // Skip generated build files (not part of bundle content)
-        if name == "node_modules"
-            || name == ".git"
-            || name == ".vibefi"
-            || name == "package.json"
-            || name == "vite.config.ts"
-            || name == "tsconfig.json"
-            || name == "bun.lock"
-            || name == "bun.lockb"
-        {
-            continue;
+    // Build with Rolldown
+    let mut bundler = Bundler::new(options)
+        .context("Failed to create Rolldown bundler")?;
+    
+    // Use tokio to run async
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to create tokio runtime")?;
+    
+    let output = runtime.block_on(async {
+        bundler.write().await
+    });
+
+    match output {
+        Ok(bundle_output) => {
+            for warning in &bundle_output.warnings {
+                tracing::warn!("Rolldown warning: {warning:?}");
+            }
+            
+            // Handle index.html
+            let html_src = bundle_dir.join("index.html");
+            let html_dest = dist_dir.join("index.html");
+            
+            if html_src.exists() {
+                // Copy existing index.html and update script references
+                tracing::debug!("Copying index.html from bundle");
+                let html_content = fs::read_to_string(&html_src)
+                    .context("Failed to read index.html")?;
+                
+                // Update script references to point to bundled files
+                // Replace common Vite pattern /src/main.tsx with /index.js
+                let updated_html = html_content
+                    .replace(r#"<script type="module" src="/src/main.tsx"></script>"#, r#"<script type="module" src="/index.js"></script>"#);
+                
+                fs::write(&html_dest, updated_html)
+                    .context("Failed to write index.html to dist")?;
+            } else {
+                return Err(anyhow!("No index.html found in bundle"));
+            }
+            
+            tracing::info!(dist_dir = %dist_dir.display(), html = %html_dest.display(), "bundle build completed with index.html");
+            Ok(())
         }
-        if entry.file_type()?.is_dir() {
-            out.extend(walk_files(&path)?);
-        } else if entry.file_type()?.is_file() {
-            out.push(path);
+        Err(e) => {
+            tracing::error!("Rolldown build failed: {e:?}");
+            Err(anyhow!("Rolldown build failed: {e:?}"))
         }
     }
-    Ok(out)
 }

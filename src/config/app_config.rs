@@ -47,9 +47,6 @@ pub struct AppConfig {
     pub localNetwork: bool,
 
     #[serde(default)]
-    pub ipfsApi: Option<String>,
-
-    #[serde(default)]
     pub ipfsGateway: Option<String>,
 
     #[serde(default)]
@@ -94,7 +91,7 @@ pub(crate) fn default_ipfs_helia_routers() -> Vec<String> {
 }
 
 fn default_ipfs_helia_timeout_ms() -> u64 {
-    30_000
+    3000
 }
 
 #[derive(Debug, Deserialize, Clone)]
