@@ -263,7 +263,7 @@ fn is_test_network(state: &AppState) -> bool {
     state
         .resolved
         .as_ref()
-        .map(|resolved| resolved.chain_id != 1)
+        .map(|resolved| resolved.test_network)
         .unwrap_or(false)
 }
 

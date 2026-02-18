@@ -41,6 +41,7 @@ A JSON file passed via `--config`. This is the primary source for network and co
   "dappRegistry": "0xFb84...",        // hex address of the DappRegistry contract
   "deployBlock": 10239268,            // starting block for event log queries
   "localNetwork": false,              // true for local devnets (enables demo wallet key)
+  "testNetwork": true,                // explicit network type for testnet-only features
   "developerPrivateKey": null,        // optional private key for local signing
   "ipfsApi": null,                    // IPFS API endpoint (default: "http://127.0.0.1:5001")
   "ipfsGateway": null,                // IPFS gateway endpoint (default: "http://127.0.0.1:8080")

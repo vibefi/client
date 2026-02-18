@@ -18,6 +18,7 @@ pub struct ResolvedConfig {
     pub dapp_registry: String,
     pub studio_dapp_id: Option<u64>,
     pub local_network: bool,
+    pub test_network: bool,
     pub rpc_url: String,
 
     // -- IPFS (deploy + client override) --
@@ -53,6 +54,7 @@ impl ResolvedConfig {
             chain_id = self.chain_id,
             rpc_url = %self.rpc_url,
             local_network = self.local_network,
+            test_network = self.test_network,
             dapp_registry = %self.dapp_registry,
             studio_dapp_id = ?self.studio_dapp_id,
             ipfs_backend = self.ipfs_fetch_backend.as_str(),
