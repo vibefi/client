@@ -54,6 +54,10 @@ pub enum UserEvent {
         ipc_id: u64,
         result: Result<serde_json::Value, String>,
     },
+    RpcPendingChanged {
+        webview_id: String,
+        count: u32,
+    },
     ProviderEvent {
         webview_id: String,
         event: String,
@@ -134,6 +138,8 @@ pub struct AppState {
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
     pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,
     pub settings_webview_id: Arc<Mutex<Option<String>>>,
+    /// Tracks how many RPC passthrough requests are in-flight per webview.
+    pub pending_rpc_counts: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl AppState {
@@ -165,6 +171,22 @@ impl AppState {
 
     pub fn get_wallet_backend(&self) -> Option<WalletBackend> {
         *self.wallet_backend.lock().expect("wallet_backend")
+    }
+
+    /// Increment the pending RPC count for a webview; returns the new count.
+    pub fn increment_rpc_pending(&self, webview_id: &str) -> u32 {
+        let mut map = self.pending_rpc_counts.lock().expect("pending_rpc_counts");
+        let count = map.entry(webview_id.to_string()).or_insert(0);
+        *count += 1;
+        *count
+    }
+
+    /// Decrement the pending RPC count for a webview; returns the new count.
+    pub fn decrement_rpc_pending(&self, webview_id: &str) -> u32 {
+        let mut map = self.pending_rpc_counts.lock().expect("pending_rpc_counts");
+        let count = map.entry(webview_id.to_string()).or_insert(0);
+        *count = count.saturating_sub(1);
+        *count
     }
 
     pub fn app_capabilities_for(&self, webview_id: &str) -> Option<AppRuntimeCapabilities> {

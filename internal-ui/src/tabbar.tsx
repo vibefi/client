@@ -7,6 +7,7 @@ import { composeStyles, sharedStyles } from "./styles/shared";
 declare global {
   interface Window {
     updateTabs?: (tabs: unknown[], activeIndex: number) => void;
+    updateRpcStatus?: (webviewId: string, pendingCount: number) => void;
     __VibefiTabbarState?: unknown;
   }
 }
@@ -75,6 +76,30 @@ html, body {
   animation: tab-spin 0.8s linear infinite;
 }
 @keyframes tab-spin { to { transform: rotate(360deg); } }
+.rpc-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 0 10px;
+  font-size: 11px;
+  color: #475569;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.rpc-status.active {
+  opacity: 1;
+}
+.rpc-status-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(100, 116, 139, 0.3);
+  border-top-color: #64748b;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: tab-spin 0.9s linear infinite;
+}
 `;
 const styles = composeStyles(sharedStyles, localStyles);
 
@@ -85,11 +110,24 @@ function postTabbarCommand(method: "switchTab" | "closeTab", index: number) {
 function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [pendingCounts, setPendingCounts] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
     window.updateTabs = (nextTabs: unknown[], nextActiveIndex: number) => {
       setTabs(Array.isArray(nextTabs) ? (nextTabs as Tab[]) : []);
       setActiveIndex(Number.isFinite(nextActiveIndex) ? nextActiveIndex : 0);
+    };
+
+    window.updateRpcStatus = (webviewId: string, count: number) => {
+      setPendingCounts((prev) => {
+        const next = new Map(prev);
+        if (count === 0) {
+          next.delete(webviewId);
+        } else {
+          next.set(webviewId, count);
+        }
+        return next;
+      });
     };
 
     const initial = window.__VibefiTabbarState as
@@ -101,8 +139,12 @@ function App() {
 
     return () => {
       delete window.updateTabs;
+      delete window.updateRpcStatus;
     };
   }, []);
+
+  const activeTabId = tabs[activeIndex]?.id;
+  const pendingCount = activeTabId ? (pendingCounts.get(activeTabId) ?? 0) : 0;
 
   return (
     <>
@@ -132,6 +174,10 @@ function App() {
             ) : null}
           </div>
         ))}
+        <div className={`rpc-status${pendingCount > 0 ? " active" : ""}`} aria-hidden={pendingCount === 0}>
+          <span className="rpc-status-spinner" />
+          <span>{pendingCount}</span>
+        </div>
       </div>
     </>
   );

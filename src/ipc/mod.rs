@@ -69,6 +69,14 @@ pub fn try_spawn_rpc_passthrough(state: &AppState, webview_id: &str, req: &IpcRe
         return false;
     }
 
+    let new_count = state.increment_rpc_pending(webview_id);
+    if let Err(err) = state.proxy.send_event(UserEvent::RpcPendingChanged {
+        webview_id: webview_id.to_string(),
+        count: new_count,
+    }) {
+        tracing::warn!(error = %err, "failed to send RpcPendingChanged on spawn");
+    }
+
     let proxy = state.proxy.clone();
     let state_clone = state.clone();
     let ipc_id = req.id;

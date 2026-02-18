@@ -152,6 +152,7 @@ fn main() -> Result<()> {
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
         settings_webview_id: Arc::new(Mutex::new(None)),
+        pending_rpc_counts: Arc::new(Mutex::new(HashMap::new())),
     };
     let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
@@ -229,12 +230,17 @@ fn main() -> Result<()> {
                     &manager, webview_id, ipc_id, result,
                 );
             }
+            Event::UserEvent(UserEvent::RpcPendingChanged { webview_id, count }) => {
+                events::user_event::handle_rpc_pending_changed(&manager, &webview_id, count);
+            }
             Event::UserEvent(UserEvent::RpcResult {
                 webview_id,
                 ipc_id,
                 result,
             }) => {
-                events::user_event::handle_rpc_result(&manager, webview_id, ipc_id, result);
+                events::user_event::handle_rpc_result(&manager, webview_id.clone(), ipc_id, result);
+                let count = state.decrement_rpc_pending(&webview_id);
+                events::user_event::handle_rpc_pending_changed(&manager, &webview_id, count);
             }
             Event::UserEvent(UserEvent::ProviderEvent {
                 webview_id,

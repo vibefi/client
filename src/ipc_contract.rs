@@ -103,6 +103,7 @@ pub enum HostDispatchKind {
     ProviderEvent,
     WalletconnectPairing,
     TabbarUpdate,
+    RpcStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,4 +143,11 @@ pub struct WalletconnectPairingPayload {
 pub struct TabbarUpdatePayload {
     pub tabs: Vec<Value>,
     pub active_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcStatusPayload {
+    pub webview_id: String,
+    pub pending_count: u32,
 }

@@ -2,6 +2,7 @@ import type {
   HostDispatchMessage,
   ProviderEventPayload,
   RpcResponsePayload,
+  RpcStatusPayload,
   TabbarUpdatePayload,
   WalletconnectPairingPayload,
 } from "./contracts";
@@ -11,6 +12,7 @@ export type HostDispatchHandlers = {
   onProviderEvent?: (payload: ProviderEventPayload) => void;
   onWalletconnectPairing?: (payload: WalletconnectPairingPayload) => void;
   onTabbarUpdate?: (payload: TabbarUpdatePayload) => void;
+  onRpcStatus?: (payload: RpcStatusPayload) => void;
 };
 
 export function handleHostDispatch(message: unknown, handlers: HostDispatchHandlers) {
@@ -38,6 +40,10 @@ export function handleHostDispatch(message: unknown, handlers: HostDispatchHandl
   }
   if (candidate.kind === "tabbarUpdate") {
     handlers.onTabbarUpdate?.((candidate.payload ?? {}) as TabbarUpdatePayload);
+    return;
+  }
+  if (candidate.kind === "rpcStatus") {
+    handlers.onRpcStatus?.((candidate.payload ?? {}) as RpcStatusPayload);
     return;
   }
 
