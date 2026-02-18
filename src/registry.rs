@@ -378,7 +378,11 @@ pub fn handle_launcher_ipc(
                         .as_ref()
                         .ok_or_else(|| anyhow!("Network not configured"))?;
                     tracing::info!("launcher: fetching dapp list from logs");
-                    let dapps = list_dapps(devnet)?;
+                    let mut dapps = list_dapps(devnet)?;
+                    if let Some(studio_dapp_id) = devnet.studio_dapp_id {
+                        let studio_id = studio_dapp_id.to_string();
+                        dapps.retain(|dapp| dapp.dapp_id != studio_id);
+                    }
                     Ok(serde_json::to_value(dapps)?)
                 })()
                 .map_err(|e| e.to_string());
