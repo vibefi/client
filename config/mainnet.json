@@ -1,7 +1,6 @@
 {
   "chainId": 1,
   "rpcUrl": "https://eth.llamarpc.com",
-  "localNetwork": false,
   "testNetwork": false,
   "dappRegistry": "",
   "deployBlock": null,

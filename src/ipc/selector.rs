@@ -217,11 +217,11 @@ fn local_signer_requires_private_key(state: &AppState) -> bool {
 }
 
 fn has_configured_local_signer(state: &AppState) -> bool {
-    let resolved = state.resolved.as_ref();
-    resolved.map(|r| r.local_network).unwrap_or(false)
-        || resolved
-            .and_then(|r| r.developer_private_key.as_ref())
-            .is_some()
+    state
+        .resolved
+        .as_ref()
+        .and_then(|r| r.developer_private_key.as_ref())
+        .is_some()
 }
 
 fn resolve_local_signer_hex(state: &AppState, req: &IpcRequest) -> Result<String> {
@@ -235,12 +235,11 @@ fn resolve_local_signer_hex(state: &AppState, req: &IpcRequest) -> Result<String
         return Ok(private_key);
     }
 
-    let resolved = state.resolved.as_ref();
-    let is_local = resolved.map(|r| r.local_network).unwrap_or(false);
-    let explicit_key = resolved.and_then(|r| r.developer_private_key.clone());
-    if is_local {
-        Ok(explicit_key.unwrap_or_else(|| crate::DEMO_PRIVKEY_HEX.to_string()))
-    } else if let Some(key) = explicit_key {
+    let explicit_key = state
+        .resolved
+        .as_ref()
+        .and_then(|r| r.developer_private_key.clone());
+    if let Some(key) = explicit_key {
         Ok(key)
     } else {
         Err(anyhow!(

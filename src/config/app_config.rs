@@ -43,9 +43,6 @@ pub struct AppConfig {
     #[serde(default = "default_rpc_url")]
     pub rpcUrl: String,
 
-    #[serde(default)]
-    pub localNetwork: bool,
-
     pub testNetwork: bool,
 
     #[serde(default)]
