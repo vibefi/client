@@ -414,7 +414,7 @@ function App() {
                   onClick={() => void saveRpcAndIpfsSettings()}
                   disabled={savingRpcAndIpfs || loadingIpfs || loadingMaxConcurrentRpc}
                 >
-                  {savingRpcAndIpfs ? "Saving..." : "Save RPC & IPFS Settings"}
+                  {savingRpcAndIpfs ? "Saving..." : "Save"}
                 </button>
               </div>
             </>
