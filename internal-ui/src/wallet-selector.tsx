@@ -250,6 +250,7 @@ function App() {
         <div className="page-container compact connecting-view">
           <h2>Scan QR Code</h2>
           <div className="desc">Open a WalletConnect-compatible wallet and scan the QR code below.</div>
+          <div className="desc">Please note that not all wallets support test networks, therefore if you are attempting to connect to a test network, you may need to use MetaMask or another well supported mobile wallet.</div>
           {qrSvg && (
             <div className="qr-container">
               <img src={svgToDataUrl(qrSvg)} alt="WalletConnect QR code" />
