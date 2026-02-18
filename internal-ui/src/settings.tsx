@@ -161,10 +161,10 @@ function App() {
   const [loadingEndpoints, setLoadingEndpoints] = useState(true);
   const [loadingIpfs, setLoadingIpfs] = useState(true);
   const [ipfsDraft, setIpfsDraft] = useState<IpfsSettings>(DEFAULT_IPFS_SETTINGS);
-  const [savingIpfs, setSavingIpfs] = useState(false);
   const [maxConcurrentRpcInput, setMaxConcurrentRpcInput] = useState("");
   const [loadingMaxConcurrentRpc, setLoadingMaxConcurrentRpc] = useState(true);
-  const [savingMaxConcurrentRpc, setSavingMaxConcurrentRpc] = useState(false);
+  const [savingRpcAndIpfs, setSavingRpcAndIpfs] = useState(false);
+  const [openingLogs, setOpeningLogs] = useState(false);
 
   useEffect(() => {
     void Promise.all([loadEndpoints(), loadIpfsSettings(), loadMaxConcurrentRpc()]);
@@ -220,39 +220,41 @@ function App() {
     }
   };
 
-  const saveIpfsSettings = async () => {
-    setSavingIpfs(true);
-    try {
-      await settingsIpc("vibefi_setIpfsSettings", [{
-        fetchBackend: ipfsDraft.fetchBackend,
-        gatewayEndpoint: ipfsDraft.fetchBackend === "localnode" ? ipfsDraft.gatewayEndpoint.trim() : undefined,
-      }]);
-      setStatus({ text: "Saved", ok: true });
-    } catch (err: any) {
-      console.warn("[vibefi:settings] failed to save ipfs settings", err);
-      setStatus({ text: err?.message || String(err), ok: false });
-    } finally {
-      setSavingIpfs(false);
-    }
-  };
-
-  const saveMaxConcurrentRpc = async () => {
+  const saveRpcAndIpfsSettings = async () => {
     const max = Number.parseInt(maxConcurrentRpcInput.trim(), 10);
     if (!Number.isFinite(max) || max < 1) {
       setStatus({ text: "Max concurrent RPC must be a whole number >= 1", ok: false });
       return;
     }
 
-    setSavingMaxConcurrentRpc(true);
+    setSavingRpcAndIpfs(true);
     try {
-      await settingsIpc("vibefi_setMaxConcurrentRpc", [max]);
+      await settingsIpc("vibefi_saveSettings", [{
+        maxConcurrentRpc: max,
+        fetchBackend: ipfsDraft.fetchBackend,
+        gatewayEndpoint: ipfsDraft.fetchBackend === "localnode" ? ipfsDraft.gatewayEndpoint.trim() : undefined,
+      }]);
       setMaxConcurrentRpcInput(String(max));
       setStatus({ text: "Saved", ok: true });
     } catch (err: any) {
-      console.warn("[vibefi:settings] failed to save rpc max concurrency", err);
+      console.warn("[vibefi:settings] failed to save rpc/ipfs settings", err);
       setStatus({ text: err?.message || String(err), ok: false });
     } finally {
-      setSavingMaxConcurrentRpc(false);
+      setSavingRpcAndIpfs(false);
+    }
+  };
+
+  const openLogDirectory = async () => {
+    setOpeningLogs(true);
+    try {
+      const result = await settingsIpc("vibefi_openLogDirectory");
+      const path = typeof result === "string" && result.trim() ? result.trim() : null;
+      setStatus({ text: path ? `Opened log directory: ${path}` : "Opened log directory", ok: true });
+    } catch (err: any) {
+      console.warn("[vibefi:settings] failed to open log directory", err);
+      setStatus({ text: err?.message || String(err), ok: false });
+    } finally {
+      setOpeningLogs(false);
     }
   };
 
@@ -354,13 +356,8 @@ function App() {
                   step={1}
                   value={maxConcurrentRpcInput}
                   onChange={(e) => setMaxConcurrentRpcInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void saveMaxConcurrentRpc(); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") void saveRpcAndIpfsSettings(); }}
                 />
-                <div className="ipfs-actions">
-                  <button className="primary" onClick={() => void saveMaxConcurrentRpc()} disabled={savingMaxConcurrentRpc}>
-                    {savingMaxConcurrentRpc ? "Saving..." : "Save RPC Concurrency"}
-                  </button>
-                </div>
               </>
             )}
           </div>
@@ -412,13 +409,27 @@ function App() {
               ) : null}
 
               <div className="ipfs-actions">
-                <button className="primary" onClick={() => void saveIpfsSettings()} disabled={savingIpfs}>
-                  {savingIpfs ? "Saving..." : "Save IPFS Settings"}
+                <button
+                  className="primary"
+                  onClick={() => void saveRpcAndIpfsSettings()}
+                  disabled={savingRpcAndIpfs || loadingIpfs || loadingMaxConcurrentRpc}
+                >
+                  {savingRpcAndIpfs ? "Saving..." : "Save RPC & IPFS Settings"}
                 </button>
               </div>
             </>
           )}
           {status && <div className={`status ${status.ok ? "ok" : "err"}`}>{status.text}</div>}
+        </div>
+
+        <div className="section">
+          <h2>Logs</h2>
+          <div className="muted">Open the client log folder to quickly collect files for support/debugging.</div>
+          <div className="ipfs-actions">
+            <button className="secondary" onClick={() => void openLogDirectory()} disabled={openingLogs}>
+              {openingLogs ? "Opening..." : "Open Log Directory"}
+            </button>
+          </div>
         </div>
       </div>
     </>
