@@ -221,6 +221,8 @@ fn has_configured_local_signer(state: &AppState) -> bool {
         .resolved
         .as_ref()
         .and_then(|r| r.developer_private_key.as_ref())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
         .is_some()
 }
 
