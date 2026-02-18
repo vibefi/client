@@ -49,6 +49,10 @@ const DEFAULT_ROUTERS = [
   "https://cid.contact",
   "https://indexer.pinata.cloud"
 ];
+const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
+const MAX_FETCH_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [250, 500];
+const FETCH_ATTEMPT_GRACE_MS = 5_000;
 
 let heliaPromise = null;
 
@@ -110,13 +114,24 @@ function withHardTimeout(promise, ms, label) {
   });
 }
 
+function resolveTimeoutMs(timeoutMs) {
+  return Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Number(timeoutMs)
+    : DEFAULT_FETCH_TIMEOUT_MS;
+}
+
+function sleep(ms) {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function fetchIpfsInner(url, timeoutMs) {
   const { cid, path } = parseIpfsUrl(url);
   const { fs } = await getHelia();
 
-  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Number(timeoutMs)
-    : 30_000;
+  const timeout = resolveTimeoutMs(timeoutMs);
 
   const controller = new AbortController();
   const { signal } = controller;
@@ -157,17 +172,32 @@ async function fetchIpfsInner(url, timeoutMs) {
 }
 
 async function fetchIpfs(url, timeoutMs) {
-  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Number(timeoutMs)
-    : 30_000;
-
-  // Belt-and-suspenders: wrap the entire fetch in a hard timeout promise race
-  // so we always respond even if the Helia internals swallow the abort.
-  return withHardTimeout(
-    fetchIpfsInner(url, timeoutMs),
-    timeout + 5_000, // 5s grace beyond the inner timeout
-    url,
-  );
+  const timeout = resolveTimeoutMs(timeoutMs);
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    try {
+      log(`fetch attempt ${attempt}/${MAX_FETCH_ATTEMPTS}: ${url}`);
+      // Belt-and-suspenders: wrap each attempt in a hard timeout promise race
+      // so we always respond even if the Helia internals swallow the abort.
+      return await withHardTimeout(
+        fetchIpfsInner(url, timeout),
+        timeout + FETCH_ATTEMPT_GRACE_MS,
+        `${url} (attempt ${attempt}/${MAX_FETCH_ATTEMPTS})`,
+      );
+    } catch (error) {
+      lastError = error;
+      if (attempt >= MAX_FETCH_ATTEMPTS) break;
+      const retryDelay = RETRY_DELAYS_MS[attempt - 1] ?? 0;
+      log(
+        `fetch attempt ${attempt}/${MAX_FETCH_ATTEMPTS} failed for ${url}: `
+        + `${error instanceof Error ? error.message : String(error)}; `
+        + `retrying in ${retryDelay}ms`
+      );
+      await sleep(retryDelay);
+    }
+  }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`fetch failed after ${MAX_FETCH_ATTEMPTS} attempts: ${message}`);
 }
 
 async function handleCommand(msg) {

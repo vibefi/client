@@ -47,7 +47,7 @@ A JSON file passed via `--config`. This is the primary source for network and co
   "ipfsFetchBackend": "helia",        // "helia" (verified fetch) or "localnode"
   "ipfsHeliaGateways": [...],         // list of Helia trustless gateways
   "ipfsHeliaRouters": [...],          // list of Helia DHT routers
-  "ipfsHeliaTimeoutMs": 30000,        // Helia fetch timeout in milliseconds
+  "ipfsHeliaTimeoutMs": 15000,        // Helia fetch timeout in milliseconds
   "cacheDir": null,                   // bundle cache directory (default: OS cache dir / VibeFi)
   "walletConnect": {                  // optional WalletConnect settings
     "projectId": "...",
@@ -228,6 +228,7 @@ Dapp bundles are fetched from IPFS using one of two backends, configurable in Se
 - **Local IPFS Node**: For advanced users running their own IPFS daemon (e.g. Kubo). Fetches from `http://127.0.0.1:8080` by default. The local node is implicitly trusted since you control it.
 
 Helia is the recommended default because it provides strong integrity guarantees without requiring any local infrastructure.
+Helia fetches also automatically retry up to 3 total attempts with short backoff for transient network failures.
 
 ## What is sandboxed?
 
