@@ -38,7 +38,7 @@ const wcStorage = new FileKeyValueStorage(wcStoragePath);
 const projectId = process.env.VIBEFI_WC_PROJECT_ID || process.env.WC_PROJECT_ID || "";
 const relayUrl = process.env.VIBEFI_WC_RELAY_URL || process.env.WC_RELAY_URL || undefined;
 const metadataName = process.env.VIBEFI_WC_METADATA_NAME || "VibeFi Desktop";
-const metadataUrl = process.env.VIBEFI_WC_METADATA_URL || "https://vibefi.local";
+const metadataUrl = process.env.VIBEFI_WC_METADATA_URL || "https://vibefi.dev";
 const metadataDesc = process.env.VIBEFI_WC_METADATA_DESC || "VibeFi desktop WalletConnect bridge";
 const metadataIcon = process.env.VIBEFI_WC_METADATA_ICON || "";
 const connectTimeoutMs = Number.parseInt(process.env.VIBEFI_WC_CONNECT_TIMEOUT_MS || "180000", 10);
@@ -159,14 +159,12 @@ function parseAccounts(result) {
     .filter((entry) => typeof entry === "string");
 }
 
-async function ensureProvider(requiredChainId) {
+async function ensureProvider(chains) {
   if (provider) return provider;
-  const preferred = Number.isFinite(requiredChainId) ? Number(requiredChainId) : 1;
-  const optionalChains = uniqueNumbers([preferred, 1, 11155111, 31337]);
-  log(`init provider optionalChains=${optionalChains.join(",")}`);
+  log(`init provider chains=${chains.join(",")}`);
   provider = await EthereumProvider.init({
     projectId,
-    optionalChains,
+    chains,
     showQrModal: false,
     relayUrl,
     storage: wcStorage,
@@ -209,12 +207,11 @@ async function ensureProvider(requiredChainId) {
 }
 
 async function connect(requiredChainId) {
-  const wc = await ensureProvider(requiredChainId);
-  const chainId = Number.isFinite(requiredChainId) ? Number(requiredChainId) : undefined;
-  const connectChains = uniqueNumbers([chainId, 1, 11155111, 31337]);
+  const chains = uniqueNumbers([requiredChainId, 1, 11155111]);
+  const wc = await ensureProvider(chains);
   if (!wc.session) {
-    log(`connecting session optionalChains=${connectChains.join(",")}`);
-    const connectPromise = wc.connect({ optionalChains: connectChains });
+    log(`connecting session chains=${chains.join(",")}`);
+    const connectPromise = wc.connect({ chains });
     await Promise.race([
       connectPromise,
       new Promise((_, reject) =>
