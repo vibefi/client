@@ -22,6 +22,12 @@ pub fn parse_string_env(key: &str) -> Option<String> {
     }
 }
 
+/// Read an env var as a trimmed, non-empty `u64`.
+pub fn parse_u64_env(key: &str) -> Option<u64> {
+    let val = parse_string_env(key)?;
+    val.parse::<u64>().ok()
+}
+
 /// Read an env var as a `PathBuf`.
 #[allow(dead_code)]
 pub fn parse_path_env(key: &str) -> Option<PathBuf> {
@@ -91,5 +97,19 @@ mod tests {
             Some(PathBuf::from("/tmp/test"))
         );
         unsafe { std::env::remove_var("_TEST_PATH_ENV") };
+    }
+
+    #[test]
+    fn parse_u64_env_parses_uint() {
+        unsafe { std::env::set_var("_TEST_U64_ENV", "42") };
+        assert_eq!(parse_u64_env("_TEST_U64_ENV"), Some(42));
+        unsafe { std::env::remove_var("_TEST_U64_ENV") };
+    }
+
+    #[test]
+    fn parse_u64_env_rejects_invalid() {
+        unsafe { std::env::set_var("_TEST_U64_BAD_ENV", "abc") };
+        assert_eq!(parse_u64_env("_TEST_U64_BAD_ENV"), None);
+        unsafe { std::env::remove_var("_TEST_U64_BAD_ENV") };
     }
 }
