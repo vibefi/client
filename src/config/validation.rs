@@ -59,7 +59,7 @@ mod tests {
             ipfsFetchBackend: IpfsFetchBackend::default(),
             ipfsHeliaGateways: Vec::new(),
             ipfsHeliaRouters: Vec::new(),
-            ipfsHeliaTimeoutMs: 30_000,
+            ipfsHeliaTimeoutMs: 15_000,
             cacheDir: None,
             walletConnect: None,
         }
