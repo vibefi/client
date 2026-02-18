@@ -38,10 +38,16 @@ pub fn handle_ipc(
     }
 
     if provider == Some(KnownProviderId::Settings) {
-        if req.method == "vibefi_setEndpoints"
-            || req.method == "vibefi_setIpfsSettings"
-            || req.method == "vibefi_setMaxConcurrentRpc"
-        {
+        let settings_write_method = matches!(
+            req.method.as_str(),
+            "vibefi_setEndpoints"
+                | "vibefi_setIpfsSettings"
+                | "vibefi_setMaxConcurrentRpc"
+                | "vibefi_setRpcAndIpfsSettings"
+                | "vibefi_saveSettings"
+                | "vibefi_openLogDirectory"
+        );
+        if settings_write_method {
             if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::Settings) {
                 tracing::warn!(
                     webview_id,
