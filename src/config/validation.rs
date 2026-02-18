@@ -50,6 +50,7 @@ mod tests {
             chainId: 1,
             deployBlock: None,
             dappRegistry: String::new(),
+            studioDappId: None,
             developerPrivateKey: None,
             rpcUrl: "http://127.0.0.1:8546".to_string(),
             localNetwork: false,

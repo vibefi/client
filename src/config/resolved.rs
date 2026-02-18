@@ -16,6 +16,7 @@ pub struct ResolvedConfig {
     pub chain_id: u64,
     pub deploy_block: Option<u64>,
     pub dapp_registry: String,
+    pub studio_dapp_id: Option<u64>,
     pub local_network: bool,
     pub rpc_url: String,
 
@@ -53,6 +54,7 @@ impl ResolvedConfig {
             rpc_url = %self.rpc_url,
             local_network = self.local_network,
             dapp_registry = %self.dapp_registry,
+            studio_dapp_id = ?self.studio_dapp_id,
             ipfs_backend = self.ipfs_fetch_backend.as_str(),
             ipfs_gateway = %self.ipfs_gateway,
             cache_dir = %self.cache_dir.display(),

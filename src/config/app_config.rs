@@ -35,6 +35,9 @@ pub struct AppConfig {
     pub dappRegistry: String,
 
     #[serde(default)]
+    pub studioDappId: Option<u64>,
+
+    #[serde(default)]
     pub developerPrivateKey: Option<String>,
 
     #[serde(default = "default_rpc_url")]
