@@ -321,6 +321,14 @@ pub fn handle_open_settings(
     }
 }
 
+pub fn handle_rpc_pending_changed(manager: &WebViewManager, webview_id: &str, count: u32) {
+    if let Some(tb) = manager.tab_bar.as_ref() {
+        if let Err(err) = ui_bridge::update_rpc_status(tb, webview_id, count) {
+            tracing::warn!(error = %err, "failed to dispatch rpc status update");
+        }
+    }
+}
+
 pub fn handle_rpc_result(
     manager: &WebViewManager,
     webview_id: String,
