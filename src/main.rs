@@ -22,7 +22,6 @@ use clap::Parser;
 use std::{
     collections::HashMap,
     collections::VecDeque,
-    env,
     sync::{Arc, Mutex},
 };
 use tao::{
@@ -59,16 +58,6 @@ static PRELOAD_SETTINGS_JS: &str = include_str!("../internal-ui/dist/preload-set
 /// This matches a common dev key used across many tutorials.
 pub(crate) static DEMO_PRIVKEY_HEX: &str =
     "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
-const STUDIO_PLACEHOLDER_CID: &str =
-    "bafybeifillstudiofromdaoexecuteproposalreplacecidplaceholder0000";
-
-fn studio_root_cid() -> String {
-    env::var("VIBEFI_STUDIO_CID")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| STUDIO_PLACEHOLDER_CID.to_string())
-}
 
 fn main() -> Result<()> {
     apply_linux_env_defaults();
@@ -472,17 +461,34 @@ fn main() -> Result<()> {
                         let proxy_clone = proxy.clone();
                         let studio_placeholder_id_clone = studio_placeholder_id.clone();
                         std::thread::spawn(move || {
-                            let result = if let Some(studio_dist_dir) = studio_dist_dir {
+                            let result = (|| -> Result<std::path::PathBuf> {
+                                if let Some(studio_dist_dir) = studio_dist_dir {
+                                    tracing::info!(
+                                        studio_dist_dir = %studio_dist_dir.display(),
+                                        "loading Studio from local --studio-bundle"
+                                    );
+                                    return Ok(studio_dist_dir);
+                                }
+                                let studio_dapp_id = state_clone
+                                    .resolved
+                                    .as_ref()
+                                    .and_then(|resolved| resolved.studio_dapp_id)
+                                    .ok_or_else(|| anyhow::anyhow!("config missing studioDappId"))?;
+                                let resolved = state_clone
+                                    .resolved
+                                    .as_ref()
+                                    .ok_or_else(|| anyhow::anyhow!("Network not configured"))?;
+                                let studio_cid = registry::resolve_published_root_cid_by_dapp_id(
+                                    resolved,
+                                    studio_dapp_id,
+                                )?;
                                 tracing::info!(
-                                    studio_dist_dir = %studio_dist_dir.display(),
-                                    "loading Studio from local --studio-bundle"
+                                    dapp_id = studio_dapp_id,
+                                    cid = %studio_cid,
+                                    "loading Studio from DappRegistry"
                                 );
-                                Ok(studio_dist_dir)
-                            } else {
-                                let studio_cid = studio_root_cid();
-                                tracing::info!(cid = %studio_cid, "loading Studio from CID");
                                 registry::prepare_dapp_dist(&state_clone, &studio_cid, None)
-                            }
+                            })()
                             .map_err(|err| err.to_string());
                             let _ = proxy_clone.send_event(UserEvent::StudioBundleResolved {
                                 placeholder_id: studio_placeholder_id_clone,
@@ -543,10 +549,10 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn apply_linux_env_defaults() {
-    if env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         // Safety: this runs at process startup before any threads are spawned.
         unsafe {
-            env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
     }
 }

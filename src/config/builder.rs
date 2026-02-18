@@ -2,7 +2,7 @@ use reqwest::blocking::Client as HttpClient;
 use std::path::PathBuf;
 
 use super::app_config::{AppConfig, default_ipfs_helia_gateways, default_ipfs_helia_routers};
-use super::env::{parse_bool_env, parse_string_env};
+use super::env::{parse_bool_env, parse_string_env, parse_u64_env};
 use super::resolved::ResolvedConfig;
 
 fn embedded_walletconnect_project_id() -> Option<String> {
@@ -32,6 +32,7 @@ impl ConfigBuilder {
 
         // -- RPC URL: env override takes precedence --
         let rpc_url = parse_string_env("VIBEFI_RPC_URL").unwrap_or_else(|| config.rpcUrl.clone());
+        let studio_dapp_id = parse_u64_env("VIBEFI_STUDIO_DAPP_ID").or(config.studioDappId);
 
         // -- IPFS --
         let ipfs_api = config
@@ -90,6 +91,7 @@ impl ConfigBuilder {
             chain_id: config.chainId,
             deploy_block: config.deployBlock,
             dapp_registry: config.dappRegistry.clone(),
+            studio_dapp_id,
             local_network: config.localNetwork,
             rpc_url,
             ipfs_api,

@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, B256, Bytes, Log, U256};
 use alloy_sol_types::{SolEvent, sol};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -257,6 +257,28 @@ pub fn list_dapps(devnet: &ResolvedConfig) -> Result<Vec<DappInfo>> {
         }
     }
     Ok(result)
+}
+
+pub fn resolve_published_root_cid_by_dapp_id(devnet: &ResolvedConfig, studio_dapp_id: u64) -> Result<String> {
+    let dapps = list_dapps(devnet)?;
+    let studio = dapps
+        .into_iter()
+        .find(|dapp| dapp.dapp_id == studio_dapp_id.to_string())
+        .ok_or_else(|| anyhow!("studio dappId {} not found in DappRegistry", studio_dapp_id))?;
+    if studio.status != "Published" {
+        bail!(
+            "studio dappId {} latest version is {}, expected Published",
+            studio_dapp_id,
+            studio.status
+        );
+    }
+    if studio.root_cid.trim().is_empty() {
+        bail!(
+            "studio dappId {} latest published version has an empty rootCid",
+            studio_dapp_id
+        );
+    }
+    Ok(studio.root_cid)
 }
 
 fn rpc_get_logs(devnet: &ResolvedConfig, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
