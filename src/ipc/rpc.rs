@@ -44,27 +44,29 @@ pub(super) fn proxy_rpc(state: &AppState, req: &IpcRequest) -> Result<Value> {
         "rpc request"
     );
 
-    // Try RpcEndpointManager first (supports failover)
-    let v = {
-        let mut mgr = state
-            .rpc_manager
-            .lock()
-            .expect("poisoned rpc_manager lock while proxying RPC request");
-        if let Some(m) = mgr.as_mut() {
-            m.send_rpc(&payload)?
-        } else {
-            // Fallback: use resolved config directly
-            let resolved = state.resolved.as_ref().ok_or_else(|| {
-                anyhow!("No RPC endpoint configured. Provide a config file with rpcUrl.")
-            })?;
-            let res = resolved
-                .http_client
-                .post(&resolved.rpc_url)
-                .json(&payload)
-                .send()
-                .context("rpc request failed")?;
-            res.json().context("rpc decode failed")?
-        }
+    // Clone the manager out of the lock so the outer mutex is not held during
+    // the HTTP call. RpcEndpointManager is Clone (Arc internals) so this is cheap.
+    let mgr_clone = state
+        .rpc_manager
+        .lock()
+        .expect("poisoned rpc_manager lock while proxying RPC request")
+        .as_ref()
+        .cloned();
+
+    let v = if let Some(m) = mgr_clone {
+        m.send_rpc(&payload)?
+    } else {
+        // Fallback: use resolved config directly
+        let resolved = state.resolved.as_ref().ok_or_else(|| {
+            anyhow!("No RPC endpoint configured. Provide a config file with rpcUrl.")
+        })?;
+        let res = resolved
+            .http_client
+            .post(&resolved.rpc_url)
+            .json(&payload)
+            .send()
+            .context("rpc request failed")?;
+        res.json().context("rpc decode failed")?
     };
 
     let result_str = v

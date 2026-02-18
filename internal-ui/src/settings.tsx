@@ -31,6 +31,8 @@ type IpfsSettings = {
   defaultGatewayEndpoint: string;
 };
 
+const DEFAULT_MAX_CONCURRENT_RPC = 10;
+
 const DEFAULT_IPFS_SETTINGS: IpfsSettings = {
   fetchBackend: "helia",
   gatewayEndpoint: "http://127.0.0.1:8080",
@@ -145,6 +147,12 @@ function parseIpfsSettings(value: unknown): IpfsSettings {
   };
 }
 
+function parseMaxConcurrentRpc(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_MAX_CONCURRENT_RPC;
+  return Math.max(1, Math.floor(parsed));
+}
+
 function App() {
   const [endpoints, setEndpoints] = useState<RpcEndpoint[]>([]);
   const [newUrl, setNewUrl] = useState("");
@@ -154,9 +162,12 @@ function App() {
   const [loadingIpfs, setLoadingIpfs] = useState(true);
   const [ipfsDraft, setIpfsDraft] = useState<IpfsSettings>(DEFAULT_IPFS_SETTINGS);
   const [savingIpfs, setSavingIpfs] = useState(false);
+  const [maxConcurrentRpcInput, setMaxConcurrentRpcInput] = useState("");
+  const [loadingMaxConcurrentRpc, setLoadingMaxConcurrentRpc] = useState(true);
+  const [savingMaxConcurrentRpc, setSavingMaxConcurrentRpc] = useState(false);
 
   useEffect(() => {
-    void Promise.all([loadEndpoints(), loadIpfsSettings()]);
+    void Promise.all([loadEndpoints(), loadIpfsSettings(), loadMaxConcurrentRpc()]);
   }, []);
 
   const loadEndpoints = async () => {
@@ -185,6 +196,19 @@ function App() {
     }
   };
 
+  const loadMaxConcurrentRpc = async () => {
+    setLoadingMaxConcurrentRpc(true);
+    try {
+      const result = await settingsIpc("vibefi_getMaxConcurrentRpc");
+      setMaxConcurrentRpcInput(String(parseMaxConcurrentRpc(result)));
+    } catch (error) {
+      console.warn("[vibefi:settings] failed to load rpc max concurrency", error);
+      setMaxConcurrentRpcInput(String(DEFAULT_MAX_CONCURRENT_RPC));
+    } finally {
+      setLoadingMaxConcurrentRpc(false);
+    }
+  };
+
   const saveEndpoints = async (next: RpcEndpoint[]) => {
     try {
       await settingsIpc("vibefi_setEndpoints", [next]);
@@ -209,6 +233,26 @@ function App() {
       setStatus({ text: err?.message || String(err), ok: false });
     } finally {
       setSavingIpfs(false);
+    }
+  };
+
+  const saveMaxConcurrentRpc = async () => {
+    const max = Number.parseInt(maxConcurrentRpcInput.trim(), 10);
+    if (!Number.isFinite(max) || max < 1) {
+      setStatus({ text: "Max concurrent RPC must be a whole number >= 1", ok: false });
+      return;
+    }
+
+    setSavingMaxConcurrentRpc(true);
+    try {
+      await settingsIpc("vibefi_setMaxConcurrentRpc", [max]);
+      setMaxConcurrentRpcInput(String(max));
+      setStatus({ text: "Saved", ok: true });
+    } catch (err: any) {
+      console.warn("[vibefi:settings] failed to save rpc max concurrency", err);
+      setStatus({ text: err?.message || String(err), ok: false });
+    } finally {
+      setSavingMaxConcurrentRpc(false);
     }
   };
 
@@ -296,6 +340,29 @@ function App() {
               />
             </div>
             <button className="secondary mb-0" onClick={addEndpoint}>Add</button>
+          </div>
+
+          <div className="field mt-3">
+            <label>Max Concurrent RPC</label>
+            {loadingMaxConcurrentRpc ? (
+              <div className="empty">Loading...</div>
+            ) : (
+              <>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={maxConcurrentRpcInput}
+                  onChange={(e) => setMaxConcurrentRpcInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void saveMaxConcurrentRpc(); }}
+                />
+                <div className="ipfs-actions">
+                  <button className="primary" onClick={() => void saveMaxConcurrentRpc()} disabled={savingMaxConcurrentRpc}>
+                    {savingMaxConcurrentRpc ? "Saving..." : "Save RPC Concurrency"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

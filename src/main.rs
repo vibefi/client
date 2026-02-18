@@ -34,7 +34,7 @@ use tao::{
 
 use bundle::{BundleConfig, build_bundle, verify_manifest};
 use config::{CliArgs, ConfigBuilder, load_config};
-use rpc_manager::{RpcEndpoint, RpcEndpointManager};
+use rpc_manager::{DEFAULT_MAX_CONCURRENT_RPC, RpcEndpoint, RpcEndpointManager};
 use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, WebViewHost, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
@@ -114,7 +114,10 @@ fn main() -> Result<()> {
         } else {
             user_settings.rpc_endpoints
         };
-        Some(RpcEndpointManager::new(endpoints, res.http_client.clone()))
+        let max_concurrent = user_settings
+            .max_concurrent_rpc
+            .unwrap_or(DEFAULT_MAX_CONCURRENT_RPC);
+        Some(RpcEndpointManager::new(endpoints, res.http_client.clone(), max_concurrent))
     } else {
         None
     };

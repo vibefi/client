@@ -21,6 +21,8 @@ pub struct UserSettings {
     #[serde(default)]
     pub rpc_endpoints: Vec<RpcEndpoint>,
     #[serde(default)]
+    pub max_concurrent_rpc: Option<usize>,
+    #[serde(default)]
     pub ipfs: IpfsUserSettings,
 }
 
@@ -28,6 +30,7 @@ impl Default for UserSettings {
     fn default() -> Self {
         Self {
             rpc_endpoints: Vec::new(),
+            max_concurrent_rpc: None,
             ipfs: IpfsUserSettings::default(),
         }
     }

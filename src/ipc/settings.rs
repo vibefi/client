@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::config::IpfsFetchBackend;
 use crate::ipc_contract::IpcRequest;
-use crate::rpc_manager::RpcEndpoint;
+use crate::rpc_manager::{DEFAULT_MAX_CONCURRENT_RPC, RpcEndpoint};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -48,11 +48,11 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
 
             // Update the live manager
             {
-                let mut mgr = state
+                let mgr = state
                     .rpc_manager
                     .lock()
                     .expect("poisoned rpc_manager lock while updating settings endpoints");
-                if let Some(m) = mgr.as_mut() {
+                if let Some(m) = mgr.as_ref() {
                     m.set_endpoints(endpoints.clone());
                 }
             }
@@ -128,6 +128,42 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                 crate::settings::save_settings(config_path, &settings)?;
             }
 
+            Ok(Value::Bool(true))
+        }
+        "vibefi_getMaxConcurrentRpc" => {
+            let mgr = state
+                .rpc_manager
+                .lock()
+                .expect("poisoned rpc_manager lock while reading max concurrent rpc");
+            let max = mgr
+                .as_ref()
+                .map(|m| m.get_max_concurrent())
+                .unwrap_or(DEFAULT_MAX_CONCURRENT_RPC);
+            Ok(Value::Number(max.into()))
+        }
+        "vibefi_setMaxConcurrentRpc" => {
+            let max: usize = serde_json::from_value(
+                req.params
+                    .get(0)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("missing max parameter"))?,
+            )?;
+            {
+                let mgr = state
+                    .rpc_manager
+                    .lock()
+                    .expect("poisoned rpc_manager lock while updating max concurrent rpc");
+                if let Some(m) = mgr.as_ref() {
+                    m.set_max_concurrent(max);
+                }
+            }
+            if let Some(ref config_path) =
+                state.resolved.as_ref().and_then(|r| r.config_path.clone())
+            {
+                let mut settings = crate::settings::load_settings(config_path);
+                settings.max_concurrent_rpc = Some(max);
+                crate::settings::save_settings(config_path, &settings)?;
+            }
             Ok(Value::Bool(true))
         }
         _ => Err(anyhow!("Unsupported settings method: {}", req.method)),

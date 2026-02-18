@@ -38,7 +38,10 @@ pub fn handle_ipc(
     }
 
     if provider == Some(KnownProviderId::Settings) {
-        if req.method == "vibefi_setEndpoints" || req.method == "vibefi_setIpfsSettings" {
+        if req.method == "vibefi_setEndpoints"
+            || req.method == "vibefi_setIpfsSettings"
+            || req.method == "vibefi_setMaxConcurrentRpc"
+        {
             if manager.app_kind_for_id(webview_id) != Some(AppWebViewKind::Settings) {
                 tracing::warn!(
                     webview_id,
