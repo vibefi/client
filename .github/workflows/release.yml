@@ -14,25 +14,77 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   CARGO_PACKAGER_VERSION: "0.11.8"
   VIBEFI_EMBED_WC_PROJECT_ID: ${{ secrets.VIBEFI_WC_PROJECT_ID }}
 
 jobs:
+  prepare:
+    name: Resolve Release Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_version: ${{ steps.meta.outputs.release_version }}
+      release_ref: ${{ steps.meta.outputs.release_ref }}
+      release_sha: ${{ steps.meta.outputs.release_sha }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Resolve and validate release metadata
+      id: meta
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+        if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+          echo "Error: release tag must match vX.Y.Z, got: $TAG"
+          exit 1
+        fi
+
+        git fetch --tags --force
+        if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+          echo "Error: tag does not exist in repository: $TAG"
+          exit 1
+        fi
+
+        SHA="$(git rev-list -n 1 "refs/tags/$TAG")"
+        VERSION="${TAG#v}"
+        REF="refs/tags/$TAG"
+
+        echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+        echo "release_version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "release_ref=$REF" >> "$GITHUB_OUTPUT"
+        echo "release_sha=$SHA" >> "$GITHUB_OUTPUT"
+
+        echo "Resolved release metadata:"
+        echo "  tag: $TAG"
+        echo "  version: $VERSION"
+        echo "  ref: $REF"
+        echo "  sha: $SHA"
+
   build-macos:
     name: Build macOS (${{ matrix.target }})
     runs-on: macos-latest
+    needs: prepare
     strategy:
       matrix:
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
-    
+
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
-    
+        ref: ${{ needs.prepare.outputs.release_ref }}
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -63,33 +115,46 @@ jobs:
     - name: Fetch Bun binaries for packaging
       run: ./vendor/fetch-bun.sh
 
-    - name: Resolve and validate release version
+    - name: Set package version from release tag
       shell: bash
       run: |
         set -euo pipefail
-        TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
-        if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-          echo "Error: release tag must match vX.Y.Z, got: $TAG"
-          exit 1
-        fi
-        VERSION="${TAG#v}"
-        echo "Using release version: $VERSION (from tag: $TAG)"
-        sed -E -i.bak "s/^version = \".*\"$/version = \"$VERSION\"/" Cargo.toml
-        rm -f Cargo.toml.bak
-        grep -n '^version = "' Cargo.toml
+        VERSION="${{ needs.prepare.outputs.release_version }}"
+        awk -v ver="$VERSION" '
+          BEGIN { in_pkg=0; updated=0 }
+          {
+            if ($0 ~ /^\[package\][[:space:]]*$/) { in_pkg=1; print; next }
+            if (in_pkg && $0 ~ /^\[/) {
+              if (!updated) { print "version = \"" ver "\""; updated=1 }
+              in_pkg=0
+            }
+            if (in_pkg && $0 ~ /^version = ".*"$/) {
+              print "version = \"" ver "\""
+              updated=1
+              next
+            }
+            print
+          }
+          END {
+            if (in_pkg && !updated) { print "version = \"" ver "\""; updated=1 }
+            if (!updated) exit 42
+          }
+        ' Cargo.toml > Cargo.toml.tmp
+        mv Cargo.toml.tmp Cargo.toml
+        grep -n '^version = "' Cargo.toml | head -1
 
     - name: Build release binary
       run: cargo build --release --target ${{ matrix.target }}
-    
+
     - name: Package application
       run: |
         cargo packager --release \
           --target ${{ matrix.target }} \
           --formats app,dmg
-    
+
     - name: List packaged outputs
       run: ls -lRh target/packager/
-    
+
     - name: Determine arch label
       id: arch
       run: |
@@ -101,14 +166,13 @@ jobs:
     - name: Prepare artifacts
       run: |
         mkdir -p artifacts
-        # Check for DMG files
         if ls target/packager/*.dmg 1> /dev/null 2>&1; then
           cp target/packager/*.dmg artifacts/
           echo "DMG files copied successfully"
         else
           echo "Warning: No DMG files found in target/packager/"
         fi
-        # Archive .app bundles with arch-specific names
+
         cd target/packager
         found_app=false
         for app in *.app; do
@@ -123,40 +187,33 @@ jobs:
           echo "Warning: No .app bundles found in target/packager/"
         fi
         cd ../..
+
         if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
           cp packaging/macos/install-vibefi-macos.sh artifacts/install-vibefi-macos.sh
         fi
-        # Verify we have at least some artifacts
+
         if [ ! "$(ls -A artifacts)" ]; then
           echo "Error: No artifacts were produced"
           exit 1
         fi
-    
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: vibefi-${{ matrix.target }}
+        name: vibefi-macos-${{ matrix.target }}
         path: artifacts/*
         if-no-files-found: error
         retention-days: 7
-    
-    - name: Upload to release
-      if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-        target_commitish: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.sha }}
-        files: artifacts/*
-        fail_on_unmatched_files: true
 
   build-linux:
     name: Build Linux (x86_64)
     runs-on: ubuntu-22.04
+    needs: prepare
 
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+        ref: ${{ needs.prepare.outputs.release_ref }}
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -178,40 +235,53 @@ jobs:
           libgtk-3-dev \
           libwebkit2gtk-4.1-dev \
           libayatana-appindicator3-dev
-    
+
     - name: Install Bun
       uses: oven-sh/setup-bun@v1
       with:
         bun-version: latest
-    
+
     - name: Install cargo-packager
       if: steps.cache-cargo-packager.outputs.cache-hit != 'true'
       run: cargo binstall --no-confirm cargo-packager@${{ env.CARGO_PACKAGER_VERSION }}
 
     - name: Verify cargo-packager
       run: cargo packager --version
-    
+
     - name: Fetch Bun binaries for packaging
       run: ./vendor/fetch-bun.sh
 
-    - name: Resolve and validate release version
+    - name: Set package version from release tag
       shell: bash
       run: |
         set -euo pipefail
-        TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
-        if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-          echo "Error: release tag must match vX.Y.Z, got: $TAG"
-          exit 1
-        fi
-        VERSION="${TAG#v}"
-        echo "Using release version: $VERSION (from tag: $TAG)"
-        sed -E -i.bak "s/^version = \".*\"$/version = \"$VERSION\"/" Cargo.toml
-        rm -f Cargo.toml.bak
-        grep -n '^version = "' Cargo.toml
-    
+        VERSION="${{ needs.prepare.outputs.release_version }}"
+        awk -v ver="$VERSION" '
+          BEGIN { in_pkg=0; updated=0 }
+          {
+            if ($0 ~ /^\[package\][[:space:]]*$/) { in_pkg=1; print; next }
+            if (in_pkg && $0 ~ /^\[/) {
+              if (!updated) { print "version = \"" ver "\""; updated=1 }
+              in_pkg=0
+            }
+            if (in_pkg && $0 ~ /^version = ".*"$/) {
+              print "version = \"" ver "\""
+              updated=1
+              next
+            }
+            print
+          }
+          END {
+            if (in_pkg && !updated) { print "version = \"" ver "\""; updated=1 }
+            if (!updated) exit 42
+          }
+        ' Cargo.toml > Cargo.toml.tmp
+        mv Cargo.toml.tmp Cargo.toml
+        grep -n '^version = "' Cargo.toml | head -1
+
     - name: Build release binary
       run: cargo build --release
-    
+
     - name: Package application
       run: |
         cargo packager --release \
@@ -230,25 +300,32 @@ jobs:
     - name: List packaged outputs
       run: ls -lRh target/packager/
 
-    - name: Upload to release
-      if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v2
+    - name: Prepare artifacts
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p artifacts
+        cp target/packager/*.deb artifacts/
+        cp target/packager/*.AppImage artifacts/
+        ls -l artifacts
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-        target_commitish: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.sha }}
-        files: |
-          target/packager/*.deb
-          target/packager/*.AppImage
-        fail_on_unmatched_files: true
+        name: vibefi-linux-x86_64
+        path: artifacts/*
+        if-no-files-found: error
+        retention-days: 7
 
   build-windows:
     name: Build Windows (x86_64)
     runs-on: windows-latest
+    needs: prepare
 
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+        ref: ${{ needs.prepare.outputs.release_ref }}
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -283,20 +360,34 @@ jobs:
       shell: pwsh
       run: Copy-Item -Path .\vendor\bun\bun-x86_64-pc-windows-gnu.exe -Destination .\vendor\bun\bun-x86_64-pc-windows-msvc.exe -Force
 
-    - name: Resolve and validate release version
+    - name: Set package version from release tag
       shell: pwsh
       run: |
-        $tag = "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
-        if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-          Write-Error "Release tag must match vX.Y.Z, got: $tag"
+        $version = "${{ needs.prepare.outputs.release_version }}"
+        $lines = Get-Content Cargo.toml
+        $inPackage = $false
+        $updated = $false
+        for ($i = 0; $i -lt $lines.Length; $i++) {
+          $line = $lines[$i]
+          if ($line -match '^\[package\]\s*$') {
+            $inPackage = $true
+            continue
+          }
+          if ($inPackage -and $line -match '^\[') {
+            break
+          }
+          if ($inPackage -and $line -match '^version = ".*"$') {
+            $lines[$i] = "version = `"$version`""
+            $updated = $true
+            break
+          }
+        }
+        if (-not $updated) {
+          Write-Error "Could not find version field in [package] section of Cargo.toml"
           exit 1
         }
-        $version = $tag.Substring(1)
-        Write-Host "Using release version: $version (from tag: $tag)"
-        $cargoToml = Get-Content Cargo.toml -Raw
-        $cargoToml = $cargoToml -replace '(?m)^version = ".*"$', "version = `"$version`""
-        Set-Content -Path Cargo.toml -Value $cargoToml -NoNewline
-        Select-String -Path Cargo.toml -Pattern '^version = "'
+        Set-Content -Path Cargo.toml -Value ($lines -join "`n") -NoNewline
+        $lines | Select-String -Pattern '^version = "' | Select-Object -First 1
 
     - name: Build release binary
       run: cargo build --release
@@ -308,11 +399,48 @@ jobs:
       shell: pwsh
       run: Get-ChildItem -Recurse .\target\packager\ | Format-List FullName, Length
 
-    - name: Upload to release
-      if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
+    - name: Prepare artifacts
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+        Copy-Item -Path .\target\packager\*.exe -Destination .\artifacts\
+        Get-ChildItem .\artifacts\ | Format-List FullName, Length
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: vibefi-windows-x86_64
+        path: artifacts/*
+        if-no-files-found: error
+        retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build-macos
+      - build-linux
+      - build-windows
+
+    steps:
+    - name: Download all build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: vibefi-*
+        merge-multiple: true
+        path: release-artifacts
+
+    - name: List release artifacts
+      shell: bash
+      run: |
+        set -euo pipefail
+        ls -lRh release-artifacts
+
+    - name: Upload assets to release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-        target_commitish: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.sha }}
-        files: target/packager/*.exe
+        tag_name: ${{ needs.prepare.outputs.release_tag }}
+        target_commitish: ${{ needs.prepare.outputs.release_sha }}
+        files: release-artifacts/*
         fail_on_unmatched_files: true
