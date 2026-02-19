@@ -108,7 +108,11 @@ fn main() -> Result<()> {
         let max_concurrent = user_settings
             .max_concurrent_rpc
             .unwrap_or(DEFAULT_MAX_CONCURRENT_RPC);
-        Some(RpcEndpointManager::new(endpoints, res.http_client.clone(), max_concurrent))
+        Some(RpcEndpointManager::new(
+            endpoints,
+            res.http_client.clone(),
+            max_concurrent,
+        ))
     } else {
         None
     };
@@ -605,13 +609,11 @@ fn main() -> Result<()> {
                                     .resolved
                                     .as_ref()
                                     .and_then(|resolved| resolved.studio_dapp_id)
-                                    .ok_or_else(|| anyhow::anyhow!("config missing studioDappId"))?;
-                                let resolved = state_clone
-                                    .resolved
-                                    .as_ref()
-                                    .ok_or_else(|| anyhow::anyhow!("Network not configured"))?;
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("config missing studioDappId")
+                                    })?;
                                 let studio_cid = registry::resolve_published_root_cid_by_dapp_id(
-                                    resolved,
+                                    &state_clone,
                                     studio_dapp_id,
                                 )?;
                                 tracing::info!(

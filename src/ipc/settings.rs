@@ -96,6 +96,12 @@ pub(super) fn handle_settings_ipc(state: &AppState, req: &IpcRequest) -> Result<
                     .cloned()
                     .ok_or_else(|| anyhow!("missing endpoints parameter"))?,
             )?;
+            if endpoints.is_empty() {
+                return Err(anyhow!("At least one RPC endpoint is required"));
+            }
+            if endpoints.iter().any(|ep| ep.url.trim().is_empty()) {
+                return Err(anyhow!("RPC endpoint URL cannot be empty"));
+            }
             tracing::info!(count = endpoints.len(), "settings set rpc endpoints");
 
             // Update the live manager

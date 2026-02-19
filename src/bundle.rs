@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
 };
 
@@ -16,12 +16,22 @@ pub struct BundleConfig {
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct BundleManifest {
     pub files: Vec<BundleManifestFile>,
+    #[serde(default)]
+    pub layout: Option<String>,
+    #[serde(default)]
+    pub constraints: Option<BundleConstraints>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct BundleManifestFile {
     pub path: String,
     pub bytes: u64,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct BundleConstraints {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
 }
 
 pub fn verify_manifest(bundle_dir: &Path) -> Result<()> {
@@ -60,6 +70,85 @@ pub fn verify_manifest(bundle_dir: &Path) -> Result<()> {
         }
     }
     tracing::info!(bundle_dir = %bundle_dir.display(), "bundle manifest verified");
+    Ok(())
+}
+
+fn load_manifest(bundle_dir: &Path) -> Result<BundleManifest> {
+    let manifest_path = bundle_dir.join("manifest.json");
+    let content = fs::read_to_string(&manifest_path).context("read manifest.json")?;
+    serde_json::from_str(&content).context("parse manifest.json")
+}
+
+fn is_static_html_layout(manifest: &BundleManifest) -> bool {
+    if manifest.layout.as_deref() == Some("static-html") {
+        return true;
+    }
+    manifest
+        .constraints
+        .as_ref()
+        .and_then(|c| c.kind.as_deref())
+        == Some("static-html")
+}
+
+fn validate_static_html_bundle_path(path: &Path) -> Result<()> {
+    if path.is_absolute() {
+        return Err(anyhow!("static-html bundle file path must be relative"));
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(anyhow!("invalid static-html bundle file path component"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_allowed_static_html_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("html" | "js" | "json")
+    )
+}
+
+fn copy_static_html_bundle(
+    bundle_dir: &Path,
+    dist_dir: &Path,
+    manifest: &BundleManifest,
+) -> Result<()> {
+    if dist_dir.exists() {
+        fs::remove_dir_all(dist_dir).context("clear static-html dist dir")?;
+    }
+    fs::create_dir_all(dist_dir).context("create static-html dist dir")?;
+
+    for entry in &manifest.files {
+        let rel = Path::new(&entry.path);
+        validate_static_html_bundle_path(rel)
+            .with_context(|| format!("invalid static-html bundle path: {}", entry.path))?;
+        if !is_allowed_static_html_extension(rel) {
+            return Err(anyhow!(
+                "static-html build only allows .html/.js/.json files, found: {}",
+                entry.path
+            ));
+        }
+        let source = bundle_dir.join(rel);
+        let dest = dist_dir.join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).context("create static-html output directories")?;
+        }
+        fs::copy(&source, &dest).with_context(|| {
+            format!(
+                "copy static-html bundle file {} -> {}",
+                source.display(),
+                dest.display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -125,6 +214,14 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
         dist_dir = %dist_dir.display(),
         "building bundle"
     );
+    let manifest = load_manifest(bundle_dir)?;
+    if is_static_html_layout(&manifest) {
+        tracing::info!("static-html layout detected; skipping Vite build");
+        copy_static_html_bundle(bundle_dir, dist_dir, &manifest)?;
+        tracing::info!(dist_dir = %dist_dir.display(), "static-html bundle copy completed");
+        return Ok(());
+    }
+
     write_standard_build_files(bundle_dir)?;
     let bun_bin = resolve_bun_binary().context("resolve bun runtime")?;
     tracing::debug!(

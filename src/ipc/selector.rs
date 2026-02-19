@@ -228,9 +228,7 @@ fn has_configured_local_signer(state: &AppState) -> bool {
 
 fn resolve_local_signer_hex(state: &AppState, req: &IpcRequest) -> Result<String> {
     if !is_test_network(state) {
-        return Err(anyhow!(
-            "Local signer is only available on test networks"
-        ));
+        return Err(anyhow!("Local signer is only available on test networks"));
     }
 
     if let Some(private_key) = requested_local_private_key(req) {
