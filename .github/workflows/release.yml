@@ -116,32 +116,7 @@ jobs:
       run: ./vendor/fetch-bun.sh
 
     - name: Set package version from release tag
-      shell: bash
-      run: |
-        set -euo pipefail
-        VERSION="${{ needs.prepare.outputs.release_version }}"
-        awk -v ver="$VERSION" '
-          BEGIN { in_pkg=0; updated=0 }
-          {
-            if ($0 ~ /^\[package\][[:space:]]*$/) { in_pkg=1; print; next }
-            if (in_pkg && $0 ~ /^\[/) {
-              if (!updated) { print "version = \"" ver "\""; updated=1 }
-              in_pkg=0
-            }
-            if (in_pkg && $0 ~ /^version = ".*"$/) {
-              print "version = \"" ver "\""
-              updated=1
-              next
-            }
-            print
-          }
-          END {
-            if (in_pkg && !updated) { print "version = \"" ver "\""; updated=1 }
-            if (!updated) exit 42
-          }
-        ' Cargo.toml > Cargo.toml.tmp
-        mv Cargo.toml.tmp Cargo.toml
-        grep -n '^version = "' Cargo.toml | head -1
+      run: bun packaging/cargo-version.mjs set "${{ needs.prepare.outputs.release_version }}"
 
     - name: Build release binary
       run: cargo build --release --target ${{ matrix.target }}
@@ -252,32 +227,7 @@ jobs:
       run: ./vendor/fetch-bun.sh
 
     - name: Set package version from release tag
-      shell: bash
-      run: |
-        set -euo pipefail
-        VERSION="${{ needs.prepare.outputs.release_version }}"
-        awk -v ver="$VERSION" '
-          BEGIN { in_pkg=0; updated=0 }
-          {
-            if ($0 ~ /^\[package\][[:space:]]*$/) { in_pkg=1; print; next }
-            if (in_pkg && $0 ~ /^\[/) {
-              if (!updated) { print "version = \"" ver "\""; updated=1 }
-              in_pkg=0
-            }
-            if (in_pkg && $0 ~ /^version = ".*"$/) {
-              print "version = \"" ver "\""
-              updated=1
-              next
-            }
-            print
-          }
-          END {
-            if (in_pkg && !updated) { print "version = \"" ver "\""; updated=1 }
-            if (!updated) exit 42
-          }
-        ' Cargo.toml > Cargo.toml.tmp
-        mv Cargo.toml.tmp Cargo.toml
-        grep -n '^version = "' Cargo.toml | head -1
+      run: bun packaging/cargo-version.mjs set "${{ needs.prepare.outputs.release_version }}"
 
     - name: Build release binary
       run: cargo build --release
@@ -361,33 +311,7 @@ jobs:
       run: Copy-Item -Path .\vendor\bun\bun-x86_64-pc-windows-gnu.exe -Destination .\vendor\bun\bun-x86_64-pc-windows-msvc.exe -Force
 
     - name: Set package version from release tag
-      shell: pwsh
-      run: |
-        $version = "${{ needs.prepare.outputs.release_version }}"
-        $lines = Get-Content Cargo.toml
-        $inPackage = $false
-        $updated = $false
-        for ($i = 0; $i -lt $lines.Length; $i++) {
-          $line = $lines[$i]
-          if ($line -match '^\[package\]\s*$') {
-            $inPackage = $true
-            continue
-          }
-          if ($inPackage -and $line -match '^\[') {
-            break
-          }
-          if ($inPackage -and $line -match '^version = ".*"$') {
-            $lines[$i] = "version = `"$version`""
-            $updated = $true
-            break
-          }
-        }
-        if (-not $updated) {
-          Write-Error "Could not find version field in [package] section of Cargo.toml"
-          exit 1
-        }
-        Set-Content -Path Cargo.toml -Value ($lines -join "`n") -NoNewline
-        $lines | Select-String -Pattern '^version = "' | Select-Object -First 1
+      run: bun packaging/cargo-version.mjs set "${{ needs.prepare.outputs.release_version }}"
 
     - name: Build release binary
       run: cargo build --release
