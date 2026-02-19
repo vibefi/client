@@ -224,7 +224,7 @@ function App() {
     <>
       <style>{styles}</style>
       <div className="app">
-        <h1>vibe.fi devnet</h1>
+        <h1>VibeFi devnet</h1>
         <p>Pick a published vapp to fetch, verify, build, and launch.</p>
 
         <div className="row">

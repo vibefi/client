@@ -10,6 +10,12 @@ use std::time::{Duration, Instant};
 
 use crate::{logging, runtime_paths};
 
+const DEFAULT_FETCH_TIMEOUT_MS: u64 = 15_000;
+const FETCH_ATTEMPT_GRACE_MS: u64 = 5_000;
+const MAX_FETCH_ATTEMPTS: u64 = 3;
+const RETRY_DELAY_TOTAL_MS: u64 = 250 + 500;
+const BRIDGE_TIMEOUT_SLACK_MS: u64 = 10_000;
+
 #[derive(Debug, Clone)]
 pub struct IpfsHelperConfig {
     pub gateways: Vec<String>,
@@ -110,9 +116,7 @@ impl IpfsHelperBridge {
         if let Some(timeout_ms) = timeout_ms {
             payload["timeoutMs"] = Value::from(timeout_ms);
         }
-        let helper_timeout = timeout_ms
-            .and_then(|ms| ms.checked_add(10_000))
-            .unwrap_or(40_000);
+        let helper_timeout = helper_fetch_timeout_budget_ms(timeout_ms);
         let result = self.send_command("fetch", payload, Duration::from_millis(helper_timeout))?;
         let parsed: FetchResponseBody =
             serde_json::from_value(result).context("invalid fetch response from helper")?;
@@ -209,6 +213,17 @@ impl IpfsHelperBridge {
     }
 }
 
+fn helper_fetch_timeout_budget_ms(timeout_ms: Option<u64>) -> u64 {
+    let base_timeout = timeout_ms
+        .filter(|ms| *ms > 0)
+        .unwrap_or(DEFAULT_FETCH_TIMEOUT_MS);
+    let per_attempt_budget = base_timeout.saturating_add(FETCH_ATTEMPT_GRACE_MS);
+    per_attempt_budget
+        .saturating_mul(MAX_FETCH_ATTEMPTS)
+        .saturating_add(RETRY_DELAY_TOTAL_MS)
+        .saturating_add(BRIDGE_TIMEOUT_SLACK_MS)
+}
+
 fn spawn_stdout_reader(stdout: ChildStdout) -> Receiver<std::io::Result<String>> {
     let (tx, rx) = mpsc::channel();
     let _ = std::thread::Builder::new()
@@ -228,5 +243,20 @@ impl Drop for IpfsHelperBridge {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::helper_fetch_timeout_budget_ms;
+
+    #[test]
+    fn helper_timeout_budget_uses_new_default_and_retry_envelope() {
+        assert_eq!(helper_fetch_timeout_budget_ms(None), 70_750);
+    }
+
+    #[test]
+    fn helper_timeout_budget_scales_with_custom_timeout() {
+        assert_eq!(helper_fetch_timeout_budget_ms(Some(30_000)), 115_750);
     }
 }

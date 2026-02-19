@@ -5,7 +5,7 @@ use wry::WebView;
 
 use crate::ipc_contract::{
     HostDispatchEnvelope, HostDispatchKind, ProviderEventPayload, RpcResponseError,
-    RpcResponsePayload, TabbarUpdatePayload, WalletconnectPairingPayload,
+    RpcResponsePayload, RpcStatusPayload, TabbarUpdatePayload, WalletconnectPairingPayload,
 };
 
 fn dispatch<T: Serialize>(webview: &WebView, kind: HostDispatchKind, payload: T) -> Result<()> {
@@ -85,5 +85,16 @@ pub fn update_tabs(webview: &WebView, tabs: Vec<Value>, active_index: usize) -> 
         webview,
         HostDispatchKind::TabbarUpdate,
         TabbarUpdatePayload { tabs, active_index },
+    )
+}
+
+pub fn update_rpc_status(webview: &WebView, webview_id: &str, pending_count: u32) -> Result<()> {
+    dispatch(
+        webview,
+        HostDispatchKind::RpcStatus,
+        RpcStatusPayload {
+            webview_id: webview_id.to_string(),
+            pending_count,
+        },
     )
 }

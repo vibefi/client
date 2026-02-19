@@ -28,6 +28,53 @@ fn normalize_gateway(gateway: &str) -> String {
     gateway.trim_end_matches('/').to_string()
 }
 
+fn sanitize_gateway(gateway: &str) -> Option<String> {
+    let trimmed = gateway.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = normalize_gateway(trimmed);
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn apply_ipfs_user_overrides(
+    default_backend: IpfsFetchBackend,
+    default_gateway: &str,
+    user_settings: &crate::settings::UserSettings,
+) -> (IpfsFetchBackend, String) {
+    let fetch_backend = user_settings.ipfs.fetch_backend.unwrap_or(default_backend);
+    let gateway = user_settings
+        .ipfs
+        .gateway_endpoint
+        .as_deref()
+        .and_then(sanitize_gateway)
+        .unwrap_or_else(|| normalize_gateway(default_gateway));
+    (fetch_backend, gateway)
+}
+
+fn resolve_effective_ipfs_fetch_config(state: &AppState) -> Result<(IpfsFetchBackend, String)> {
+    let resolved = state
+        .resolved
+        .as_ref()
+        .ok_or_else(|| anyhow!("resolved config unavailable"))?;
+    let defaults = (
+        resolved.ipfs_fetch_backend,
+        normalize_gateway(&resolved.ipfs_gateway),
+    );
+    let Some(config_path) = resolved.config_path.as_ref() else {
+        return Ok(defaults);
+    };
+    let user_settings = crate::settings::load_settings(config_path);
+    Ok(apply_ipfs_user_overrides(
+        resolved.ipfs_fetch_backend,
+        &resolved.ipfs_gateway,
+        &user_settings,
+    ))
+}
+
 fn guess_mime_from_path(path: &str) -> Option<String> {
     let lower = path.to_ascii_lowercase();
     if lower.ends_with(".png") {
@@ -251,10 +298,10 @@ fn load_manifest_listing(
         .resolved
         .as_ref()
         .ok_or_else(|| anyhow!("resolved config unavailable"))?;
+    let (fetch_backend, gateway) = resolve_effective_ipfs_fetch_config(state)?;
     on_progress(12, "Fetching manifest.json from IPFS...");
-    let raw = match resolved.ipfs_fetch_backend {
+    let raw = match fetch_backend {
         IpfsFetchBackend::LocalNode => {
-            let gateway = normalize_gateway(&resolved.ipfs_gateway);
             let url = format!("{}/ipfs/{}/manifest.json", gateway, cid);
             let res = resolved.http_client.get(url).send()?;
             if !res.status().is_success() {
@@ -292,10 +339,10 @@ fn fetch_ipfs_bytes(
         .resolved
         .as_ref()
         .ok_or_else(|| anyhow!("resolved config unavailable"))?;
+    let (fetch_backend, gateway) = resolve_effective_ipfs_fetch_config(state)?;
     on_progress(18, "Fetching file from IPFS...");
-    match resolved.ipfs_fetch_backend {
+    match fetch_backend {
         IpfsFetchBackend::LocalNode => {
-            let gateway = normalize_gateway(&resolved.ipfs_gateway);
             let path_part = if path.is_empty() {
                 String::new()
             } else {
@@ -619,7 +666,9 @@ pub(super) fn handle_ipfs_ipc(
 
 #[cfg(test)]
 mod tests {
-    use super::path_matches;
+    use super::{apply_ipfs_user_overrides, path_matches};
+    use crate::config::IpfsFetchBackend;
+    use crate::settings::{IpfsUserSettings, UserSettings};
 
     #[test]
     fn wildcard_patterns_require_path_segment_boundaries() {
@@ -629,5 +678,53 @@ mod tests {
         assert!(!path_matches("src/*", "src/nested/index.ts"));
         assert!(!path_matches("src/**", "src-malicious/index.ts"));
         assert!(!path_matches("src/*", "src-malicious/index.ts"));
+    }
+
+    #[test]
+    fn ipfs_overrides_keep_defaults_when_user_settings_absent() {
+        let user_settings = UserSettings::default();
+        let (backend, gateway) = apply_ipfs_user_overrides(
+            IpfsFetchBackend::Helia,
+            "http://127.0.0.1:8080/",
+            &user_settings,
+        );
+        assert_eq!(backend, IpfsFetchBackend::Helia);
+        assert_eq!(gateway, "http://127.0.0.1:8080");
+    }
+
+    #[test]
+    fn ipfs_overrides_use_user_backend_and_gateway() {
+        let user_settings = UserSettings {
+            ipfs: IpfsUserSettings {
+                fetch_backend: Some(IpfsFetchBackend::LocalNode),
+                gateway_endpoint: Some(" http://localhost:8088/ ".to_string()),
+            },
+            ..UserSettings::default()
+        };
+        let (backend, gateway) = apply_ipfs_user_overrides(
+            IpfsFetchBackend::Helia,
+            "http://127.0.0.1:8080/",
+            &user_settings,
+        );
+        assert_eq!(backend, IpfsFetchBackend::LocalNode);
+        assert_eq!(gateway, "http://localhost:8088");
+    }
+
+    #[test]
+    fn ipfs_overrides_ignore_empty_gateway_override() {
+        let user_settings = UserSettings {
+            ipfs: IpfsUserSettings {
+                fetch_backend: Some(IpfsFetchBackend::LocalNode),
+                gateway_endpoint: Some("   ".to_string()),
+            },
+            ..UserSettings::default()
+        };
+        let (backend, gateway) = apply_ipfs_user_overrides(
+            IpfsFetchBackend::Helia,
+            "http://127.0.0.1:8080/",
+            &user_settings,
+        );
+        assert_eq!(backend, IpfsFetchBackend::LocalNode);
+        assert_eq!(gateway, "http://127.0.0.1:8080");
     }
 }

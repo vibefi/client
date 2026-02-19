@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, B256, Bytes, Log, U256};
 use alloy_sol_types::{SolEvent, sol};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -259,6 +259,28 @@ pub fn list_dapps(devnet: &ResolvedConfig) -> Result<Vec<DappInfo>> {
     Ok(result)
 }
 
+pub fn resolve_published_root_cid_by_dapp_id(devnet: &ResolvedConfig, studio_dapp_id: u64) -> Result<String> {
+    let dapps = list_dapps(devnet)?;
+    let studio = dapps
+        .into_iter()
+        .find(|dapp| dapp.dapp_id == studio_dapp_id.to_string())
+        .ok_or_else(|| anyhow!("studio dappId {} not found in DappRegistry", studio_dapp_id))?;
+    if studio.status != "Published" {
+        bail!(
+            "studio dappId {} latest version is {}, expected Published",
+            studio_dapp_id,
+            studio.status
+        );
+    }
+    if studio.root_cid.trim().is_empty() {
+        bail!(
+            "studio dappId {} latest published version has an empty rootCid",
+            studio_dapp_id
+        );
+    }
+    Ok(studio.root_cid)
+}
+
 fn rpc_get_logs(devnet: &ResolvedConfig, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
     let topics = vec![format!("0x{}", hex::encode(topic0))];
     let from_block = devnet
@@ -356,7 +378,11 @@ pub fn handle_launcher_ipc(
                         .as_ref()
                         .ok_or_else(|| anyhow!("Network not configured"))?;
                     tracing::info!("launcher: fetching dapp list from logs");
-                    let dapps = list_dapps(devnet)?;
+                    let mut dapps = list_dapps(devnet)?;
+                    if let Some(studio_dapp_id) = devnet.studio_dapp_id {
+                        let studio_id = studio_dapp_id.to_string();
+                        dapps.retain(|dapp| dapp.dapp_id != studio_id);
+                    }
                     Ok(serde_json::to_value(dapps)?)
                 })()
                 .map_err(|e| e.to_string());

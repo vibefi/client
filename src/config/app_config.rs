@@ -35,13 +35,16 @@ pub struct AppConfig {
     pub dappRegistry: String,
 
     #[serde(default)]
+    pub studioDappId: Option<u64>,
+
+    #[serde(default)]
     pub developerPrivateKey: Option<String>,
 
     #[serde(default = "default_rpc_url")]
     pub rpcUrl: String,
 
     #[serde(default)]
-    pub localNetwork: bool,
+    pub testNetwork: bool,
 
     #[serde(default)]
     pub ipfsApi: Option<String>,
@@ -91,7 +94,7 @@ pub(crate) fn default_ipfs_helia_routers() -> Vec<String> {
 }
 
 fn default_ipfs_helia_timeout_ms() -> u64 {
-    30_000
+    15_000
 }
 
 #[derive(Debug, Deserialize, Clone)]

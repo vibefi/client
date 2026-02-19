@@ -5144,6 +5144,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "reqwest",
+ "rusb",
  "serde",
  "serde_json",
  "tao",

@@ -23,7 +23,6 @@ use clap::Parser;
 use std::{
     collections::HashMap,
     collections::VecDeque,
-    env,
     sync::{Arc, Mutex},
 };
 use tao::{
@@ -35,7 +34,7 @@ use tao::{
 
 use bundle::{BundleConfig, build_bundle, verify_manifest};
 use config::{CliArgs, ConfigBuilder, load_config};
-use rpc_manager::{RpcEndpoint, RpcEndpointManager};
+use rpc_manager::{DEFAULT_MAX_CONCURRENT_RPC, RpcEndpoint, RpcEndpointManager};
 use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, WebViewHost, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
@@ -57,21 +56,6 @@ static PRELOAD_TAB_BAR_JS: &str = include_str!("../internal-ui/dist/preload-tabb
 static SETTINGS_HTML: &str = include_str!("../internal-ui/static/settings.html");
 static SETTINGS_JS: &str = include_str!("../internal-ui/dist/settings.js");
 static PRELOAD_SETTINGS_JS: &str = include_str!("../internal-ui/dist/preload-settings.js");
-
-/// Hard-coded demo private key (DO NOT USE IN PRODUCTION).
-/// This matches a common dev key used across many tutorials.
-pub(crate) static DEMO_PRIVKEY_HEX: &str =
-    "0x59c6995e998f97a5a0044966f094538c5f0f7b4b5b5b5b5b5b5b5b5b5b5b5b5b";
-const STUDIO_PLACEHOLDER_CID: &str =
-    "bafybeifillstudiofromdaoexecuteproposalreplacecidplaceholder0000";
-
-fn studio_root_cid() -> String {
-    env::var("VIBEFI_STUDIO_CID")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| STUDIO_PLACEHOLDER_CID.to_string())
-}
 
 fn main() -> Result<()> {
     apply_linux_env_defaults();
@@ -121,7 +105,10 @@ fn main() -> Result<()> {
         } else {
             user_settings.rpc_endpoints
         };
-        Some(RpcEndpointManager::new(endpoints, res.http_client.clone()))
+        let max_concurrent = user_settings
+            .max_concurrent_rpc
+            .unwrap_or(DEFAULT_MAX_CONCURRENT_RPC);
+        Some(RpcEndpointManager::new(endpoints, res.http_client.clone(), max_concurrent))
     } else {
         None
     };
@@ -173,6 +160,7 @@ fn main() -> Result<()> {
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
         settings_webview_id: Arc::new(Mutex::new(None)),
+        pending_rpc_counts: Arc::new(Mutex::new(HashMap::new())),
     };
     let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
@@ -250,12 +238,17 @@ fn main() -> Result<()> {
                     &manager, webview_id, ipc_id, result,
                 );
             }
+            Event::UserEvent(UserEvent::RpcPendingChanged { webview_id, count }) => {
+                events::user_event::handle_rpc_pending_changed(&manager, &webview_id, count);
+            }
             Event::UserEvent(UserEvent::RpcResult {
                 webview_id,
                 ipc_id,
                 result,
             }) => {
-                events::user_event::handle_rpc_result(&manager, webview_id, ipc_id, result);
+                events::user_event::handle_rpc_result(&manager, webview_id.clone(), ipc_id, result);
+                let count = state.decrement_rpc_pending(&webview_id);
+                events::user_event::handle_rpc_pending_changed(&manager, &webview_id, count);
             }
             Event::UserEvent(UserEvent::ProviderEvent {
                 webview_id,
@@ -287,6 +280,104 @@ fn main() -> Result<()> {
                     action,
                 );
             }
+            Event::UserEvent(UserEvent::StudioBundleResolved {
+                placeholder_id,
+                result,
+            }) => {
+                let Some(index) = manager.apps.iter().position(|entry| entry.id == placeholder_id)
+                else {
+                    tracing::warn!(
+                        placeholder_id = %placeholder_id,
+                        "studio placeholder tab not found"
+                    );
+                    return;
+                };
+
+                match result {
+                    Ok(dist_dir) => {
+                        let Some(window_ref) = window.as_ref() else {
+                            tracing::warn!("window missing while resolving studio bundle");
+                            return;
+                        };
+                        let host = WebViewHost {
+                            window: window_ref,
+                            #[cfg(target_os = "linux")]
+                            tab_bar_container: gtk_tab_bar_container
+                                .as_ref()
+                                .expect("linux tab bar container not initialized"),
+                            #[cfg(target_os = "linux")]
+                            app_container: gtk_app_container
+                                .as_ref()
+                                .expect("linux app container not initialized"),
+                        };
+                        let size = window_ref.inner_size();
+                        let bounds = manager.app_rect(size.width, size.height);
+                        match build_app_webview(
+                            &host,
+                            &placeholder_id,
+                            Some(dist_dir.clone()),
+                            EmbeddedContent::Default,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                            AppWebViewKind::Studio,
+                        ) {
+                            Ok(studio_webview) => {
+                                let was_active = manager.active_app_index == Some(index);
+                                if !was_active {
+                                    if let Err(err) = studio_webview.set_visible(false) {
+                                        tracing::warn!(
+                                            error = %err,
+                                            "failed to hide inactive studio webview"
+                                        );
+                                    }
+                                }
+
+                                if let Ok(mut caps) = state.app_capabilities.lock() {
+                                    let studio_caps =
+                                        events::user_event::load_app_capabilities_from_dist(
+                                            &dist_dir,
+                                        );
+                                    caps.insert(placeholder_id.clone(), studio_caps);
+                                } else {
+                                    tracing::warn!(
+                                        "failed to acquire app_capabilities lock for studio tab"
+                                    );
+                                }
+
+                                manager.apps[index] = AppWebViewEntry {
+                                    webview: studio_webview,
+                                    id: placeholder_id,
+                                    label: "Studio".to_string(),
+                                    kind: AppWebViewKind::Studio,
+                                    source_dir: None,
+                                    selectable: true,
+                                    loading: false,
+                                };
+                                manager.update_tab_bar();
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = %err, "failed to build studio webview");
+                                if let Some(entry) = manager.apps.get_mut(index) {
+                                    entry.label = "Studio (unavailable)".to_string();
+                                    entry.selectable = false;
+                                    entry.loading = false;
+                                }
+                                manager.update_tab_bar();
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to resolve studio dapp bundle");
+                        if let Some(entry) = manager.apps.get_mut(index) {
+                            entry.label = "Studio (unavailable)".to_string();
+                            entry.selectable = false;
+                            entry.loading = false;
+                        }
+                        manager.update_tab_bar();
+                    }
+                }
+            }
 
             Event::NewEvents(StartCause::Init) => {
                 if window.is_none() {
@@ -303,6 +394,8 @@ fn main() -> Result<()> {
                             return;
                         }
                     };
+                    #[cfg(target_os = "macos")]
+                    menu::setup_macos_dock_icon();
 
                     manager.set_scale_factor(window_handle.scale_factor());
 
@@ -429,106 +522,39 @@ fn main() -> Result<()> {
                         });
                         manager.active_app_index = Some(0);
 
-                        let studio_result = if let Some(studio_dist_dir) = studio_dist_dir.clone()
-                        {
-                            tracing::info!(
-                                studio_dist_dir = %studio_dist_dir.display(),
-                                "loading Studio from local --studio-bundle"
-                            );
-                            Ok(studio_dist_dir)
-                        } else {
-                            let studio_cid = studio_root_cid();
-                            tracing::info!(cid = %studio_cid, "loading Studio from CID");
-                            registry::prepare_dapp_dist(&state, &studio_cid, None)
+                        let studio_placeholder_id = manager.next_app_id();
+                        let studio_placeholder = match build_app_webview(
+                            &host,
+                            &studio_placeholder_id,
+                            None,
+                            EmbeddedContent::Default,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                            AppWebViewKind::Studio,
+                        ) {
+                            Ok(wv) => wv,
+                            Err(e) => {
+                                tracing::error!(error = ?e, "studio placeholder webview error");
+                                *control_flow = ControlFlow::Exit;
+                                return;
+                            }
                         };
-
-                        match studio_result {
-                            Ok(dist_dir) => {
-                                let studio_id = manager.next_app_id();
-                                let studio_webview = match build_app_webview(
-                                    &host,
-                                    &studio_id,
-                                    Some(dist_dir.clone()),
-                                    EmbeddedContent::Default,
-                                    &state,
-                                    proxy.clone(),
-                                    bounds,
-                                    AppWebViewKind::Studio,
-                                ) {
-                                    Ok(wv) => wv,
-                                    Err(e) => {
-                                        tracing::error!(error = ?e, "studio webview error");
-                                        *control_flow = ControlFlow::Exit;
-                                        return;
-                                    }
-                                };
-                                if let Err(err) = studio_webview.set_visible(false) {
-                                    tracing::warn!(
-                                        error = %err,
-                                        "failed to hide inactive studio webview"
-                                    );
-                                }
-                                if let Ok(mut caps) = state.app_capabilities.lock() {
-                                    let studio_caps =
-                                        events::user_event::load_app_capabilities_from_dist(
-                                            &dist_dir,
-                                        );
-                                    caps.insert(studio_id.clone(), studio_caps);
-                                } else {
-                                    tracing::warn!(
-                                        "failed to acquire app_capabilities lock for studio tab"
-                                    );
-                                }
-                                manager.apps.push(AppWebViewEntry {
-                                    webview: studio_webview,
-                                    id: studio_id,
-                                    label: "Studio".to_string(),
-                                    kind: AppWebViewKind::Studio,
-                                    source_dir: None,
-                                    selectable: true,
-                                    loading: false,
-                                });
-                            }
-                            Err(err) => {
-                                tracing::warn!(error = %err, "failed to prepare studio dapp bundle");
-                                let studio_placeholder_id = manager.next_app_id();
-                                let studio_placeholder = match build_app_webview(
-                                    &host,
-                                    &studio_placeholder_id,
-                                    None,
-                                    EmbeddedContent::Default,
-                                    &state,
-                                    proxy.clone(),
-                                    bounds,
-                                    AppWebViewKind::Studio,
-                                ) {
-                                    Ok(wv) => wv,
-                                    Err(e) => {
-                                        tracing::error!(
-                                            error = ?e,
-                                            "studio placeholder webview error"
-                                        );
-                                        *control_flow = ControlFlow::Exit;
-                                        return;
-                                    }
-                                };
-                                if let Err(err) = studio_placeholder.set_visible(false) {
-                                    tracing::warn!(
-                                        error = %err,
-                                        "failed to hide unavailable studio placeholder tab"
-                                    );
-                                }
-                                manager.apps.push(AppWebViewEntry {
-                                    webview: studio_placeholder,
-                                    id: studio_placeholder_id,
-                                    label: "Studio (unavailable)".to_string(),
-                                    kind: AppWebViewKind::Studio,
-                                    source_dir: None,
-                                    selectable: false,
-                                    loading: false,
-                                });
-                            }
+                        if let Err(err) = studio_placeholder.set_visible(false) {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to hide inactive studio placeholder tab"
+                            );
                         }
+                        manager.apps.push(AppWebViewEntry {
+                            webview: studio_placeholder,
+                            id: studio_placeholder_id.clone(),
+                            label: "Studio".to_string(),
+                            kind: AppWebViewKind::Studio,
+                            source_dir: None,
+                            selectable: false,
+                            loading: true,
+                        });
 
                         let code_id = manager.next_app_id();
                         let code_webview = match build_app_webview(
@@ -562,6 +588,45 @@ fn main() -> Result<()> {
                         });
 
                         manager.update_tab_bar();
+
+                        let state_clone = state.clone();
+                        let proxy_clone = proxy.clone();
+                        let studio_placeholder_id_clone = studio_placeholder_id.clone();
+                        std::thread::spawn(move || {
+                            let result = (|| -> Result<std::path::PathBuf> {
+                                if let Some(studio_dist_dir) = studio_dist_dir {
+                                    tracing::info!(
+                                        studio_dist_dir = %studio_dist_dir.display(),
+                                        "loading Studio from local --studio-bundle"
+                                    );
+                                    return Ok(studio_dist_dir);
+                                }
+                                let studio_dapp_id = state_clone
+                                    .resolved
+                                    .as_ref()
+                                    .and_then(|resolved| resolved.studio_dapp_id)
+                                    .ok_or_else(|| anyhow::anyhow!("config missing studioDappId"))?;
+                                let resolved = state_clone
+                                    .resolved
+                                    .as_ref()
+                                    .ok_or_else(|| anyhow::anyhow!("Network not configured"))?;
+                                let studio_cid = registry::resolve_published_root_cid_by_dapp_id(
+                                    resolved,
+                                    studio_dapp_id,
+                                )?;
+                                tracing::info!(
+                                    dapp_id = studio_dapp_id,
+                                    cid = %studio_cid,
+                                    "loading Studio from DappRegistry"
+                                );
+                                registry::prepare_dapp_dist(&state_clone, &studio_cid, None)
+                            })()
+                            .map_err(|err| err.to_string());
+                            let _ = proxy_clone.send_event(UserEvent::StudioBundleResolved {
+                                placeholder_id: studio_placeholder_id_clone,
+                                result,
+                            });
+                        });
                     } else {
                         let app_id = manager.next_app_id();
                         match build_app_webview(
@@ -623,10 +688,10 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn apply_linux_env_defaults() {
-    if env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         // Safety: this runs at process startup before any threads are spawned.
         unsafe {
-            env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
     }
 }

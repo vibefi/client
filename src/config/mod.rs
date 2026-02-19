@@ -21,13 +21,30 @@ pub use builder::ConfigBuilder;
 pub use cli::CliArgs;
 pub use resolved::ResolvedConfig;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 
 /// Load and validate an `AppConfig` from a JSON file.
 pub fn load_config(path: &Path) -> Result<AppConfig> {
-    let raw = std::fs::read_to_string(path).context("read config file")?;
-    let cfg: AppConfig = serde_json::from_str(&raw).context("parse config file")?;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("read config file {}", path.display()))?;
+    let cfg: AppConfig = serde_json::from_str(&raw).map_err(|err| {
+        let kind = match err.classify() {
+            serde_json::error::Category::Io => "I/O",
+            serde_json::error::Category::Syntax => "syntax",
+            serde_json::error::Category::Data => "data",
+            serde_json::error::Category::Eof => "unexpected EOF",
+        };
+
+        anyhow!(
+            "parse config file {} failed ({} error) at line {}, column {}: {}",
+            path.display(),
+            kind,
+            err.line(),
+            err.column(),
+            err
+        )
+    })?;
     validation::validate_app_config(&cfg)?;
     Ok(cfg)
 }

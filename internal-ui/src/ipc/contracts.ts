@@ -47,8 +47,14 @@ export type TabbarUpdatePayload = {
   activeIndex?: number;
 };
 
+export type RpcStatusPayload = {
+  webviewId?: string;
+  pendingCount?: number;
+};
+
 export type HostDispatchMessage =
   | { kind: "rpcResponse"; payload: RpcResponsePayload }
   | { kind: "providerEvent"; payload: ProviderEventPayload }
   | { kind: "walletconnectPairing"; payload: WalletconnectPairingPayload }
-  | { kind: "tabbarUpdate"; payload: TabbarUpdatePayload };
+  | { kind: "tabbarUpdate"; payload: TabbarUpdatePayload }
+  | { kind: "rpcStatus"; payload: RpcStatusPayload };

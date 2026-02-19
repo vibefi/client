@@ -17,9 +17,10 @@ declare global {
   }
 }
 
-type Phase = "select" | "connecting" | "done";
+type Phase = "select" | "localKey" | "connecting" | "done";
 type SelectorCapabilities = {
   localSignerAvailable: boolean;
+  localSignerRequiresPrivateKey: boolean;
 };
 
 const localStyles = `
@@ -89,6 +90,20 @@ const localStyles = `
   .done-view .check { font-size: 48px; margin-bottom: 12px; }
   .done-view h2 { font-size: 18px; margin-bottom: 4px; }
   .done-view .desc { color: #475569; font-size: 14px; }
+
+  .local-key-view h2 { font-size: 18px; margin-bottom: 8px; }
+  .local-key-view .desc { color: #475569; font-size: 14px; margin-bottom: 14px; }
+  .key-input {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    color: #0f172a;
+    margin-bottom: 12px;
+  }
+  .local-key-actions { display: flex; gap: 8px; justify-content: flex-end; }
 `;
 const styles = composeStyles(
   sharedStyles,
@@ -137,6 +152,8 @@ function App() {
   const [uri, setUri] = useState("");
   const [qrSvg, setQrSvg] = useState("");
   const [localSignerAvailable, setLocalSignerAvailable] = useState(false);
+  const [localSignerRequiresPrivateKey, setLocalSignerRequiresPrivateKey] = useState(false);
+  const [localPrivateKey, setLocalPrivateKey] = useState("");
 
   useEffect(() => {
     const onPairing = (event: Event) => {
@@ -161,13 +178,21 @@ function App() {
           typeof capabilities === "object" &&
           typeof (capabilities as SelectorCapabilities).localSignerAvailable === "boolean" &&
           (capabilities as SelectorCapabilities).localSignerAvailable;
+        const requiresPrivateKey =
+          !!capabilities &&
+          typeof capabilities === "object" &&
+          typeof (capabilities as SelectorCapabilities).localSignerRequiresPrivateKey ===
+            "boolean" &&
+          (capabilities as SelectorCapabilities).localSignerRequiresPrivateKey;
         if (!cancelled) {
           setLocalSignerAvailable(available);
+          setLocalSignerRequiresPrivateKey(available && requiresPrivateKey);
         }
       } catch (err) {
         console.warn("[vibefi:wallet-selector] failed to load capabilities", err);
         if (!cancelled) {
           setLocalSignerAvailable(false);
+          setLocalSignerRequiresPrivateKey(false);
         }
       }
     };
@@ -177,17 +202,36 @@ function App() {
     };
   }, []);
 
-  const connectLocal = async () => {
+  const connectLocalWithKey = async (privateKey?: string) => {
     setPhase("connecting");
     setError("");
     try {
-      await walletIpc("vibefi_connectLocal");
+      await walletIpc("vibefi_connectLocal", privateKey ? [privateKey] : []);
       setPhase("done");
     } catch (err: any) {
       console.warn("[vibefi:wallet-selector] local connect failed", err);
       setError(err?.message || String(err));
       setPhase("select");
     }
+  };
+
+  const connectLocal = async () => {
+    if (localSignerRequiresPrivateKey) {
+      setError("");
+      setLocalPrivateKey("");
+      setPhase("localKey");
+      return;
+    }
+    await connectLocalWithKey();
+  };
+
+  const submitLocalPrivateKey = async () => {
+    const privateKey = localPrivateKey.trim();
+    if (!privateKey) {
+      setError("Enter a private key to continue.");
+      return;
+    }
+    await connectLocalWithKey(privateKey);
   };
 
   const connectWalletConnect = async () => {
@@ -266,6 +310,39 @@ function App() {
     );
   }
 
+  if (phase === "localKey") {
+    return (
+      <>
+        <style>{styles}</style>
+        <div className="page-container compact local-key-view">
+          <h2>Enter Testnet Private Key</h2>
+          <div className="desc">No local signer is configured for this test network.</div>
+          <input
+            className="key-input"
+            type="password"
+            value={localPrivateKey}
+            onChange={(event) => setLocalPrivateKey(event.currentTarget.value)}
+            placeholder="0x..."
+            autoFocus
+          />
+          {error && <div className="error mb-12">{error}</div>}
+          <div className="local-key-actions">
+            <button
+              onClick={() => {
+                setPhase("select");
+                setLocalPrivateKey("");
+                setError("");
+              }}
+            >
+              Back
+            </button>
+            <button onClick={() => void submitLocalPrivateKey()}>Connect</button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <style>{styles}</style>
@@ -279,7 +356,11 @@ function App() {
               <div className="option-icon local">&#x1F511;</div>
               <div className="option-text">
                 <strong>Local Signer</strong>
-                <span>Use the built-in dev key for signing transactions.</span>
+                <span>
+                  {localSignerRequiresPrivateKey
+                    ? "Enter a private key to sign on this test network."
+                    : "Use the configured local signer for transactions."}
+                </span>
               </div>
             </div>
           )}
