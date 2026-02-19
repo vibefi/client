@@ -71,6 +71,7 @@ struct EffectiveIpfsConfig {
 }
 
 const LAUNCH_PROGRESS_EVENT: &str = "vibefiLaunchProgress";
+const RPC_LOGS_BLOCK_CHUNK: u64 = 50_000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,17 +113,21 @@ impl LaunchProgress {
     }
 }
 
-pub fn list_dapps(devnet: &ResolvedConfig) -> Result<Vec<DappInfo>> {
+pub fn list_dapps(state: &AppState) -> Result<Vec<DappInfo>> {
+    let devnet = state
+        .resolved
+        .as_ref()
+        .ok_or_else(|| anyhow!("Network not configured"))?;
     if devnet.dapp_registry.is_empty() {
         return Err(anyhow!("config missing dappRegistry"));
     }
     let address = devnet.dapp_registry.clone();
-    let published = rpc_get_logs(devnet, &address, DappPublished::SIGNATURE_HASH)?;
-    let upgraded = rpc_get_logs(devnet, &address, DappUpgraded::SIGNATURE_HASH)?;
-    let metadata = rpc_get_logs(devnet, &address, DappMetadata::SIGNATURE_HASH)?;
-    let paused = rpc_get_logs(devnet, &address, DappPaused::SIGNATURE_HASH)?;
-    let unpaused = rpc_get_logs(devnet, &address, DappUnpaused::SIGNATURE_HASH)?;
-    let deprecated = rpc_get_logs(devnet, &address, DappDeprecated::SIGNATURE_HASH)?;
+    let published = rpc_get_logs(state, &address, DappPublished::SIGNATURE_HASH)?;
+    let upgraded = rpc_get_logs(state, &address, DappUpgraded::SIGNATURE_HASH)?;
+    let metadata = rpc_get_logs(state, &address, DappMetadata::SIGNATURE_HASH)?;
+    let paused = rpc_get_logs(state, &address, DappPaused::SIGNATURE_HASH)?;
+    let unpaused = rpc_get_logs(state, &address, DappUnpaused::SIGNATURE_HASH)?;
+    let deprecated = rpc_get_logs(state, &address, DappDeprecated::SIGNATURE_HASH)?;
 
     let mut all = Vec::new();
     all.extend(published);
@@ -259,8 +264,11 @@ pub fn list_dapps(devnet: &ResolvedConfig) -> Result<Vec<DappInfo>> {
     Ok(result)
 }
 
-pub fn resolve_published_root_cid_by_dapp_id(devnet: &ResolvedConfig, studio_dapp_id: u64) -> Result<String> {
-    let dapps = list_dapps(devnet)?;
+pub fn resolve_published_root_cid_by_dapp_id(
+    state: &AppState,
+    studio_dapp_id: u64,
+) -> Result<String> {
+    let dapps = list_dapps(state)?;
     let studio = dapps
         .into_iter()
         .find(|dapp| dapp.dapp_id == studio_dapp_id.to_string())
@@ -281,44 +289,100 @@ pub fn resolve_published_root_cid_by_dapp_id(devnet: &ResolvedConfig, studio_dap
     Ok(studio.root_cid)
 }
 
-fn rpc_get_logs(devnet: &ResolvedConfig, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
+fn rpc_get_logs(state: &AppState, address: &str, topic0: B256) -> Result<Vec<LogEntry>> {
+    let devnet = state
+        .resolved
+        .as_ref()
+        .ok_or_else(|| anyhow!("Network not configured"))?;
     let topics = vec![format!("0x{}", hex::encode(topic0))];
-    let from_block = devnet
-        .deploy_block
-        .map(|b| format!("0x{:x}", b))
-        .unwrap_or_else(|| "0x0".to_string());
+    let mut out = Vec::new();
+    let from_block = devnet.deploy_block.unwrap_or(0);
+    let latest_block = rpc_latest_block_number(state)?;
+    if from_block > latest_block {
+        return Ok(out);
+    }
+
+    let mut to_block = latest_block;
+    loop {
+        let start_block = from_block.max(to_block.saturating_sub(RPC_LOGS_BLOCK_CHUNK - 1));
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_getLogs",
+            "params": [{
+                "address": address,
+                "topics": topics,
+                "fromBlock": format!("0x{:x}", start_block),
+                "toBlock": format!("0x{:x}", to_block)
+            }]
+        });
+        let v = rpc_send_with_manager_fallback(state, &payload, "rpc getLogs failed")?;
+        if let Some(err) = v.get("error") {
+            return Err(anyhow!("rpc getLogs error: {}", err));
+        }
+        let logs_val = v
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(Vec::new()));
+        let logs: Vec<RpcLog> = serde_json::from_value(logs_val)?;
+        for log in logs {
+            let log_entry = rpc_log_to_entry(log)?;
+            out.push(log_entry);
+        }
+
+        if start_block == from_block {
+            break;
+        }
+        to_block = start_block.saturating_sub(1);
+    }
+    Ok(out)
+}
+
+fn rpc_latest_block_number(state: &AppState) -> Result<u64> {
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
-        "method": "eth_getLogs",
-        "params": [{
-            "address": address,
-            "topics": topics,
-            "fromBlock": from_block,
-            "toBlock": "latest"
-        }]
+        "method": "eth_blockNumber",
+        "params": []
     });
+    let v = rpc_send_with_manager_fallback(state, &payload, "rpc blockNumber failed")?;
+    if let Some(err) = v.get("error") {
+        return Err(anyhow!("rpc blockNumber error: {}", err));
+    }
+    let block = v
+        .get("result")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow!("rpc blockNumber returned non-string result"))?;
+    parse_hex_u64(block).ok_or_else(|| anyhow!("rpc blockNumber returned invalid quantity"))
+}
+
+fn rpc_send_with_manager_fallback(
+    state: &AppState,
+    payload: &serde_json::Value,
+    fallback_context: &str,
+) -> Result<serde_json::Value> {
+    let devnet = state
+        .resolved
+        .as_ref()
+        .ok_or_else(|| anyhow!("Network not configured"))?;
+    let mgr_clone = state
+        .rpc_manager
+        .lock()
+        .expect("poisoned rpc_manager lock while fetching launcher logs")
+        .as_ref()
+        .cloned();
+
+    if let Some(m) = mgr_clone {
+        return m.send_rpc(payload);
+    }
+
     let res = devnet
         .http_client
         .post(&devnet.rpc_url)
-        .json(&payload)
+        .json(payload)
         .send()
-        .context("rpc getLogs failed")?;
-    let v: serde_json::Value = res.json().context("rpc getLogs decode failed")?;
-    if let Some(err) = v.get("error") {
-        return Err(anyhow!("rpc getLogs error: {}", err));
-    }
-    let logs_val = v
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Array(Vec::new()));
-    let logs: Vec<RpcLog> = serde_json::from_value(logs_val)?;
-    let mut out = Vec::new();
-    for log in logs {
-        let log_entry = rpc_log_to_entry(log)?;
-        out.push(log_entry);
-    }
-    Ok(out)
+        .with_context(|| fallback_context.to_string())?;
+    res.json().context("rpc response decode failed")
 }
 
 fn rpc_log_to_entry(rpc_log: RpcLog) -> Result<LogEntry> {
@@ -373,13 +437,13 @@ pub fn handle_launcher_ipc(
             let ipc_id = req.id;
             std::thread::spawn(move || {
                 let result = (|| -> Result<serde_json::Value> {
-                    let devnet = state_clone
+                    tracing::info!("launcher: fetching dapp list from logs");
+                    let mut dapps = list_dapps(&state_clone)?;
+                    if let Some(studio_dapp_id) = state_clone
                         .resolved
                         .as_ref()
-                        .ok_or_else(|| anyhow!("Network not configured"))?;
-                    tracing::info!("launcher: fetching dapp list from logs");
-                    let mut dapps = list_dapps(devnet)?;
-                    if let Some(studio_dapp_id) = devnet.studio_dapp_id {
+                        .and_then(|resolved| resolved.studio_dapp_id)
+                    {
                         let studio_id = studio_dapp_id.to_string();
                         dapps.retain(|dapp| dapp.dapp_id != studio_id);
                     }

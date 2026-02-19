@@ -129,7 +129,12 @@ impl RpcEndpointManager {
         let max_retries = 3usize;
         let mut last_error: Option<anyhow::Error> = None;
 
-        tracing::debug!(method, endpoints = n_endpoints, retries = max_retries, "rpc send start");
+        tracing::debug!(
+            method,
+            endpoints = n_endpoints,
+            retries = max_retries,
+            "rpc send start"
+        );
 
         // Acquire a concurrency slot. Released automatically when _guard is dropped.
         self.semaphore.acquire();
@@ -141,7 +146,11 @@ impl RpcEndpointManager {
                 let h = self.health.lock().expect("rpc health lock");
                 let idx = Self::pick_endpoint_idx(&h);
                 let ep = &h.endpoints[idx].endpoint;
-                (idx, ep.url.clone(), ep.label.as_deref().unwrap_or("").to_string())
+                (
+                    idx,
+                    ep.url.clone(),
+                    ep.label.as_deref().unwrap_or("").to_string(),
+                )
             };
 
             tracing::debug!(
