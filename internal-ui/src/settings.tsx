@@ -68,14 +68,6 @@ const localStyles = `
     white-space: nowrap;
   }
   .endpoint-item .lbl { font-size: 11px; color: #94a3b8; }
-  .endpoint-item .default-badge {
-    font-size: 10px;
-    background: #dbeafe;
-    color: #1d4ed8;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-weight: 600;
-  }
   .endpoint-actions { display: flex; gap: 4px; }
   .endpoint-actions button {
     width: 26px; height: 26px;
@@ -268,20 +260,23 @@ function App() {
   };
 
   const removeEndpoint = (idx: number) => {
-    if (idx === 0) return;
+    if (endpoints.length <= 1) {
+      setStatus({ text: "At least one RPC endpoint is required.", ok: false });
+      return;
+    }
     const next = endpoints.filter((_, i) => i !== idx);
     void saveEndpoints(next);
   };
 
   const moveUp = (idx: number) => {
-    if (idx <= 1) return;
+    if (idx <= 0) return;
     const next = [...endpoints];
     [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
     void saveEndpoints(next);
   };
 
   const moveDown = (idx: number) => {
-    if (idx === 0 || idx >= endpoints.length - 1) return;
+    if (idx >= endpoints.length - 1) return;
     const next = [...endpoints];
     [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
     void saveEndpoints(next);
@@ -309,11 +304,10 @@ function App() {
                     <div className="url">{ep.url}</div>
                     {ep.label && <div className="lbl">{ep.label}</div>}
                   </div>
-                  {idx === 0 && <span className="default-badge">DEFAULT</span>}
                   <div className="endpoint-actions">
-                    <button onClick={() => moveUp(idx)} disabled={idx <= 1} title="Move up">&#x25B2;</button>
-                    <button onClick={() => moveDown(idx)} disabled={idx === 0 || idx >= endpoints.length - 1} title="Move down">&#x25BC;</button>
-                    <button onClick={() => removeEndpoint(idx)} disabled={idx === 0} title="Remove">&#x2715;</button>
+                    <button onClick={() => moveUp(idx)} disabled={idx <= 0} title="Move up">&#x25B2;</button>
+                    <button onClick={() => moveDown(idx)} disabled={idx >= endpoints.length - 1} title="Move down">&#x25BC;</button>
+                    <button onClick={() => removeEndpoint(idx)} disabled={endpoints.length <= 1} title="Remove">&#x2715;</button>
                   </div>
                 </div>
               ))}
