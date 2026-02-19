@@ -106,8 +106,8 @@ pub fn handle_ipc_event(
     if webview_id == "tab-bar" {
         // Parse tab bar IPC
         if let Ok(req) = serde_json::from_str::<IpcRequest>(&msg) {
-            if req.provider() == Some(KnownProviderId::Tabbar) {
-                match req.tabbar_method() {
+            match req.provider() {
+                Some(KnownProviderId::Tabbar) => match req.tabbar_method() {
                     Some(TabbarMethod::SwitchTab) => {
                         if let Some(idx) = req.params.get(0).and_then(|v| v.as_u64()) {
                             manager.switch_to(idx as usize);
@@ -151,10 +151,55 @@ pub fn handle_ipc_event(
                             manager.close_app(idx);
                         }
                     }
+                    Some(TabbarMethod::SwitchToCodeTab) => {
+                        if let Some(idx) = manager.index_of_kind(AppWebViewKind::Code) {
+                            manager.switch_to(idx);
+                        }
+                    }
                     None => {}
+                },
+                Some(KnownProviderId::Code) => {
+                    let Some(code_entry_id) = manager
+                        .apps
+                        .iter()
+                        .find(|entry| entry.kind == AppWebViewKind::Code)
+                        .map(|entry| entry.id.clone())
+                    else {
+                        if let Some(tabbar_webview) = manager.webview_for_id("tab-bar") {
+                            let _ = ipc::respond_err(
+                                tabbar_webview,
+                                req.id,
+                                "Code tab is not available in this session",
+                            );
+                        } else {
+                            tracing::warn!("tab-bar webview missing while returning code tab error");
+                        }
+                        return;
+                    };
+
+                    let result =
+                        crate::code::router::handle_code_ipc(state, manager, &code_entry_id, &req);
+                    let should_switch_to_code =
+                        req.method == "code_forkDapp" && result.is_ok();
+                    if should_switch_to_code {
+                        if let Some(idx) = manager.index_of_kind(AppWebViewKind::Code) {
+                            manager.switch_to(idx);
+                        } else {
+                            tracing::warn!("code_forkDapp succeeded but Code tab was not found");
+                        }
+                    }
+                    let Some(tabbar_webview) = manager.webview_for_id("tab-bar") else {
+                        tracing::warn!("tab-bar webview missing for code IPC forwarding");
+                        return;
+                    };
+                    if let Err(err) = ipc::respond_option_result(tabbar_webview, req.id, result) {
+                        tracing::error!(error = ?err, "failed to respond to tab-bar code IPC");
+                    }
                 }
+                _ => {}
             }
         }
+        return;
     } else if let Some(wv) = manager.webview_for_id(webview_id) {
         if let Err(e) = ipc::handle_ipc(wv, manager, state, webview_id, msg) {
             tracing::error!(error = ?e, webview_id, "ipc error");
@@ -187,6 +232,7 @@ pub fn handle_open_wallet_selector(
             state,
             manager,
             proxy,
+            None,
             None,
             EmbeddedContent::WalletSelector,
             AppWebViewKind::WalletSelector,
@@ -305,6 +351,7 @@ pub fn handle_open_settings(
             manager,
             proxy,
             None,
+            None,
             EmbeddedContent::Settings,
             AppWebViewKind::Settings,
             "Settings".to_string(),
@@ -373,7 +420,11 @@ pub fn handle_tab_action(
     action: TabAction,
 ) {
     match action {
-        TabAction::OpenApp { name, dist_dir } => {
+        TabAction::OpenApp {
+            name,
+            dist_dir,
+            source_dir,
+        } => {
             if let Some(host) = host {
                 if let Err(e) = open_app_tab(
                     host,
@@ -381,6 +432,7 @@ pub fn handle_tab_action(
                     manager,
                     proxy,
                     Some(dist_dir),
+                    source_dir,
                     EmbeddedContent::Default,
                     AppWebViewKind::Standard,
                     name,
@@ -392,83 +444,13 @@ pub fn handle_tab_action(
     }
 }
 
-pub fn handle_studio_bundle_resolved(
-    host: Option<&WebViewHost>,
-    state: &AppState,
-    manager: &mut WebViewManager,
-    proxy: &EventLoopProxy<UserEvent>,
-    placeholder_id: String,
-    result: Result<PathBuf, String>,
-) {
-    let Some(index) = manager.index_of_id(&placeholder_id) else {
-        return;
-    };
-
-    match result {
-        Ok(dist_dir) => {
-            let Some(host) = host else {
-                return;
-            };
-            let size = host.window.inner_size();
-            let bounds = manager.app_rect(size.width, size.height);
-            let studio_webview_id = manager.next_app_id();
-            match build_app_webview(
-                host,
-                &studio_webview_id,
-                Some(dist_dir.clone()),
-                EmbeddedContent::Default,
-                state,
-                proxy.clone(),
-                bounds,
-            ) {
-                Ok(webview) => {
-                    if let Err(err) = webview.set_visible(false) {
-                        tracing::warn!(error = %err, "failed to hide loaded studio webview");
-                    }
-                    if let Some(mut caps) = lock_or_log(&state.app_capabilities, "app_capabilities")
-                    {
-                        let studio_caps = load_app_capabilities_from_dist(&dist_dir);
-                        caps.remove(&placeholder_id);
-                        caps.insert(studio_webview_id.clone(), studio_caps);
-                    }
-                    manager.apps[index] = AppWebViewEntry {
-                        webview,
-                        id: studio_webview_id,
-                        label: "Studio".to_string(),
-                        kind: AppWebViewKind::Studio,
-                        selectable: true,
-                        loading: false,
-                    };
-                }
-                Err(err) => {
-                    tracing::error!(error = ?err, "failed to build loaded studio webview");
-                    if let Some(entry) = manager.apps.get_mut(index) {
-                        entry.label = "Studio (unavailable)".to_string();
-                        entry.selectable = false;
-                        entry.loading = false;
-                    }
-                }
-            }
-        }
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to prepare studio dapp bundle");
-            if let Some(entry) = manager.apps.get_mut(index) {
-                entry.label = "Studio (unavailable)".to_string();
-                entry.selectable = false;
-                entry.loading = false;
-            }
-        }
-    }
-
-    manager.update_tab_bar();
-}
-
 fn open_app_tab(
     host: &WebViewHost,
     state: &AppState,
     manager: &mut WebViewManager,
     proxy: &EventLoopProxy<UserEvent>,
     dist_dir: Option<PathBuf>,
+    source_dir: Option<PathBuf>,
     embedded: EmbeddedContent,
     kind: AppWebViewKind,
     label: String,
@@ -476,11 +458,27 @@ fn open_app_tab(
     let size = host.window.inner_size();
     let id = manager.next_app_id();
     let bounds = manager.app_rect(size.width, size.height);
+    let inferred_source_dir = source_dir.or_else(|| {
+        dist_dir
+            .as_ref()
+            .and_then(|path| path.parent())
+            .and_then(|path| path.parent())
+            .and_then(|path| path.canonicalize().ok())
+    });
     let app_capabilities = dist_dir
         .as_deref()
         .map(load_app_capabilities_from_dist)
         .unwrap_or_default();
-    let webview = build_app_webview(host, &id, dist_dir, embedded, state, proxy.clone(), bounds)?;
+    let webview = build_app_webview(
+        host,
+        &id,
+        dist_dir,
+        embedded,
+        state,
+        proxy.clone(),
+        bounds,
+        kind,
+    )?;
 
     if let Some(active) = manager.active_app_webview() {
         let _ = active.set_visible(false);
@@ -494,6 +492,7 @@ fn open_app_tab(
         id,
         label,
         kind,
+        source_dir: inferred_source_dir,
         selectable: true,
         loading: false,
     });

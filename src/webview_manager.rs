@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use wry::{Rect, WebView, dpi::PhysicalPosition, dpi::PhysicalSize};
 
 /// On macOS, bring a child webview to the front of the window's view hierarchy.
@@ -48,13 +49,14 @@ pub enum AppWebViewKind {
     Standard,
     Launcher,
     Studio,
+    Code,
     WalletSelector,
     Settings,
 }
 
 impl AppWebViewKind {
     pub fn is_closeable(self) -> bool {
-        !matches!(self, Self::Launcher | Self::Studio)
+        !matches!(self, Self::Launcher | Self::Studio | Self::Code)
     }
 }
 
@@ -63,6 +65,7 @@ pub struct AppWebViewEntry {
     pub id: String,
     pub label: String,
     pub kind: AppWebViewKind,
+    pub source_dir: Option<PathBuf>,
     pub selectable: bool,
     pub loading: bool,
 }
@@ -111,10 +114,6 @@ impl WebViewManager {
         self.active_app_index
             .and_then(|i| self.apps.get(i))
             .map(|e| &e.webview)
-    }
-
-    pub fn index_of_id(&self, id: &str) -> Option<usize> {
-        self.apps.iter().position(|e| e.id == id)
     }
 
     pub fn switch_to(&mut self, index: usize) {
@@ -237,6 +236,7 @@ impl WebViewManager {
             Some(tb) => tb,
             None => return,
         };
+        let has_code_tab = self.apps.iter().any(|entry| entry.kind == AppWebViewKind::Code);
         let tabs: Vec<serde_json::Value> = self
             .apps
             .iter()
@@ -247,6 +247,7 @@ impl WebViewManager {
                     "closable": e.kind.is_closeable(),
                     "clickable": e.selectable,
                     "loading": e.loading,
+                    "forkable": has_code_tab && e.kind == AppWebViewKind::Standard && e.source_dir.is_some(),
                 })
             })
             .collect();

@@ -1,4 +1,5 @@
 mod bundle;
+mod code;
 mod config;
 mod events;
 mod hardware;
@@ -38,10 +39,12 @@ use state::{AppState, Chain, UserEvent, WalletState};
 use webview::{EmbeddedContent, WebViewHost, build_app_webview, build_tab_bar_webview};
 use webview_manager::{AppWebViewEntry, AppWebViewKind, WebViewManager};
 
+static CODE_HTML: &str = include_str!("../internal-ui/static/code.html");
 static INDEX_HTML: &str = include_str!("../internal-ui/static/home.html");
 static LAUNCHER_HTML: &str = include_str!("../internal-ui/static/launcher.html");
 static TAB_BAR_HTML: &str = include_str!("../internal-ui/static/tabbar.html");
 static WALLET_SELECTOR_HTML: &str = include_str!("../internal-ui/static/wallet-selector.html");
+static CODE_JS: &str = include_str!("../internal-ui/dist/code.js");
 static HOME_JS: &str = include_str!("../internal-ui/dist/home.js");
 static LAUNCHER_JS: &str = include_str!("../internal-ui/dist/launcher.js");
 static TAB_BAR_JS: &str = include_str!("../internal-ui/dist/tabbar.js");
@@ -60,10 +63,14 @@ fn main() -> Result<()> {
 
     let cli = CliArgs::parse();
     let bundle = resolve_bundle(&cli)?;
-    let studio_bundle = resolve_studio_bundle(&cli)?;
-    if bundle.is_some() && studio_bundle.is_some() {
-        tracing::warn!("--studio-bundle is ignored when --bundle is provided");
-    }
+    let studio_bundle = if bundle.is_some() {
+        if cli.studio_bundle.is_some() {
+            tracing::warn!("--studio-bundle is ignored when --bundle is provided");
+        }
+        None
+    } else {
+        resolve_studio_bundle(&cli)?
+    };
     let config_path = cli
         .config
         .or_else(|| runtime_paths::resolve_default_config());
@@ -122,6 +129,14 @@ fn main() -> Result<()> {
         menu::setup_macos_app_menu("VibeFi");
     }
     let proxy = event_loop.create_proxy();
+    let code_workspace_root = code::project::resolve_workspace_root();
+    if let Err(err) = std::fs::create_dir_all(&code_workspace_root) {
+        tracing::warn!(
+            path = %code_workspace_root.display(),
+            error = %err,
+            "failed to create code workspace root"
+        );
+    }
 
     let state = AppState {
         wallet: Arc::new(Mutex::new(WalletState {
@@ -140,6 +155,12 @@ fn main() -> Result<()> {
         proxy: proxy.clone(),
         pending_connect: Arc::new(Mutex::new(VecDeque::new())),
         app_capabilities: Arc::new(Mutex::new(HashMap::new())),
+        code: Arc::new(Mutex::new(state::CodeState {
+            active_project: None,
+            workspace_root: code_workspace_root,
+            dev_server: None,
+            next_dev_server_id: 1,
+        })),
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
         settings_webview_id: Arc::new(Mutex::new(None)),
@@ -240,30 +261,6 @@ fn main() -> Result<()> {
             }) => {
                 events::user_event::handle_provider_event(&manager, webview_id, event, value);
             }
-            Event::UserEvent(UserEvent::StudioBundleResolved {
-                placeholder_id,
-                result,
-            }) => {
-                let host = window.as_ref().map(|w| WebViewHost {
-                    window: w,
-                    #[cfg(target_os = "linux")]
-                    tab_bar_container: gtk_tab_bar_container
-                        .as_ref()
-                        .expect("linux tab bar container not initialized"),
-                    #[cfg(target_os = "linux")]
-                    app_container: gtk_app_container
-                        .as_ref()
-                        .expect("linux app container not initialized"),
-                });
-                events::user_event::handle_studio_bundle_resolved(
-                    host.as_ref(),
-                    &state,
-                    &mut manager,
-                    &proxy,
-                    placeholder_id,
-                    result,
-                );
-            }
             Event::UserEvent(UserEvent::CloseWalletSelector) => {
                 events::user_event::handle_close_wallet_selector(&state, &mut manager);
             }
@@ -286,6 +283,104 @@ fn main() -> Result<()> {
                     &proxy,
                     action,
                 );
+            }
+            Event::UserEvent(UserEvent::StudioBundleResolved {
+                placeholder_id,
+                result,
+            }) => {
+                let Some(index) = manager.apps.iter().position(|entry| entry.id == placeholder_id)
+                else {
+                    tracing::warn!(
+                        placeholder_id = %placeholder_id,
+                        "studio placeholder tab not found"
+                    );
+                    return;
+                };
+
+                match result {
+                    Ok(dist_dir) => {
+                        let Some(window_ref) = window.as_ref() else {
+                            tracing::warn!("window missing while resolving studio bundle");
+                            return;
+                        };
+                        let host = WebViewHost {
+                            window: window_ref,
+                            #[cfg(target_os = "linux")]
+                            tab_bar_container: gtk_tab_bar_container
+                                .as_ref()
+                                .expect("linux tab bar container not initialized"),
+                            #[cfg(target_os = "linux")]
+                            app_container: gtk_app_container
+                                .as_ref()
+                                .expect("linux app container not initialized"),
+                        };
+                        let size = window_ref.inner_size();
+                        let bounds = manager.app_rect(size.width, size.height);
+                        match build_app_webview(
+                            &host,
+                            &placeholder_id,
+                            Some(dist_dir.clone()),
+                            EmbeddedContent::Default,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                            AppWebViewKind::Studio,
+                        ) {
+                            Ok(studio_webview) => {
+                                let was_active = manager.active_app_index == Some(index);
+                                if !was_active {
+                                    if let Err(err) = studio_webview.set_visible(false) {
+                                        tracing::warn!(
+                                            error = %err,
+                                            "failed to hide inactive studio webview"
+                                        );
+                                    }
+                                }
+
+                                if let Ok(mut caps) = state.app_capabilities.lock() {
+                                    let studio_caps =
+                                        events::user_event::load_app_capabilities_from_dist(
+                                            &dist_dir,
+                                        );
+                                    caps.insert(placeholder_id.clone(), studio_caps);
+                                } else {
+                                    tracing::warn!(
+                                        "failed to acquire app_capabilities lock for studio tab"
+                                    );
+                                }
+
+                                manager.apps[index] = AppWebViewEntry {
+                                    webview: studio_webview,
+                                    id: placeholder_id,
+                                    label: "Studio".to_string(),
+                                    kind: AppWebViewKind::Studio,
+                                    source_dir: None,
+                                    selectable: true,
+                                    loading: false,
+                                };
+                                manager.update_tab_bar();
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = %err, "failed to build studio webview");
+                                if let Some(entry) = manager.apps.get_mut(index) {
+                                    entry.label = "Studio (unavailable)".to_string();
+                                    entry.selectable = false;
+                                    entry.loading = false;
+                                }
+                                manager.update_tab_bar();
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to resolve studio dapp bundle");
+                        if let Some(entry) = manager.apps.get_mut(index) {
+                            entry.label = "Studio (unavailable)".to_string();
+                            entry.selectable = false;
+                            entry.loading = false;
+                        }
+                        manager.update_tab_bar();
+                    }
+                }
             }
 
             Event::NewEvents(StartCause::Init) => {
@@ -365,9 +460,11 @@ fn main() -> Result<()> {
                         .map(|r| !r.dapp_registry.is_empty())
                         .unwrap_or(false);
                     let dist_dir = bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
+                    let bundle_source_dir = bundle.as_ref().map(|cfg| cfg.source_dir.clone());
                     let studio_dist_dir = studio_bundle.as_ref().map(|cfg| cfg.dist_dir.clone());
                     let bounds = manager.app_rect(w, h);
                     if let Some(dist_dir) = dist_dir.clone() {
+                        let source_dir = bundle_source_dir.clone();
                         let app_id = manager.next_app_id();
                         match build_app_webview(
                             &host,
@@ -377,6 +474,7 @@ fn main() -> Result<()> {
                             &state,
                             proxy.clone(),
                             bounds,
+                            AppWebViewKind::Standard,
                         ) {
                             Ok(wv) => {
                                 manager.apps.push(AppWebViewEntry {
@@ -384,6 +482,7 @@ fn main() -> Result<()> {
                                     id: app_id,
                                     label: "App".to_string(),
                                     kind: AppWebViewKind::Standard,
+                                    source_dir,
                                     selectable: true,
                                     loading: false,
                                 });
@@ -406,6 +505,7 @@ fn main() -> Result<()> {
                             &state,
                             proxy.clone(),
                             bounds,
+                            AppWebViewKind::Launcher,
                         ) {
                             Ok(wv) => wv,
                             Err(e) => {
@@ -420,6 +520,7 @@ fn main() -> Result<()> {
                             id: launcher_id,
                             label: "Launcher".to_string(),
                             kind: AppWebViewKind::Launcher,
+                            source_dir: None,
                             selectable: true,
                             loading: false,
                         });
@@ -434,6 +535,7 @@ fn main() -> Result<()> {
                             &state,
                             proxy.clone(),
                             bounds,
+                            AppWebViewKind::Studio,
                         ) {
                             Ok(wv) => wv,
                             Err(e) => {
@@ -453,8 +555,40 @@ fn main() -> Result<()> {
                             id: studio_placeholder_id.clone(),
                             label: "Studio".to_string(),
                             kind: AppWebViewKind::Studio,
+                            source_dir: None,
                             selectable: false,
                             loading: true,
+                        });
+
+                        let code_id = manager.next_app_id();
+                        let code_webview = match build_app_webview(
+                            &host,
+                            &code_id,
+                            None,
+                            EmbeddedContent::Code,
+                            &state,
+                            proxy.clone(),
+                            bounds,
+                            AppWebViewKind::Code,
+                        ) {
+                            Ok(wv) => wv,
+                            Err(e) => {
+                                tracing::error!(error = ?e, "code webview error");
+                                *control_flow = ControlFlow::Exit;
+                                return;
+                            }
+                        };
+                        if let Err(err) = code_webview.set_visible(false) {
+                            tracing::warn!(error = %err, "failed to hide inactive code webview");
+                        }
+                        manager.apps.push(AppWebViewEntry {
+                            webview: code_webview,
+                            id: code_id,
+                            label: "Code".to_string(),
+                            kind: AppWebViewKind::Code,
+                            source_dir: None,
+                            selectable: true,
+                            loading: false,
                         });
 
                         manager.update_tab_bar();
@@ -501,17 +635,19 @@ fn main() -> Result<()> {
                             &host,
                             &app_id,
                             None,
-                            EmbeddedContent::Default,
+                            EmbeddedContent::Code,
                             &state,
                             proxy.clone(),
                             bounds,
+                            AppWebViewKind::Code,
                         ) {
                             Ok(wv) => {
                                 manager.apps.push(AppWebViewEntry {
                                     webview: wv,
                                     id: app_id,
-                                    label: "Home".to_string(),
-                                    kind: AppWebViewKind::Standard,
+                                    label: "Code".to_string(),
+                                    kind: AppWebViewKind::Code,
+                                    source_dir: None,
                                     selectable: true,
                                     loading: false,
                                 });
@@ -535,6 +671,11 @@ fn main() -> Result<()> {
                 ..
             } => {
                 *control_flow = ControlFlow::Exit;
+            }
+            Event::LoopDestroyed => {
+                if let Err(err) = code::dev_server::stop_dev_server_for_shutdown(&state) {
+                    tracing::warn!(error = %err, "failed to stop Code dev server during shutdown");
+                }
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(size),
@@ -572,7 +713,10 @@ fn resolve_bundle(cli: &CliArgs) -> Result<Option<BundleConfig>> {
     if !cli.no_build {
         build_bundle(&source_dir, &dist_dir)?;
     }
-    Ok(Some(BundleConfig { dist_dir }))
+    Ok(Some(BundleConfig {
+        source_dir,
+        dist_dir,
+    }))
 }
 
 fn resolve_studio_bundle(cli: &CliArgs) -> Result<Option<BundleConfig>> {
@@ -587,5 +731,8 @@ fn resolve_studio_bundle(cli: &CliArgs) -> Result<Option<BundleConfig>> {
     if !cli.no_build {
         build_bundle(&source_dir, &dist_dir)?;
     }
-    Ok(Some(BundleConfig { dist_dir }))
+    Ok(Some(BundleConfig {
+        source_dir,
+        dist_dir,
+    }))
 }

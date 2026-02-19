@@ -6,6 +6,7 @@ const entries: Array<{ entry: string; outfile: string }> = [
   },
   { entry: "./src/preload-tabbar.ts", outfile: "./dist/preload-tabbar.js" },
   { entry: "./src/home.tsx", outfile: "./dist/home.js" },
+  { entry: "./src/code.tsx", outfile: "./dist/code.js" },
   { entry: "./src/launcher.tsx", outfile: "./dist/launcher.js" },
   { entry: "./src/wallet-selector.tsx", outfile: "./dist/wallet-selector.js" },
   { entry: "./src/tabbar.tsx", outfile: "./dist/tabbar.js" },

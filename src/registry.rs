@@ -496,11 +496,16 @@ pub fn handle_launcher_ipc(
 
 fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -> Result<()> {
     let dist_dir = prepare_dapp_dist(state, root_cid, Some(webview_id))?;
+    let source_dir = dist_dir
+        .parent()
+        .and_then(|path| path.parent())
+        .and_then(|path| path.canonicalize().ok());
     let _ = state
         .proxy
         .send_event(UserEvent::TabAction(TabAction::OpenApp {
             name: name.to_string(),
             dist_dir,
+            source_dir,
         }));
     Ok(())
 }

@@ -5,6 +5,7 @@ export const PROVIDER_IDS = {
   tabbar: "vibefi-tabbar",
   settings: "vibefi-settings",
   ipfs: "vibefi-ipfs",
+  code: "vibefi-code",
 } as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[keyof typeof PROVIDER_IDS];
@@ -38,6 +39,7 @@ export type Tab = {
   closable?: boolean;
   clickable?: boolean;
   loading?: boolean;
+  forkable?: boolean;
 };
 
 export type TabbarUpdatePayload = {
