@@ -61,6 +61,21 @@ jobs:
     - name: Fetch Bun binaries for packaging
       run: ./vendor/fetch-bun.sh
 
+    - name: Resolve and validate release version
+      shell: bash
+      run: |
+        set -euo pipefail
+        TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+        if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+          echo "Error: release tag must match vX.Y.Z, got: $TAG"
+          exit 1
+        fi
+        VERSION="${TAG#v}"
+        echo "Using release version: $VERSION (from tag: $TAG)"
+        sed -E -i.bak "s/^version = \".*\"$/version = \"$VERSION\"/" Cargo.toml
+        rm -f Cargo.toml.bak
+        grep -n '^version = "' Cargo.toml
+
     - name: Build release binary
       run: cargo build --release --target ${{ matrix.target }}
     
@@ -174,6 +189,21 @@ jobs:
     
     - name: Fetch Bun binaries for packaging
       run: ./vendor/fetch-bun.sh
+
+    - name: Resolve and validate release version
+      shell: bash
+      run: |
+        set -euo pipefail
+        TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+        if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+          echo "Error: release tag must match vX.Y.Z, got: $TAG"
+          exit 1
+        fi
+        VERSION="${TAG#v}"
+        echo "Using release version: $VERSION (from tag: $TAG)"
+        sed -E -i.bak "s/^version = \".*\"$/version = \"$VERSION\"/" Cargo.toml
+        rm -f Cargo.toml.bak
+        grep -n '^version = "' Cargo.toml
     
     - name: Build release binary
       run: cargo build --release
@@ -246,6 +276,21 @@ jobs:
     - name: Prepare Bun binary for MSVC target
       shell: pwsh
       run: Copy-Item -Path .\vendor\bun\bun-x86_64-pc-windows-gnu.exe -Destination .\vendor\bun\bun-x86_64-pc-windows-msvc.exe -Force
+
+    - name: Resolve and validate release version
+      shell: pwsh
+      run: |
+        $tag = "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+        if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+          Write-Error "Release tag must match vX.Y.Z, got: $tag"
+          exit 1
+        }
+        $version = $tag.Substring(1)
+        Write-Host "Using release version: $version (from tag: $tag)"
+        $cargoToml = Get-Content Cargo.toml -Raw
+        $cargoToml = $cargoToml -replace '(?m)^version = ".*"$', "version = `"$version`""
+        Set-Content -Path Cargo.toml -Value $cargoToml -NoNewline
+        Select-String -Path Cargo.toml -Pattern '^version = "'
 
     - name: Build release binary
       run: cargo build --release
