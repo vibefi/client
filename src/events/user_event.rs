@@ -159,25 +159,39 @@ pub fn handle_ipc_event(
                     None => {}
                 },
                 Some(KnownProviderId::Code) => {
-                    let Some(tabbar_webview) = manager.webview_for_id("tab-bar") else {
-                        tracing::warn!("tab-bar webview missing for code IPC forwarding");
-                        return;
-                    };
-                    let Some(code_entry) = manager
+                    let Some(code_entry_id) = manager
                         .apps
                         .iter()
                         .find(|entry| entry.kind == AppWebViewKind::Code)
+                        .map(|entry| entry.id.clone())
                     else {
-                        let _ = ipc::respond_err(
-                            tabbar_webview,
-                            req.id,
-                            "Code tab is not available in this session",
-                        );
+                        if let Some(tabbar_webview) = manager.webview_for_id("tab-bar") {
+                            let _ = ipc::respond_err(
+                                tabbar_webview,
+                                req.id,
+                                "Code tab is not available in this session",
+                            );
+                        } else {
+                            tracing::warn!("tab-bar webview missing while returning code tab error");
+                        }
                         return;
                     };
 
                     let result =
-                        crate::code::router::handle_code_ipc(state, manager, &code_entry.id, &req);
+                        crate::code::router::handle_code_ipc(state, manager, &code_entry_id, &req);
+                    let should_switch_to_code =
+                        req.method == "code_forkDapp" && result.is_ok();
+                    if should_switch_to_code {
+                        if let Some(idx) = manager.index_of_kind(AppWebViewKind::Code) {
+                            manager.switch_to(idx);
+                        } else {
+                            tracing::warn!("code_forkDapp succeeded but Code tab was not found");
+                        }
+                    }
+                    let Some(tabbar_webview) = manager.webview_for_id("tab-bar") else {
+                        tracing::warn!("tab-bar webview missing for code IPC forwarding");
+                        return;
+                    };
                     if let Err(err) = ipc::respond_option_result(tabbar_webview, req.id, result) {
                         tracing::error!(error = ?err, "failed to respond to tab-bar code IPC");
                     }
