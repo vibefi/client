@@ -217,8 +217,14 @@ Run a bundled dapp (expects `manifest.json` in the bundle directory):
 cargo run -- --bundle /path/to/bundle
 ```
 
-The bundle build step uses `bun` and `vite` from the bundle's `package.json`.
 You can produce bundles with the CLI `package` command.
+
+Bundle behavior depends on `manifest.json.layout`:
+
+- `constrained`: client injects standard build files and runs `bun install --no-save` + `bun x --bun vite build`.
+- `static-html`: client skips Bun/Vite, validates manifest-listed paths, and copies only `.html`, `.js`, and `.json` files into `.vibefi/dist`.
+
+`static-html` bundles do not require a `package.json`.
 
 ## IPFS retrieval
 

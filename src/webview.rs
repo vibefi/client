@@ -41,6 +41,12 @@ pub enum EmbeddedContent {
     Settings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CspProfile {
+    Strict,
+    StaticHtml,
+}
+
 fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
     let rel = path.trim_start_matches('/');
     let mut file_path = if rel.is_empty() {
@@ -90,11 +96,44 @@ fn normalized_app_path(uri: &wry::http::Uri) -> String {
     result
 }
 
+fn csp_profile_for_dist(dist_dir: &PathBuf) -> CspProfile {
+    let Some(bundle_root) = dist_dir.parent().and_then(|p| p.parent()) else {
+        return CspProfile::Strict;
+    };
+    let manifest_path = bundle_root.join("manifest.json");
+    let Ok(raw) = fs::read_to_string(manifest_path) else {
+        return CspProfile::Strict;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return CspProfile::Strict;
+    };
+    if parsed.get("layout").and_then(serde_json::Value::as_str) == Some("static-html") {
+        return CspProfile::StaticHtml;
+    }
+    if parsed
+        .get("constraints")
+        .and_then(|value| value.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("static-html")
+    {
+        return CspProfile::StaticHtml;
+    }
+    CspProfile::Strict
+}
+
 fn csp_response(
     body: Vec<u8>,
     mime: String,
+    profile: CspProfile,
 ) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
-    let csp = "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default";
+    let csp = match profile {
+        CspProfile::Strict => {
+            "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default"
+        }
+        CspProfile::StaticHtml => {
+            "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' 'unsafe-inline' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'"
+        }
+    };
     Response::builder()
         .status(200)
         .header(CONTENT_TYPE, mime.as_str())
@@ -150,6 +189,10 @@ pub fn build_app_webview(
     tracing::debug!(?id, ?embedded, ?dist_dir, ?bounds, "build_app_webview");
 
     let protocol_dist = dist_dir.clone();
+    let csp_profile = dist_dir
+        .as_ref()
+        .map(csp_profile_for_dist)
+        .unwrap_or(CspProfile::Strict);
     let app_id_for_log = id.to_string();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
         tracing::trace!(
@@ -162,7 +205,7 @@ pub fn build_app_webview(
             tracing::trace!("serving from dist_dir: path={path:?}");
             let (body, mime) = serve_file(dist, &path);
             tracing::trace!("dist response: mime={mime:?}, body_len={}", body.len());
-            csp_response(body, mime)
+            csp_response(body, mime, csp_profile)
         } else {
             let matched = match (embedded, path.as_str()) {
                 (_, "/" | "/index.html") => {
@@ -176,6 +219,7 @@ pub fn build_app_webview(
                     csp_response(
                         html.as_bytes().to_vec(),
                         "text/html; charset=utf-8".to_string(),
+                        csp_profile,
                     )
                 }
                 (EmbeddedContent::Launcher, "/launcher.js") => {
@@ -183,6 +227,7 @@ pub fn build_app_webview(
                     csp_response(
                         LAUNCHER_JS.as_bytes().to_vec(),
                         "application/javascript; charset=utf-8".to_string(),
+                        csp_profile,
                     )
                 }
                 (EmbeddedContent::Default, "/home.js") => {
@@ -190,21 +235,25 @@ pub fn build_app_webview(
                     csp_response(
                         HOME_JS.as_bytes().to_vec(),
                         "application/javascript; charset=utf-8".to_string(),
+                        csp_profile,
                     )
                 }
                 (EmbeddedContent::WalletSelector, "/wallet-selector.js") => csp_response(
                     WALLET_SELECTOR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
+                    csp_profile,
                 ),
                 (EmbeddedContent::Settings, "/settings.js") => csp_response(
                     SETTINGS_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
+                    csp_profile,
                 ),
                 _ => {
                     tracing::debug!("app protocol miss: embedded={embedded:?}, path={path:?}");
                     csp_response(
                         format!("Not found: {}", path).into_bytes(),
                         "text/plain; charset=utf-8".to_string(),
+                        csp_profile,
                     )
                 }
             };
@@ -310,7 +359,7 @@ pub fn build_tab_bar_webview(
                 )
             }
         };
-        csp_response(body, mime)
+        csp_response(body, mime, CspProfile::Strict)
     };
 
     let builder = WebViewBuilder::new()
