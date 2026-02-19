@@ -188,12 +188,26 @@ pub fn handle_code_ipc(
 
             let files = filesystem::list_files(&project_root)?;
             let project_path = project_root.to_string_lossy().into_owned();
+            if let Err(error) = project::ensure_preview_console_bridge(&project_root) {
+                tracing::warn!(
+                    error = %error,
+                    project = %project_root.display(),
+                    "failed to ensure preview console bridge for opened project"
+                );
+            }
             set_active_project(state, project_root);
             Ok(Some(json!({ "projectPath": project_path, "files": files })))
         }
         "code_startDevServer" => {
             let params: StartDevServerParams = parse_params_or_default(req)?;
             let project_root = resolve_dev_server_project_root(state, params.project_path)?;
+            if let Err(error) = project::ensure_preview_console_bridge(&project_root) {
+                tracing::warn!(
+                    error = %error,
+                    project = %project_root.display(),
+                    "failed to ensure preview console bridge before starting dev server"
+                );
+            }
             let response = dev_server::start_dev_server(state, webview_id, project_root.clone())?;
             set_active_project(state, project_root);
             Ok(Some(response))
@@ -275,6 +289,13 @@ pub fn handle_code_ipc(
                 source_dir,
                 params.name.as_deref().or(Some(source_entry.label.as_str())),
             )?;
+            if let Err(error) = project::ensure_preview_console_bridge(&forked_project) {
+                tracing::warn!(
+                    error = %error,
+                    project = %forked_project.display(),
+                    "failed to ensure preview console bridge for forked project"
+                );
+            }
             let forked_project_path = forked_project.to_string_lossy().into_owned();
             set_active_project(state, forked_project);
 

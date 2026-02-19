@@ -2,7 +2,7 @@ import React, { useState } from "react";
 
 export type ToolCallCardData = {
   id: string;
-  name: "write_file" | "delete_file";
+  name: "read_file" | "write_file" | "delete_file";
   path: string;
   content?: string;
   ok: boolean;
@@ -29,7 +29,7 @@ export function ToolCallCard({ call }: ToolCallCardProps) {
         </span>
       </button>
       <div className="tool-call-output">{call.output}</div>
-      {expanded && call.name === "write_file" && typeof call.content === "string" ? (
+      {expanded && typeof call.content === "string" ? (
         <pre className="tool-call-content">{call.content}</pre>
       ) : null}
     </div>

@@ -35,7 +35,7 @@ impl Default for CodeLlmConfig {
     fn default() -> Self {
         Self {
             provider: "claude".to_string(),
-            model: "claude-sonnet-4-5-20250929".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
         }
     }
 }

@@ -1,191 +1,95 @@
+import { stepCountIs, streamText } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { buildFileTools } from "./aiSdkTools";
 import type { SendChatParams, SendChatResult } from "./provider";
-import {
-  asSupportedToolName,
-  OPENAI_TOOL_SCHEMAS,
-  parseToolCallInput,
-  type ToolCall,
-  type ToolExecutionResult,
-} from "./tools";
+import type { ToolExecutionResult } from "./tools";
 
-type OpenAiToolFunction = {
-  name?: string;
-  arguments?: string;
-};
+const STREAM_TIMEOUT_MS = 90_000;
 
-type OpenAiToolCall = {
-  id?: string;
-  type?: string;
-  function?: OpenAiToolFunction;
-};
-
-type OpenAiMessage = {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
-  tool_calls?: OpenAiToolCall[];
-  tool_call_id?: string;
-  name?: string;
-};
-
-type OpenAiChoice = {
-  message?: OpenAiMessage;
-};
-
-type OpenAiResponse = {
-  choices?: OpenAiChoice[];
-  error?: {
-    message?: string;
-  };
-};
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object") return null;
-  return value as Record<string, unknown>;
-}
-
-function pickOpenAiError(data: unknown): string | null {
-  const record = asRecord(data);
-  if (!record) return null;
-
-  const error = asRecord(record.error);
-  if (error && typeof error.message === "string" && error.message.trim()) {
-    return error.message.trim();
-  }
-
-  return null;
-}
-
-async function parseOpenAiError(response: Response): Promise<string> {
-  const bodyText = await response.text();
-  if (!bodyText.trim()) {
-    return `OpenAI request failed (${response.status})`;
-  }
-
-  try {
-    const parsed = JSON.parse(bodyText) as unknown;
-    const apiError = pickOpenAiError(parsed);
-    if (apiError) {
-      return apiError;
-    }
-  } catch {
-    // Ignore JSON parse error and return raw text.
-  }
-
-  return `OpenAI request failed (${response.status}): ${bodyText.slice(0, 300)}`;
-}
-
-function extractToolCalls(message: OpenAiMessage | undefined): ToolCall[] {
-  if (!message || !Array.isArray(message.tool_calls)) {
-    return [];
-  }
-
-  const toolCalls: ToolCall[] = [];
-  for (const toolCall of message.tool_calls) {
-    if (toolCall.type !== "function") continue;
-    const id = typeof toolCall.id === "string" && toolCall.id.trim() ? toolCall.id.trim() : "";
-    const functionName = toolCall.function?.name;
-    const name = asSupportedToolName(functionName);
-    if (!id || !name) continue;
-
-    let parsedArgs: unknown = null;
-    try {
-      parsedArgs = toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : null;
-    } catch {
-      continue;
-    }
-
-    const input = parseToolCallInput(functionName, parsedArgs);
-    if (!input) continue;
-
-    toolCalls.push({
-      id,
-      name,
-      input,
-    });
-  }
-  return toolCalls;
+function extractToolPath(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const pathValue = (input as Record<string, unknown>).path;
+  if (typeof pathValue !== "string") return null;
+  const path = pathValue.trim();
+  return path || null;
 }
 
 export async function streamOpenAiChat(params: SendChatParams): Promise<SendChatResult> {
   const toolResults: ToolExecutionResult[] = [];
   const maxToolRounds = Math.max(1, Math.trunc(params.maxToolRounds ?? 8));
-  const messages: OpenAiMessage[] = [];
 
-  if (params.systemPrompt?.trim()) {
-    messages.push({
-      role: "system",
-      content: params.systemPrompt,
-    });
-  }
+  const openai = createOpenAI({
+    apiKey: params.apiKey,
+  });
 
-  for (const message of params.messages) {
-    messages.push({
+  const result = streamText({
+    model: openai.responses(params.model),
+    system: params.systemPrompt?.trim() ? params.systemPrompt : undefined,
+    messages: params.messages.map((message) => ({
       role: message.role,
       content: message.content,
-    });
-  }
+    })),
+    tools: buildFileTools(params, toolResults),
+    stopWhen: stepCountIs(maxToolRounds),
+    abortSignal: params.signal,
+    timeout: STREAM_TIMEOUT_MS,
+  });
 
-  for (let round = 0; round < maxToolRounds; round += 1) {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${params.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: params.model,
-        messages,
-        tools: OPENAI_TOOL_SCHEMAS,
-        tool_choice: "auto",
-      }),
-      signal: params.signal,
-    });
+  let lastStatus = "";
+  const emitStatus = (status: string) => {
+    if (!status || status === lastStatus) return;
+    lastStatus = status;
+    params.onStatus?.(status);
+  };
 
-    if (!response.ok) {
-      throw new Error(await parseOpenAiError(response));
+  emitStatus("Connecting to OpenAI...");
+  for await (const chunk of result.fullStream) {
+    if (chunk.type === "start") {
+      emitStatus("Thinking...");
+      continue;
     }
 
-    const payload = (await response.json()) as OpenAiResponse;
-    if (payload.error?.message) {
-      throw new Error(payload.error.message);
+    if (chunk.type === "start-step") {
+      emitStatus("Planning next step...");
+      continue;
     }
 
-    const assistantMessage = payload.choices?.[0]?.message;
-    if (!assistantMessage || assistantMessage.role !== "assistant") {
-      throw new Error("OpenAI response did not include an assistant message.");
+    if (chunk.type === "reasoning-start" || chunk.type === "reasoning-delta") {
+      emitStatus("Analyzing request...");
+      continue;
     }
 
-    const text = typeof assistantMessage.content === "string" ? assistantMessage.content : "";
-    if (text) {
-      params.onDelta(text);
+    if (chunk.type === "tool-call") {
+      const path = extractToolPath(chunk.input);
+      emitStatus(path ? `Running ${chunk.toolName} on ${path}...` : `Running ${chunk.toolName}...`);
+      continue;
     }
 
-    const toolCalls = extractToolCalls(assistantMessage);
-    messages.push({
-      role: "assistant",
-      content: text || "",
-      tool_calls: assistantMessage.tool_calls ?? [],
-    });
-
-    if (toolCalls.length === 0) {
-      return { toolResults };
+    if (chunk.type === "tool-result") {
+      emitStatus(`Finished ${chunk.toolName}.`);
+      continue;
     }
 
-    if (!params.onToolCall) {
-      throw new Error("Assistant requested tool calls but no tool handler is configured.");
+    if (chunk.type === "finish-step") {
+      emitStatus("Processing step result...");
+      continue;
     }
 
-    for (const toolCall of toolCalls) {
-      const result = await params.onToolCall(toolCall);
-      toolResults.push(result);
-      params.onToolResult?.(result);
-      messages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        name: toolCall.name,
-        content: result.output,
-      });
+    if (chunk.type === "text-delta" && chunk.text) {
+      params.onDelta(chunk.text);
+      emitStatus("Writing response...");
+      continue;
+    }
+
+    if (chunk.type === "finish") {
+      emitStatus("Done.");
+      continue;
+    }
+
+    if (chunk.type === "error") {
+      emitStatus("Model returned an error.");
     }
   }
 
-  throw new Error("OpenAI tool loop exceeded max rounds");
+  return { toolResults };
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -96,6 +96,7 @@ pub fn start_dev_server(
     )?;
 
     spawn_output_reader(
+        state.clone(),
         state.proxy.clone(),
         snapshot.webview_id.clone(),
         "stdout",
@@ -105,20 +106,13 @@ pub fn start_dev_server(
         Arc::clone(&ready),
     );
     spawn_output_reader(
+        state.clone(),
         state.proxy.clone(),
         snapshot.webview_id.clone(),
         "stderr",
         stderr,
         snapshot.port,
         snapshot.project_root.clone(),
-        Arc::clone(&ready),
-    );
-    spawn_ready_probe(
-        state.proxy.clone(),
-        snapshot.webview_id.clone(),
-        snapshot.port,
-        snapshot.project_root.clone(),
-        Arc::clone(&snapshot.child),
         Arc::clone(&ready),
     );
     spawn_exit_watcher(state.clone(), snapshot, ready);
@@ -240,6 +234,7 @@ fn find_available_port(start: u16) -> Result<u16> {
 }
 
 fn spawn_output_reader<R: std::io::Read + Send + 'static>(
+    state: AppState,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     webview_id: String,
     stream: &'static str,
@@ -263,52 +258,13 @@ fn spawn_output_reader<R: std::io::Read + Send + 'static>(
                             "line": line,
                         }),
                     );
-                    maybe_emit_ready(&proxy, &webview_id, port, &project_root, &ready, &line);
+                    maybe_emit_ready(&state, &proxy, &webview_id, port, &project_root, &ready, &line);
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, stream, "failed to read dev server output");
                     break;
                 }
             }
-        }
-    });
-}
-
-fn spawn_ready_probe(
-    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
-    webview_id: String,
-    port: u16,
-    project_root: PathBuf,
-    child: Arc<Mutex<Child>>,
-    ready: Arc<AtomicBool>,
-) {
-    thread::spawn(move || {
-        for _ in 0..200 {
-            if ready.load(Ordering::Relaxed) {
-                return;
-            }
-
-            let exited = match child.lock() {
-                Ok(mut guard) => match guard.try_wait() {
-                    Ok(Some(_)) => true,
-                    Ok(None) => false,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "ready probe failed to query process state");
-                        true
-                    }
-                },
-                Err(_) => true,
-            };
-            if exited {
-                return;
-            }
-
-            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                maybe_emit_ready(&proxy, &webview_id, port, &project_root, &ready, "");
-                return;
-            }
-
-            thread::sleep(Duration::from_millis(150));
         }
     });
 }
@@ -351,6 +307,7 @@ fn spawn_exit_watcher(state: AppState, snapshot: RunningSnapshot, _ready: Arc<At
 }
 
 fn maybe_emit_ready(
+    state: &AppState,
     proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
     webview_id: &str,
     port: u16,
@@ -362,12 +319,30 @@ fn maybe_emit_ready(
         return;
     }
 
-    if !looks_ready(output_line, port) && !output_line.is_empty() {
+    let Some(ready_port) = detect_ready_port(output_line, port) else {
         return;
-    }
+    };
 
     if ready.swap(true, Ordering::SeqCst) {
         return;
+    }
+
+    update_running_server_port(state, webview_id, project_root, ready_port);
+
+    if ready_port != port {
+        emit_provider_event(
+            proxy,
+            webview_id.to_string(),
+            "codeConsoleOutput".to_string(),
+            json!({
+                "source": "system",
+                "stream": "stdout",
+                "line": format!(
+                    "vite selected localhost:{} instead of requested localhost:{}",
+                    ready_port, port
+                ),
+            }),
+        );
     }
 
     emit_provider_event(
@@ -375,18 +350,53 @@ fn maybe_emit_ready(
         webview_id.to_string(),
         "codeDevServerReady".to_string(),
         json!({
-            "port": port,
-            "url": format!("http://localhost:{}/", port),
+            "port": ready_port,
+            "url": format!("http://localhost:{}/", ready_port),
             "projectPath": project_root.to_string_lossy().to_string(),
         }),
     );
 }
 
-fn looks_ready(line: &str, port: u16) -> bool {
-    line.contains("Local:")
-        || line.contains("ready in")
-        || line.contains(&format!("localhost:{port}"))
-        || line.contains(&format!("127.0.0.1:{port}"))
+fn update_running_server_port(
+    state: &AppState,
+    webview_id: &str,
+    project_root: &Path,
+    ready_port: u16,
+) {
+    if let Ok(mut guard) = state.code.lock() {
+        if let Some(server) = guard.dev_server.as_mut() {
+            if server.webview_id == webview_id && server.project_root == project_root {
+                server.port = ready_port;
+            }
+        }
+    }
+}
+
+fn detect_ready_port(line: &str, configured_port: u16) -> Option<u16> {
+    if let Some(port) = extract_port_after_prefix(line, "http://localhost:") {
+        return Some(port);
+    }
+    if let Some(port) = extract_port_after_prefix(line, "http://127.0.0.1:") {
+        return Some(port);
+    }
+    if line.contains(&format!("localhost:{configured_port}"))
+        || line.contains(&format!("127.0.0.1:{configured_port}"))
+    {
+        return Some(configured_port);
+    }
+    None
+}
+
+fn extract_port_after_prefix(line: &str, prefix: &str) -> Option<u16> {
+    let start = line.find(prefix)? + prefix.len();
+    let digits: String = line[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u16>().ok()
 }
 
 fn running_snapshot(state: &AppState) -> Result<Option<RunningSnapshot>> {

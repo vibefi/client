@@ -20,6 +20,7 @@ export type SendChatParams = {
   signal?: AbortSignal;
   maxToolRounds?: number;
   onDelta: (text: string) => void;
+  onStatus?: (status: string) => void;
   onToolCall?: (toolCall: ToolCall) => Promise<ToolExecutionResult>;
   onToolResult?: (result: ToolExecutionResult) => void;
 };

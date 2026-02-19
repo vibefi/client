@@ -99,16 +99,9 @@ button:hover {
 }
 "#;
 
-const TEMPLATE_INDEX_HTML: &str = r#"<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VibeFi Dapp</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script>
+const PREVIEW_CONSOLE_BRIDGE_MARKER: &str = "__VIBEFI_PREVIEW_CONSOLE_BRIDGE__";
+
+const LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT: &str = r#"    <script>
       window.addEventListener("error", (event) => {
         window.parent.postMessage(
           {
@@ -128,11 +121,107 @@ const TEMPLATE_INDEX_HTML: &str = r#"<!doctype html>
           "*"
         );
       });
-    </script>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-"#;
+    </script>"#;
+
+const PREVIEW_CONSOLE_BRIDGE_SCRIPT: &str = r#"    <script>
+      (() => {
+        if (window.__VIBEFI_PREVIEW_CONSOLE_BRIDGE__) return;
+        window.__VIBEFI_PREVIEW_CONSOLE_BRIDGE__ = true;
+
+        const postToParent = (payload) => {
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(payload, "*");
+            }
+          } catch (_) {}
+        };
+
+        const formatValue = (value) => {
+          if (typeof value === "string") return value;
+          if (value instanceof Error) {
+            const message = value.message || "Error";
+            return value.stack ? `${message}\n${value.stack}` : message;
+          }
+          if (value === null) return "null";
+          if (typeof value === "undefined") return "undefined";
+          if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
+          if (typeof value === "symbol") return String(value);
+          if (typeof value === "bigint") return `${value}n`;
+          try {
+            return JSON.stringify(value);
+          } catch (_) {
+            try {
+              return String(value);
+            } catch (_) {
+              return "[Unserializable value]";
+            }
+          }
+        };
+
+        const forwardConsole = (level, args) => {
+          postToParent({
+            type: "vibefi-code-console",
+            level,
+            message: args.map(formatValue).join(" "),
+          });
+        };
+
+        ["log", "info", "warn", "error", "debug", "trace"].forEach((level) => {
+          const original = console[level];
+          if (typeof original !== "function") return;
+          console[level] = (...args) => {
+            forwardConsole(level, args);
+            return original.apply(console, args);
+          };
+        });
+
+        window.addEventListener(
+          "error",
+          (event) => {
+            const target = event.target;
+            if (target && target !== window) {
+              const tag =
+                target && target.tagName && typeof target.tagName === "string"
+                  ? target.tagName.toLowerCase()
+                  : "resource";
+              const source =
+                target && typeof target.src === "string"
+                  ? target.src
+                  : target && typeof target.href === "string"
+                    ? target.href
+                    : "";
+              const message = source ? `Failed to load ${tag}: ${source}` : `Failed to load ${tag}`;
+              forwardConsole("error", [message]);
+              return;
+            }
+
+            postToParent({
+              type: "vibefi-code-error",
+              message: event.message || "Unknown runtime error",
+              stack: event.error && event.error.stack ? String(event.error.stack) : "",
+            });
+          },
+          true
+        );
+
+        window.addEventListener("unhandledrejection", (event) => {
+          const reason = event.reason;
+          const message =
+            reason && typeof reason === "object" && typeof reason.message === "string"
+              ? reason.message
+              : String(reason || "Unhandled promise rejection");
+          const stack =
+            reason && typeof reason === "object" && typeof reason.stack === "string"
+              ? reason.stack
+              : "";
+          postToParent({
+            type: "vibefi-code-error",
+            message,
+            stack,
+          });
+        });
+      })();
+    </script>"#;
 
 const TEMPLATE_TSCONFIG_JSON: &str = r#"{
   "compilerOptions": {
@@ -218,7 +307,7 @@ pub fn create_project(workspace_root: &Path, name: &str) -> Result<PathBuf> {
     write_scaffold_file(&project_root.join("src/App.tsx"), TEMPLATE_APP_TSX)?;
     write_scaffold_file(&project_root.join("src/main.tsx"), TEMPLATE_MAIN_TSX)?;
     write_scaffold_file(&project_root.join("src/App.css"), TEMPLATE_APP_CSS)?;
-    write_scaffold_file(&project_root.join("index.html"), TEMPLATE_INDEX_HTML)?;
+    write_scaffold_file(&project_root.join("index.html"), &render_index_html())?;
     write_scaffold_file(&project_root.join("tsconfig.json"), TEMPLATE_TSCONFIG_JSON)?;
     write_scaffold_file(
         &project_root.join("vite.config.ts"),
@@ -382,6 +471,67 @@ pub fn validate_project_root(project_root: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn ensure_preview_console_bridge(project_root: &Path) -> Result<()> {
+    let index_path = project_root.join("index.html");
+    if !index_path.is_file() {
+        return Ok(());
+    }
+
+    let contents = std::fs::read_to_string(&index_path)
+        .with_context(|| format!("failed to read project index at {}", index_path.display()))?;
+    if contents.contains(PREVIEW_CONSOLE_BRIDGE_MARKER) {
+        return Ok(());
+    }
+
+    let updated = if contents.contains(LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT) {
+        contents.replacen(
+            LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT,
+            PREVIEW_CONSOLE_BRIDGE_SCRIPT,
+            1,
+        )
+    } else if let Some(body_close) = contents.rfind("</body>") {
+        let mut value =
+            String::with_capacity(contents.len() + PREVIEW_CONSOLE_BRIDGE_SCRIPT.len() + 2);
+        value.push_str(&contents[..body_close]);
+        if !value.ends_with('\n') {
+            value.push('\n');
+        }
+        value.push_str(PREVIEW_CONSOLE_BRIDGE_SCRIPT);
+        value.push('\n');
+        value.push_str(&contents[body_close..]);
+        value
+    } else {
+        format!("{contents}\n{PREVIEW_CONSOLE_BRIDGE_SCRIPT}\n")
+    };
+
+    if updated == contents {
+        return Ok(());
+    }
+
+    std::fs::write(&index_path, updated)
+        .with_context(|| format!("failed to write project index at {}", index_path.display()))
+}
+
+fn render_index_html() -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VibeFi Dapp</title>
+  </head>
+  <body>
+    <div id="root"></div>
+{bridge}
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+"#,
+        bridge = PREVIEW_CONSOLE_BRIDGE_SCRIPT
+    )
 }
 
 fn sanitize_fork_name(raw: &str) -> String {
