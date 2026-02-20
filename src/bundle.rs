@@ -1,4 +1,12 @@
 use anyhow::{Context, Result, anyhow};
+use farmfe_compiler::Compiler;
+use farmfe_core::HashMap;
+use farmfe_core::config::{
+    Config as FarmConfig, Mode as FarmMode, OutputConfig as FarmOutputConfig,
+    RuntimeConfig as FarmRuntimeConfig, SourcemapConfig as FarmSourcemapConfig,
+    config_regex::ConfigRegex,
+    persistent_cache::PersistentCacheConfig,
+};
 use std::{
     fs,
     path::{Component, Path, PathBuf},
@@ -165,20 +173,13 @@ const STANDARD_PACKAGE_JSON: &str = r#"{
     "@tanstack/react-query": "5.90.20"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "5.1.2",
+    "@farmfe/core": "1.7.11",
+    "@farmfe/runtime": "2.0.0-beta.0",
+    "@swc/helpers": "0.5.18",
     "@types/react": "19.2.4",
-    "typescript": "5.9.3",
-    "vite": "7.2.4"
+    "typescript": "5.9.3"
   }
 }
-"#;
-
-const STANDARD_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig({
-  plugins: [react()],
-});
 "#;
 
 const STANDARD_TSCONFIG: &str = r#"{
@@ -202,8 +203,125 @@ const STANDARD_TSCONFIG: &str = r#"{
 
 fn write_standard_build_files(bundle_dir: &Path) -> Result<()> {
     fs::write(bundle_dir.join("package.json"), STANDARD_PACKAGE_JSON)?;
-    fs::write(bundle_dir.join("vite.config.ts"), STANDARD_VITE_CONFIG)?;
     fs::write(bundle_dir.join("tsconfig.json"), STANDARD_TSCONFIG)?;
+    Ok(())
+}
+
+fn farm_dependencies_available(bundle_dir: &Path) -> bool {
+    bundle_dir
+        .join("node_modules")
+        .join("@farmfe")
+        .join("runtime")
+        .join("src")
+        .join("module-system.ts")
+        .is_file()
+        && bundle_dir
+            .join("node_modules")
+            .join("@swc")
+            .join("helpers")
+            .is_dir()
+}
+
+fn ensure_bun_dependencies(bundle_dir: &Path) -> Result<()> {
+    let bun_bin = resolve_bun_binary().context("resolve bun runtime")?;
+    if farm_dependencies_available(bundle_dir) {
+        tracing::debug!(
+            bun = %bun_bin,
+            "bun runtime resolved and farm dependencies already installed"
+        );
+        return Ok(());
+    }
+
+    tracing::info!("bundle dependencies missing; running bun install");
+    let output = Command::new(&bun_bin)
+        .arg("install")
+        .arg("--no-save")
+        .current_dir(bundle_dir)
+        .output()
+        .with_context(|| format!("bun install failed (runtime: {bun_bin})"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        tracing::warn!(
+            status = %output.status,
+            bun = %bun_bin,
+            %stderr,
+            %stdout,
+            "bun install failed"
+        );
+        return Err(anyhow!(
+            "bun install failed with status {} (runtime: {bun_bin})\nstdout: {stdout}\nstderr: {stderr}",
+            output.status
+        ));
+    }
+    tracing::debug!("bun install completed");
+    Ok(())
+}
+
+fn build_with_farm(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
+    let runtime_dir = bundle_dir
+        .join("node_modules")
+        .join("@farmfe")
+        .join("runtime");
+    let swc_helpers_dir = bundle_dir.join("node_modules").join("@swc").join("helpers");
+    if !runtime_dir.is_dir() {
+        return Err(anyhow!(
+            "farm runtime package not found at {}",
+            runtime_dir.display()
+        ));
+    }
+    if !swc_helpers_dir.is_dir() {
+        return Err(anyhow!(
+            "swc helpers package not found at {}",
+            swc_helpers_dir.display()
+        ));
+    }
+
+    if dist_dir.exists() {
+        fs::remove_dir_all(dist_dir).context("clear farm dist dir")?;
+    }
+    fs::create_dir_all(dist_dir).context("create farm dist dir")?;
+
+    let mut input = HashMap::default();
+    input.insert("index".to_string(), "./index.html".to_string());
+
+    let config = FarmConfig {
+        input,
+        root: bundle_dir.to_string_lossy().into_owned(),
+        mode: FarmMode::Production,
+        external: vec![
+            ConfigRegex::new("^@walletconnect/ethereum-provider(?:/.*)?$"),
+            ConfigRegex::new("^@safe-global/safe-apps-provider(?:/.*)?$"),
+            ConfigRegex::new("^@safe-global/safe-apps-sdk(?:/.*)?$"),
+            ConfigRegex::new("^porto(?:/.*)?$"),
+            ConfigRegex::new("^@metamask/sdk(?:/.*)?$"),
+            ConfigRegex::new("^@gemini-wallet/core(?:/.*)?$"),
+            ConfigRegex::new("^@coinbase/wallet-sdk(?:/.*)?$"),
+            ConfigRegex::new("^@base-org/account(?:/.*)?$"),
+        ],
+        output: Box::new(FarmOutputConfig {
+            path: dist_dir.to_string_lossy().into_owned(),
+            show_file_size: false,
+            ..Default::default()
+        }),
+        runtime: Box::new(FarmRuntimeConfig {
+            path: runtime_dir.to_string_lossy().into_owned(),
+            swc_helpers_path: swc_helpers_dir.to_string_lossy().into_owned(),
+            ..Default::default()
+        }),
+        sourcemap: Box::new(FarmSourcemapConfig::Bool(false)),
+        lazy_compilation: false,
+        progress: false,
+        persistent_cache: Box::new(PersistentCacheConfig::Bool(false)),
+        ..Default::default()
+    };
+
+    tracing::info!(out_dir = %dist_dir.display(), "running farm build for bundle");
+    let compiler = Compiler::new(config, vec![]).context("create farm compiler")?;
+    compiler.compile().context("farm build failed")?;
+    compiler
+        .write_resources_to_disk()
+        .context("write farm build output")?;
     Ok(())
 }
 
@@ -215,76 +333,15 @@ pub fn build_bundle(bundle_dir: &Path, dist_dir: &Path) -> Result<()> {
     );
     let manifest = load_manifest(bundle_dir)?;
     if is_static_html_layout(&manifest) {
-        tracing::info!("static-html layout detected; skipping Vite build");
+        tracing::info!("static-html layout detected; skipping Farm build");
         copy_static_html_bundle(bundle_dir, dist_dir, &manifest)?;
         tracing::info!(dist_dir = %dist_dir.display(), "static-html bundle copy completed");
         return Ok(());
     }
 
     write_standard_build_files(bundle_dir)?;
-    let bun_bin = resolve_bun_binary().context("resolve bun runtime")?;
-    tracing::debug!(
-        bun = %bun_bin,
-        "resolved bun runtime"
-    );
-
-    let node_modules = bundle_dir.join("node_modules");
-    if !node_modules.exists() {
-        tracing::info!("bundle dependencies missing; running bun install");
-        let output = Command::new(&bun_bin)
-            .arg("install")
-            .arg("--no-save")
-            .current_dir(bundle_dir)
-            .output()
-            .with_context(|| format!("bun install failed (runtime: {bun_bin})"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            tracing::warn!(
-                status = %output.status,
-                bun = %bun_bin,
-                %stderr,
-                %stdout,
-                "bun install failed"
-            );
-            return Err(anyhow!(
-                "bun install failed with status {} (runtime: {bun_bin})\nstdout: {stdout}\nstderr: {stderr}",
-                output.status
-            ));
-        }
-        tracing::debug!("bun install completed");
-    }
-
-    fs::create_dir_all(dist_dir).context("create dist dir")?;
-    // Use relative path from bundle_dir for vite's outDir since vite runs in bundle_dir
-    let relative_dist = PathBuf::from(".vibefi").join("dist");
-    tracing::info!(out_dir = %relative_dist.display(), "running vite build for bundle");
-    let output = Command::new(&bun_bin)
-        .arg("x")
-        .arg("--bun")
-        .arg("vite")
-        .arg("build")
-        .arg("--emptyOutDir")
-        .arg("--outDir")
-        .arg(&relative_dist)
-        .current_dir(bundle_dir)
-        .output()
-        .with_context(|| format!("bun vite build failed (runtime: {bun_bin})"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        tracing::warn!(
-            status = %output.status,
-            bun = %bun_bin,
-            %stderr,
-            %stdout,
-            "vite build failed"
-        );
-        return Err(anyhow!(
-            "bun vite build failed with status {} (runtime: {bun_bin})\nstdout: {stdout}\nstderr: {stderr}",
-            output.status
-        ));
-    }
+    ensure_bun_dependencies(bundle_dir)?;
+    build_with_farm(bundle_dir, dist_dir)?;
     tracing::info!(dist_dir = %dist_dir.display(), "bundle build completed");
     Ok(())
 }
@@ -301,7 +358,6 @@ pub fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
             || name == ".git"
             || name == ".vibefi"
             || name == "package.json"
-            || name == "vite.config.ts"
             || name == "tsconfig.json"
             || name == "bun.lock"
             || name == "bun.lockb"
