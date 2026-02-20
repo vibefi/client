@@ -140,13 +140,16 @@ jobs:
 
     - name: Prepare artifacts
       run: |
+        set -euo pipefail
+        shopt -s nullglob
         mkdir -p artifacts
-        if ls target/packager/*.dmg 1> /dev/null 2>&1; then
-          cp target/packager/*.dmg artifacts/
-          echo "DMG files copied successfully"
-        else
-          echo "Warning: No DMG files found in target/packager/"
+        dmg_files=(target/packager/*.dmg)
+        if [ ${#dmg_files[@]} -eq 0 ]; then
+          echo "Error: No DMG files found in target/packager/"
+          exit 1
         fi
+        cp "${dmg_files[@]}" artifacts/
+        echo "DMG files copied successfully"
 
         cd target/packager
         found_app=false
@@ -159,7 +162,8 @@ jobs:
           fi
         done
         if [ "$found_app" = false ]; then
-          echo "Warning: No .app bundles found in target/packager/"
+          echo "Error: No .app bundles found in target/packager/"
+          exit 1
         fi
         cd ../..
 
@@ -167,8 +171,9 @@ jobs:
           cp packaging/macos/install-vibefi-macos.sh artifacts/install-vibefi-macos.sh
         fi
 
-        if [ ! "$(ls -A artifacts)" ]; then
-          echo "Error: No artifacts were produced"
+        app_archives=(artifacts/*_${{ steps.arch.outputs.label }}.app.tar.gz)
+        if [ ${#app_archives[@]} -eq 0 ]; then
+          echo "Error: No archived .app bundle produced for arch ${{ steps.arch.outputs.label }}"
           exit 1
         fi
 

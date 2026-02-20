@@ -33,8 +33,9 @@ function setPackageVersion(path, version) {
     throw new Error("Could not find version in [package] section");
   }
 
-  const hadTrailingNewline = /\r?\n$/.test(raw);
-  const next = lines.join("\n") + (hadTrailingNewline ? "\n" : "");
+  const newline = raw.includes("\r\n") ? "\r\n" : "\n";
+  const hadTrailingNewline = raw.endsWith(newline);
+  const next = lines.join(newline) + (hadTrailingNewline ? newline : "");
   writeFileSync(path, next, "utf8");
 }
 
