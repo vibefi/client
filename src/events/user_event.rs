@@ -433,12 +433,19 @@ pub fn handle_studio_bundle_resolved(
                     }
                     manager.apps[index] = AppWebViewEntry {
                         webview,
-                        id: studio_webview_id,
+                        id: studio_webview_id.clone(),
                         label: "Studio".to_string(),
                         kind: AppWebViewKind::Studio,
                         selectable: true,
                         loading: false,
                     };
+                    if state.automation {
+                        crate::automation::emit_webview_created(
+                            &studio_webview_id,
+                            "Studio",
+                            "Studio",
+                        );
+                    }
                 }
                 Err(err) => {
                     tracing::error!(error = ?err, "failed to build loaded studio webview");
@@ -500,5 +507,14 @@ fn open_app_tab(
     manager.active_app_index = Some(idx);
     manager.update_tab_bar();
 
-    Ok(manager.apps[idx].id.clone())
+    let entry = &manager.apps[idx];
+    if state.automation {
+        crate::automation::emit_webview_created(
+            &entry.id,
+            &format!("{:?}", entry.kind),
+            &entry.label,
+        );
+    }
+
+    Ok(entry.id.clone())
 }
