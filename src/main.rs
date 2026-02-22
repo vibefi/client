@@ -73,6 +73,10 @@ fn main() -> Result<()> {
             "--automation was requested, but this client binary was built without automation support (rebuild with `--features automation`)"
         );
     }
+    #[cfg(target_os = "windows")]
+    if cli.automation {
+        anyhow::bail!("--automation is not supported on Windows");
+    }
     let bundle = resolve_bundle(&cli)?;
     let studio_bundle = resolve_studio_bundle(&cli)?;
     if bundle.is_some() && studio_bundle.is_some() {
