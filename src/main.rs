@@ -1,3 +1,4 @@
+mod automation;
 mod bundle;
 mod config;
 mod events;
@@ -144,7 +145,11 @@ fn main() -> Result<()> {
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
         settings_webview_id: Arc::new(Mutex::new(None)),
         pending_rpc_counts: Arc::new(Mutex::new(HashMap::new())),
+        automation: cli.automation,
     };
+    if cli.automation {
+        automation::spawn_stdin_reader(proxy.clone());
+    }
     let mut manager = WebViewManager::new(1.0);
     let mut window: Option<tao::window::Window> = None;
     #[cfg(target_os = "linux")]
@@ -266,6 +271,16 @@ fn main() -> Result<()> {
             }
             Event::UserEvent(UserEvent::CloseWalletSelector) => {
                 events::user_event::handle_close_wallet_selector(&state, &mut manager);
+            }
+            Event::UserEvent(UserEvent::AutomationCommand {
+                id,
+                cmd_type,
+                target,
+                js,
+            }) => {
+                if state.automation {
+                    automation::handle_command(id, cmd_type, target, js, &manager);
+                }
             }
             Event::UserEvent(UserEvent::TabAction(action)) => {
                 let host = window.as_ref().map(|w| WebViewHost {
@@ -527,6 +542,17 @@ fn main() -> Result<()> {
                     }
 
                     window = Some(window_handle);
+
+                    if state.automation {
+                        for entry in &manager.apps {
+                            automation::emit_webview_created(
+                                &entry.id,
+                                &format!("{:?}", entry.kind),
+                                &entry.label,
+                            );
+                        }
+                        automation::emit_ready();
+                    }
                 }
             }
 

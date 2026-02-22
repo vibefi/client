@@ -20,4 +20,8 @@ pub struct CliArgs {
     /// Skip the `bun build` step when using --bundle.
     #[arg(long)]
     pub no_build: bool,
+
+    /// Enable automation mode (NDJSON commands on stdin, results on stdout).
+    #[arg(long)]
+    pub automation: bool,
 }

@@ -69,6 +69,12 @@ pub enum UserEvent {
     },
     CloseWalletSelector,
     TabAction(TabAction),
+    AutomationCommand {
+        id: String,
+        cmd_type: String,
+        target: Option<String>,
+        js: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +146,8 @@ pub struct AppState {
     pub settings_webview_id: Arc<Mutex<Option<String>>>,
     /// Tracks how many RPC passthrough requests are in-flight per webview.
     pub pending_rpc_counts: Arc<Mutex<HashMap<String, u32>>>,
+    /// Whether automation mode is enabled (--automation flag).
+    pub automation: bool,
 }
 
 impl AppState {
