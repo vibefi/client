@@ -30,6 +30,12 @@ class FileKeyValueStorage {
   async getItem(key) { const v = this._data[key]; return v === undefined ? undefined : v; }
   async setItem(key, value) { this._data[key] = value; this._save(); }
   async removeItem(key) { delete this._data[key]; this._save(); }
+  async clear() {
+    this._data = {};
+    try {
+      fs.rmSync(this._path, { force: true });
+    } catch {}
+  }
 }
 
 const wcStoragePath = path.join(os.homedir(), ".vibefi", "walletconnect-store.json");
@@ -42,6 +48,8 @@ const metadataUrl = process.env.VIBEFI_WC_METADATA_URL || "https://vibefi.dev";
 const metadataDesc = process.env.VIBEFI_WC_METADATA_DESC || "VibeFi desktop WalletConnect bridge";
 const metadataIcon = process.env.VIBEFI_WC_METADATA_ICON || "";
 const connectTimeoutMs = Number.parseInt(process.env.VIBEFI_WC_CONNECT_TIMEOUT_MS || "180000", 10);
+const requestTimeoutMs = Number.parseInt(process.env.VIBEFI_WC_REQUEST_TIMEOUT_MS || "30000", 10);
+const disconnectTimeoutMs = Number.parseInt(process.env.VIBEFI_WC_DISCONNECT_TIMEOUT_MS || "5000", 10);
 
 // The WalletConnect SDK throws unhandled exceptions for several internal issues:
 // - chainChanged fires before rpcProviders are populated (TypeError: setDefaultChain)
@@ -118,6 +126,78 @@ function emitEvent(event, data = {}) {
 
 function log(message) {
   process.stderr.write(`[walletconnect-helper] ${message}\n`);
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timeout after ${timeoutMs}ms`)), timeoutMs);
+    })
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function isTimeoutError(err) {
+  const msg = err?.message || String(err);
+  return /timeout after \d+ms/i.test(msg);
+}
+
+function isLikelyStaleSessionError(err) {
+  const msg = err?.stack || err?.message || String(err);
+  return (
+    isWcSdkError(err) ||
+    /No matching key/i.test(msg) ||
+    /session topic doesn't exist/i.test(msg) ||
+    /isValidSessionTopic/i.test(msg)
+  );
+}
+
+async function storageKeyCount() {
+  try {
+    const keys = await wcStorage.getKeys();
+    return Array.isArray(keys) ? keys.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function resetProviderAndStorage(reason) {
+  const keyCount = await storageKeyCount();
+  log(`resetting walletconnect provider/storage (${reason}); storedKeys=${keyCount}`);
+
+  const oldProvider = provider;
+  provider = null;
+  connectedAccounts = [];
+  connectedChainIdHex = "0x1";
+
+  if (oldProvider) {
+    try {
+      await withTimeout(
+        Promise.resolve().then(() => oldProvider.disconnect()),
+        disconnectTimeoutMs,
+        "disconnect"
+      );
+    } catch (err) {
+      log(`provider disconnect during reset failed (continuing): ${err?.message || err}`);
+    }
+    try {
+      oldProvider.removeAllListeners?.();
+    } catch {}
+  }
+
+  try {
+    await wcStorage.clear();
+  } catch (err) {
+    log(`failed clearing walletconnect storage object: ${err?.message || err}`);
+  }
+  try {
+    fs.rmSync(wcStoragePath, { force: true });
+  } catch (err) {
+    log(`failed deleting walletconnect storage file: ${err?.message || err}`);
+  }
 }
 
 function normalizeChainIdHex(value) {
@@ -208,33 +288,69 @@ async function ensureProvider(chains) {
 
 async function connect(requiredChainId) {
   const chains = uniqueNumbers([requiredChainId, 1, 11155111]);
-  const wc = await ensureProvider(chains);
-  if (!wc.session) {
-    log(`connecting session chains=${chains.join(",")}`);
-    const connectPromise = wc.connect({ chains });
-    await Promise.race([
-      connectPromise,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`connect timeout after ${connectTimeoutMs}ms`)), connectTimeoutMs)
-      )
-    ]);
+  let attempt = 0;
+  while (attempt < 2) {
+    const storedKeysBefore = await storageKeyCount();
+    let restoredSession = false;
+    try {
+      const wc = await ensureProvider(chains);
+      restoredSession = Boolean(wc.session);
+      if (restoredSession) {
+        log(`using restored session from storage (storedKeys=${storedKeysBefore})`);
+      } else {
+        log(`connecting session chains=${chains.join(",")}`);
+        await withTimeout(wc.connect({ chains }), connectTimeoutMs, "connect");
+      }
+
+      log("session connected, requesting accounts/chain");
+      const accountsRaw = await withTimeout(
+        wc.request({ method: "eth_accounts", params: [] }),
+        requestTimeoutMs,
+        "eth_accounts"
+      );
+      const chainIdRaw = await withTimeout(
+        wc.request({ method: "eth_chainId", params: [] }),
+        requestTimeoutMs,
+        "eth_chainId"
+      );
+      connectedAccounts = parseAccounts(accountsRaw);
+      connectedChainIdHex = normalizeChainIdHex(chainIdRaw);
+      return {
+        accounts: connectedAccounts,
+        chainId: connectedChainIdHex
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      const canRecover =
+        attempt === 0 &&
+        storedKeysBefore > 0 &&
+        (
+          restoredSession ||
+          isLikelyStaleSessionError(err) ||
+          isTimeoutError(err)
+        );
+      if (!canRecover) {
+        throw err;
+      }
+
+      log(`connect attempt failed with persisted state; retrying fresh after reset: ${msg}`);
+      await resetProviderAndStorage(msg);
+      attempt += 1;
+    }
   }
-  log("session connected, requesting accounts/chain");
-  const accountsRaw = await wc.request({ method: "eth_accounts", params: [] });
-  const chainIdRaw = await wc.request({ method: "eth_chainId", params: [] });
-  connectedAccounts = parseAccounts(accountsRaw);
-  connectedChainIdHex = normalizeChainIdHex(chainIdRaw);
-  return {
-    accounts: connectedAccounts,
-    chainId: connectedChainIdHex
-  };
+
+  throw new Error("walletconnect connect failed after stale-state recovery retry");
 }
 
 async function requestRpc(method, params) {
   if (!provider?.session) {
     throw new Error("WalletConnect session is not connected");
   }
-  return await provider.request({ method, params });
+  return await withTimeout(
+    provider.request({ method, params }),
+    requestTimeoutMs,
+    `request ${method}`
+  );
 }
 
 async function handleCommand(msg) {
@@ -270,7 +386,11 @@ async function handleCommand(msg) {
   }
   if (method === "disconnect") {
     if (provider) {
-      await provider.disconnect();
+      await withTimeout(provider.disconnect(), disconnectTimeoutMs, "disconnect");
+      try {
+        provider.removeAllListeners?.();
+      } catch {}
+      provider = null;
     }
     connectedAccounts = [];
     return { id, result: { ok: true } };
