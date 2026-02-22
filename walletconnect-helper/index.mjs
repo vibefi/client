@@ -34,7 +34,10 @@ class FileKeyValueStorage {
     this._data = {};
     try {
       fs.rmSync(this._path, { force: true });
-    } catch {}
+    } catch (err) {
+      log(`failed deleting walletconnect storage file during clear: ${err?.message || err}`);
+      this._save();
+    }
   }
 }
 
@@ -280,6 +283,7 @@ async function ensureProvider(chains) {
   });
   provider.on("disconnect", () => {
     connectedAccounts = [];
+    connectedChainIdHex = "0x1";
     emitEvent("disconnect", {});
   });
 
