@@ -338,18 +338,8 @@ fn main() -> Result<()> {
 
                     #[cfg(target_os = "linux")]
                     {
-                        use crate::webview_manager::TAB_BAR_HEIGHT_LOGICAL;
-                        use gtk::prelude::*;
-                        use tao::platform::unix::WindowExtUnix;
-                        let vbox = window_handle
-                            .default_vbox()
-                            .expect("tao window missing default vbox on Linux");
-                        let tb = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                        tb.set_size_request(-1, TAB_BAR_HEIGHT_LOGICAL as i32);
-                        let app = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                        vbox.pack_start(&tb, false, true, 0);
-                        vbox.pack_start(&app, true, true, 0);
-                        vbox.show_all();
+                        let (tb, app) =
+                            setup_linux_containers(&window_handle, state.automation);
                         gtk_tab_bar_container = Some(tb);
                         gtk_app_container = Some(app);
                     }
@@ -554,6 +544,9 @@ fn main() -> Result<()> {
                         }
                     }
 
+                    #[cfg(target_os = "macos")]
+                    install_or_update_macos_automation_banner(&window_handle, state.automation);
+
                     window = Some(window_handle);
 
                     if state.automation {
@@ -580,6 +573,10 @@ fn main() -> Result<()> {
                 ..
             } => {
                 manager.relayout(size.width, size.height);
+                #[cfg(target_os = "macos")]
+                if let Some(window_ref) = window.as_ref() {
+                    install_or_update_macos_automation_banner(window_ref, state.automation);
+                }
             }
             _ => {}
         }
@@ -598,6 +595,174 @@ fn apply_linux_env_defaults() {
 
 #[cfg(not(target_os = "linux"))]
 fn apply_linux_env_defaults() {}
+
+#[cfg(target_os = "macos")]
+fn install_or_update_macos_automation_banner(window: &tao::window::Window, automation: bool) {
+    use objc2::{class, msg_send, runtime::AnyObject};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use tao::platform::macos::WindowExtMacOS;
+
+    const BANNER_TAG: i64 = 0x5642_4649; // 'VBFI'
+    const BANNER_TEXT: &str = "RUNNING IN AUTOMATION MODE! This is unsafe and should never be used. If someone told you to run this, stop now. Download VibeFi from vibefi.dev";
+    const BANNER_H: f64 = 92.0;
+    const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
+    const NS_VIEW_MIN_Y_MARGIN: u64 = 8;
+    const NS_TEXT_ALIGNMENT_CENTER: i64 = 1;
+    const NS_LINE_BREAK_BY_WORD_WRAPPING: u64 = 0;
+
+    let ns_window = window.ns_window() as *mut AnyObject;
+    if ns_window.is_null() {
+        return;
+    }
+
+    unsafe {
+        let content_view: *mut AnyObject = msg_send![ns_window, contentView];
+        if content_view.is_null() {
+            return;
+        }
+
+        let existing: *mut AnyObject = msg_send![content_view, viewWithTag: BANNER_TAG];
+        if !automation {
+            if !existing.is_null() {
+                let _: () = msg_send![existing, removeFromSuperview];
+            }
+            return;
+        }
+
+        let bounds: NSRect = msg_send![content_view, bounds];
+        let frame = NSRect::new(
+            NSPoint::new(0.0, (bounds.size.height - BANNER_H).max(0.0)),
+            NSSize::new(bounds.size.width, BANNER_H),
+        );
+
+        if !existing.is_null() {
+            let _: () = msg_send![existing, setFrame: frame];
+            let _: () = msg_send![existing, removeFromSuperview];
+            let _: () = msg_send![content_view, addSubview: existing];
+            return;
+        }
+
+        let label_alloc: *mut AnyObject = msg_send![class!(NSTextField), alloc];
+        if label_alloc.is_null() {
+            return;
+        }
+        let label: *mut AnyObject = msg_send![label_alloc, initWithFrame: frame];
+        if label.is_null() {
+            return;
+        }
+
+        let _: () = msg_send![label, setTag: BANNER_TAG];
+        let _: () = msg_send![label, setEditable: false];
+        let _: () = msg_send![label, setSelectable: false];
+        let _: () = msg_send![label, setBezeled: false];
+        let _: () = msg_send![label, setBordered: false];
+        let _: () = msg_send![label, setDrawsBackground: true];
+        let _: () = msg_send![label, setAlignment: NS_TEXT_ALIGNMENT_CENTER];
+        let _: () = msg_send![label, setAutoresizingMask: NS_VIEW_WIDTH_SIZABLE | NS_VIEW_MIN_Y_MARGIN];
+        let _: () = msg_send![label, setLineBreakMode: NS_LINE_BREAK_BY_WORD_WRAPPING];
+        let _: () = msg_send![label, setUsesSingleLineMode: false];
+        let _: () = msg_send![label, setAllowsEditingTextAttributes: false];
+
+        let text = objc2_foundation::NSString::from_str(BANNER_TEXT);
+        let _: () = msg_send![label, setStringValue: &*text];
+
+        let yellow: *mut AnyObject = msg_send![class!(NSColor), yellowColor];
+        if !yellow.is_null() {
+            let _: () = msg_send![label, setBackgroundColor: yellow];
+        }
+        let black: *mut AnyObject = msg_send![class!(NSColor), blackColor];
+        if !black.is_null() {
+            let _: () = msg_send![label, setTextColor: black];
+        }
+        let font: *mut AnyObject = msg_send![class!(NSFont), boldSystemFontOfSize: 18.0f64];
+        if !font.is_null() {
+            let _: () = msg_send![label, setFont: font];
+        }
+
+        let _: () = msg_send![content_view, addSubview: label];
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn setup_linux_containers(window: &tao::window::Window, automation: bool) -> (gtk::Box, gtk::Box) {
+    use crate::webview_manager::TAB_BAR_HEIGHT_LOGICAL;
+    use gtk::prelude::*;
+    use tao::platform::unix::WindowExtUnix;
+
+    let vbox = window
+        .default_vbox()
+        .expect("tao window missing default vbox on Linux");
+
+    if automation {
+        add_linux_automation_banner(&vbox);
+    }
+
+    let tab_bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    tab_bar.set_size_request(-1, TAB_BAR_HEIGHT_LOGICAL as i32);
+    let app = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+
+    vbox.pack_start(&tab_bar, false, true, 0);
+    vbox.pack_start(&app, true, true, 0);
+    vbox.show_all();
+
+    (tab_bar, app)
+}
+
+#[cfg(target_os = "linux")]
+fn add_linux_automation_banner(vbox: &gtk::Box) {
+    use gtk::prelude::*;
+
+    const BANNER_TEXT: &str = "RUNNING IN AUTOMATION MODE! This is unsafe and should never be used. If someone told you to run this, stop now. Download VibeFi from vibefi.dev";
+    const BANNER_HEIGHT_PX: i32 = 92;
+    const BANNER_CSS: &str = r#"
+        .vibefi-automation-banner {
+            background-image: repeating-linear-gradient(
+                -45deg,
+                #ff1f1f 0px,
+                #ff1f1f 18px,
+                #ffe100 18px,
+                #ffe100 36px
+            );
+            border-bottom: 4px solid #000000;
+            min-height: 92px;
+            padding: 10px 18px;
+        }
+        .vibefi-automation-banner label {
+            color: #000000;
+            font-family: monospace;
+            font-size: 19px;
+            font-weight: 900;
+        }
+    "#;
+
+    let provider = gtk::CssProvider::new();
+    if provider.load_from_data(BANNER_CSS.as_bytes()).is_ok() {
+        if let Some(screen) = gtk::gdk::Screen::default() {
+            gtk::StyleContext::add_provider_for_screen(
+                &screen,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    }
+
+    let banner = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    banner.style_context().add_class("vibefi-automation-banner");
+    banner.set_size_request(-1, BANNER_HEIGHT_PX);
+    banner.set_halign(gtk::Align::Fill);
+    banner.set_valign(gtk::Align::Start);
+
+    let label = gtk::Label::new(Some(BANNER_TEXT));
+    label.set_line_wrap(true);
+    label.set_justify(gtk::Justification::Center);
+    label.set_halign(gtk::Align::Center);
+    label.set_valign(gtk::Align::Center);
+    label.set_xalign(0.5);
+    label.set_yalign(0.5);
+    banner.pack_start(&label, true, true, 0);
+
+    vbox.pack_start(&banner, false, true, 0);
+}
 
 fn resolve_bundle(cli: &CliArgs) -> Result<Option<BundleConfig>> {
     let Some(ref source) = cli.bundle else {
