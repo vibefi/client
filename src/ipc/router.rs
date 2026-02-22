@@ -80,6 +80,13 @@ pub fn handle_ipc(
         return Ok(());
     }
 
+    if provider == Some(KnownProviderId::Automation) && state.automation {
+        if req.method == "automation_result" {
+            crate::automation::handle_automation_ipc_result(&req.params);
+        }
+        return Ok(());
+    }
+
     if provider == Some(KnownProviderId::Ipfs) {
         let state_clone = state.clone();
         let webview_id = webview_id.to_string();
