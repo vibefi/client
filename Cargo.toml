@@ -43,6 +43,10 @@ allow-downgrades = true
 [package.metadata.packager.nsis]
 display-language-selector = false
 
+[features]
+default = []
+automation = []
+
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

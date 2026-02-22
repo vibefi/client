@@ -1,3 +1,10 @@
+#[cfg(all(feature = "automation", not(debug_assertions)))]
+compile_error!("The 'automation' feature is only allowed in debug builds. Do not ship release binaries with automation enabled.");
+
+#[cfg(feature = "automation")]
+mod automation;
+#[cfg(not(feature = "automation"))]
+#[path = "automation_stub.rs"]
 mod automation;
 mod bundle;
 mod config;
@@ -60,6 +67,12 @@ fn main() -> Result<()> {
     logging::init_logging()?;
 
     let cli = CliArgs::parse();
+    #[cfg(not(feature = "automation"))]
+    if cli.automation {
+        anyhow::bail!(
+            "--automation was requested, but this client binary was built without automation support (rebuild with `--features automation`)"
+        );
+    }
     let bundle = resolve_bundle(&cli)?;
     let studio_bundle = resolve_studio_bundle(&cli)?;
     if bundle.is_some() && studio_bundle.is_some() {
