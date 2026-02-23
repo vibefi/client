@@ -220,19 +220,10 @@ jobs:
         path: ~/.cargo/bin/cargo-packager
         key: cargo-packager-${{ runner.os }}-${{ env.CARGO_PACKAGER_VERSION }}
 
-    - name: Cache apt archives
-      uses: actions/cache@v4
+    - uses: awalsh128/cache-apt-pkgs-action@v1
       with:
-        path: |
-          /var/cache/apt/archives/*.deb
-        key: ${{ runner.os }}-apt-${{ hashFiles('.github/apt-packages.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-apt-
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo xargs -a .github/apt-packages.txt apt-get install -y --no-install-recommends
+        packages: libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+        version: 1.0
 
     - name: Install Bun
       uses: oven-sh/setup-bun@v1
