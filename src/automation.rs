@@ -125,12 +125,7 @@ pub fn handle_command(
     }
 }
 
-fn handle_eval(
-    id: String,
-    target: Option<String>,
-    js: Option<String>,
-    manager: &WebViewManager,
-) {
+fn handle_eval(id: String, target: Option<String>, js: Option<String>, manager: &WebViewManager) {
     let Some(target) = target else {
         emit_result(&id, false, None, Some("missing 'target' field".into()));
         return;
