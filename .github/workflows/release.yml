@@ -90,6 +90,12 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
+        workspaces: . -> target
+
     - name: Install cargo-binstall
       uses: cargo-bins/cargo-binstall@main
 
@@ -198,6 +204,12 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: linux-x86_64
+        workspaces: . -> target
+
     - name: Install cargo-binstall
       uses: cargo-bins/cargo-binstall@main
 
@@ -208,13 +220,20 @@ jobs:
         path: ~/.cargo/bin/cargo-packager
         key: cargo-packager-${{ runner.os }}-${{ env.CARGO_PACKAGER_VERSION }}
 
+    - name: Cache apt archives
+      uses: actions/cache@v4
+      with:
+        path: |
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: ${{ runner.os }}-apt-${{ hashFiles('.github/apt-packages.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          libgtk-3-dev \
-          libwebkit2gtk-4.1-dev \
-          libayatana-appindicator3-dev
+        sudo xargs -a .github/apt-packages.txt apt-get install -y --no-install-recommends
 
     - name: Install Bun
       uses: oven-sh/setup-bun@v1
@@ -284,6 +303,12 @@ jobs:
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: windows-x86_64
+        workspaces: . -> target
 
     - name: Install cargo-binstall
       uses: cargo-bins/cargo-binstall@main
