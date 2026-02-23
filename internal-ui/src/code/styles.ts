@@ -897,6 +897,224 @@ export const localStyles = `
       grid-template-columns: 1fr;
     }
   }
+
+  /* ── File tree overrides ───────────────────────────────────────── */
+  .tree-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-right: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+  }
+  .tree-arrow {
+    flex-shrink: 0;
+    width: 12px;
+    font-size: 9px;
+    text-align: center;
+    color: var(--ide-text-dim);
+    opacity: 0.75;
+  }
+  .tree-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .tree-item.active {
+    background: rgba(79, 209, 197, 0.10);
+    color: #e8f5ff;
+    font-weight: 500;
+    box-shadow: inset 2px 0 0 var(--ide-accent);
+  }
+  .tree-wrap-full {
+    border: none !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    padding: 2px 0 !important;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  /* ── Sidebar section label ─────────────────────────────────────── */
+  .sidebar-section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--ide-text-dim);
+    text-transform: uppercase;
+  }
+
+  /* ── Tree toolbar icon buttons ─────────────────────────────────── */
+  .tree-toolbar {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .tree-icon-btn {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ide-text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 5px;
+    line-height: 1;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+  }
+  .tree-icon-btn:hover:not(:disabled) {
+    background: #1b2f50;
+    color: var(--ide-text);
+    border-color: var(--ide-border);
+  }
+  .tree-icon-btn:disabled {
+    opacity: 0.38;
+    cursor: default;
+  }
+
+  /* ── Editor tab scroll buttons ────────────────────────────────── */
+  .editor-tabs-shell {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid #16253d;
+    background: #060c18;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .editor-tabs {
+    flex: 1;
+    min-width: 0;
+    overflow-x: hidden !important;
+    border-bottom: none !important;
+  }
+  .tab-scroll-btn {
+    flex-shrink: 0;
+    border: 0;
+    border-right: 1px solid #16253d;
+    background: #060c18;
+    color: #5a7498;
+    width: 22px;
+    cursor: pointer;
+    font-size: 17px;
+    font-weight: 300;
+    padding: 0 0 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  .tab-scroll-btn:last-child {
+    border-right: 0;
+    border-left: 1px solid #16253d;
+  }
+  .tab-scroll-btn:hover {
+    background: #0f1d33;
+    color: #c8d8f0;
+  }
+
+  /* ── Projects panel ────────────────────────────────────────────── */
+  .proj-action-block {
+    border-top: 1px solid rgba(47, 70, 104, 0.5);
+    margin-top: 8px;
+    padding-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .proj-input-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .proj-input-row input {
+    flex: 1;
+    min-width: 0;
+  }
+  .proj-input-row button {
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-size: 12px;
+    padding: 0 10px;
+    height: 32px;
+  }
+  .project-item {
+    padding: 7px 8px !important;
+  }
+  .project-meta {
+    display: none;
+  }
+
+  /* ── Dev server status dot ─────────────────────────────────────── */
+  .ds-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+  .ds-dot-on {
+    background: #4ade80;
+    box-shadow: 0 0 5px rgba(74, 222, 128, 0.55);
+  }
+  .ds-dot-off {
+    background: #374151;
+  }
+
+  /* ── Context menu ──────────────────────────────────────────────── */
+  .context-menu {
+    position: fixed;
+    z-index: 2000;
+    min-width: 178px;
+    background: #111d33;
+    border: 1px solid var(--ide-border-strong);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(1, 6, 17, 0.55);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .context-menu-item {
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    color: #ccd8ee;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    padding: 6px 10px;
+    border-radius: 5px;
+    line-height: 1.3;
+  }
+  .context-menu-item:hover:not(:disabled) {
+    background: #1a2f52;
+    color: #f0f6ff;
+  }
+  .context-menu-item-danger {
+    color: var(--ide-danger);
+  }
+  .context-menu-item-danger:hover:not(:disabled) {
+    background: rgba(251, 113, 133, 0.12);
+    color: #fda4b4;
+  }
+  .context-menu-sep {
+    height: 1px;
+    background: var(--ide-border);
+    margin: 3px 6px;
+  }
 `;
 
 export const styles = composeStyles(

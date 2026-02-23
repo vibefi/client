@@ -524,3 +524,98 @@ Effect:
 Re-validated after this slice:
 - `cargo check` passes in `client/` (warnings only)
 - `bun run build` passes in `client/internal-ui/`
+
+---
+
+## Session Summary — 2026-02-23
+
+### Codebase audit
+
+Reviewed `code-spec.md` and all 22 prior progress updates. Identified completed vs remaining work:
+
+**Completed (all stages 1–8 core):** Rust foundation, project management, dev server, CodeMirror editor, LLM chat (Claude + OpenAI streaming), tool-use loop (write_file/delete_file/read_file), diff view, fork flow, constraint validator, hooks refactor, provider/model normalization, process-group subprocess cleanup.
+
+**Unllogged work found in repo:** `hooks/` directory (useConsole, useSettings, useDevServer, useProject, useEditor, useChat) and `aiSdkTools.ts` (Vercel AI SDK adapter) — both present in the codebase but not recorded in prior log entries.
+
+---
+
+### Progress Update 24 (file tree context menu + rename IPC)
+
+**Rust-side changes:**
+- `src/code/filesystem.rs`: added `rename_file(project_root, old_path, new_path)` — validates both paths within project root, checks source exists and is a file, validates new extension against allowlist, creates parent dirs if needed, then renames.
+- `src/code/router.rs`: added `RenameFileParams` struct and `code_renameFile` IPC dispatch case — calls `rename_file`, emits `codeFileChanged` delete event for old path and create event for new path.
+
+**UI changes (`internal-ui/src/code/App.tsx`, `styles.ts`):**
+- Replaced all file-tree action buttons (New File, New Folder, Delete File) and the path input/Open row in the Files sidebar panel with a compact icon toolbar: `+` (new file), `⊕` (new folder), `↺` (refresh).
+- Added right-click context menu on every file tree node:
+  - File nodes: Open, New File Here, New Folder Here, Rename…, Delete
+  - Directory nodes: New File Here, New Folder Here, Rename…
+  - Menu is positioned at cursor, clamped to viewport, closes on outside click.
+  - Context menu is rendered inside `.page-container.code-page` so that CSS variables (`--ide-danger`, etc.) are in scope.
+- Improved file tree rendering:
+  - Directories sorted before files at each level.
+  - `▾`/`▸` expand/collapse arrows replacing `[-]`/`[+]` text.
+  - File names color-coded by extension: `.ts/.tsx` teal, `.js/.jsx` amber, `.json` purple, `.html` orange, `.css` blue, images green.
+  - Tighter 22px row height; files indented 16px past the directory arrow to align with dir label text.
+- Added `handleContextNewFile`, `handleContextNewFolder`, `handleContextRenameFile`, `handleContextDeleteFile` handlers.
+- Updated `handleCreateFile(parentDir?)` and `handleCreateFolder(parentDir?)` to accept an optional parent directory for context-aware path suggestions.
+- Added `getFileColor(name)` module-level helper.
+
+Re-validated:
+- `cargo check` passes in `client/` (warnings only)
+- `bunx tsc --noEmit` passes in `client/internal-ui/`
+- `bun run build` passes in `client/internal-ui/`
+
+---
+
+### Progress Update 25 (sidebar panel compaction + tab scroll buttons)
+
+**Projects panel refactor (`internal-ui/src/code/App.tsx`):**
+- Replaced three-section layout (project list block + New Project block + Open Project block with label/field wrappers) with a compact single-scroll panel:
+  - Header: `PROJECTS` label + icon Refresh button.
+  - Project cards: name + path only; last-modified moved to `title` tooltip to reduce vertical bulk.
+  - Two inline `input + button` rows at the bottom for Create and Open — no section headers, no `<label>` wrappers.
+
+**Dev Server panel refactor (`internal-ui/src/code/App.tsx`):**
+- Replaced verbose layout with a compact header-driven design:
+  - Header: `DEV SERVER` label + live status dot (green glow when running, grey when stopped) + ▶ Start / ■ Stop / ↺ Refresh icon buttons.
+  - Body: single status line (`● Running on localhost:PORT` or `● Stopped`), project path below in small mono text.
+  - Removed the large "Start Server" / "Stop Server" buttons from the panel body.
+
+**Editor tab scroll buttons (`internal-ui/src/code/App.tsx`, `styles.ts`):**
+- Replaced `overflow-x: auto` scrollbar on the editor tab bar with `‹` / `›` arrow buttons.
+- Introduced `.editor-tabs-shell` flex container (carries the `border-bottom`); `.editor-tabs` is now `overflow-x: hidden`.
+- Scroll buttons appear only when there is content to scroll to (left/right independently).
+- Scroll state is recalculated on tab list changes (via `useEffect` on `editor.openTabs`) and on scroll events.
+- Added `editorTabsRef`, `tabsCanScrollLeft`, `tabsCanScrollRight` state, `onTabsScroll`, `scrollTabsLeft`, `scrollTabsRight` helpers.
+
+Added CSS for: `.editor-tabs-shell`, `.tab-scroll-btn`, `.proj-action-block`, `.proj-input-row`, `.ds-dot`/`.ds-dot-on`/`.ds-dot-off`, updated `.project-item` padding, `.project-meta` hidden.
+
+Re-validated:
+- `cargo check` passes in `client/` (warnings only)
+- `bunx tsc --noEmit` passes in `client/internal-ui/`
+- `bun run build` passes in `client/internal-ui/`
+
+---
+
+## Remaining Implementation TODOs (updated 2026-02-23)
+
+1. **File type icons** (spec §9) — tree items are color-coded by extension but have no SVG/glyph icons. Spec calls for distinct icons per file type (TS, JSON, CSS, HTML, image).
+
+2. **Directory deletion** — no `code_deleteDir` IPC exists (recursive delete). Context menu omits Delete for directory nodes. Would require Rust-side `fs::remove_dir_all` behind path-validation + a confirmation prompt.
+
+3. **Resizable pane dividers** (spec §2) — sidebar, editor, and preview widths are CSS-fixed. Spec specifies width-resizable sidebar/preview and height-resizable/collapsible chat pane.
+
+4. **Last-opened project memory** (spec §8 polish) — project picker always starts blank; last-opened project is not persisted across sessions.
+
+5. **Welcome/onboarding screen** (spec §15) — when no API key is set the chat area shows a dim hint, not the full welcome flow with `[Save & Continue]` described in the spec.
+
+6. **Chat inaccessible in `llm-preview` mode** — Chat is a tab inside the editor shell, which is hidden in `llm-preview` mode. The spec shows chat always accessible at the bottom regardless of mode.
+
+7. **`aiSdkTools.ts` is orphaned** — uses the Vercel AI SDK `tool()` helper and defines `read_file`/`write_file`/`delete_file` schemas, but `provider.ts` still dispatches through `streamClaudeChat`/`streamOpenAiChat` directly. Either wire it up or remove it.
+
+8. **No automated tests** — SSE parsing, chat stream glue, and diff formatting still have no test coverage.
+
+9. **Settings/security polish** — API keys are sent browser-direct to LLM providers. Proxy or ephemeral-token path for production safety is still undecided.
+
+10. **Right-click on tree background** — context menu only appears on file/dir nodes. Right-clicking empty tree space does not offer New File / New Folder at the project root.

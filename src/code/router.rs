@@ -48,6 +48,14 @@ struct CreateDirParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RenameFileParams {
+    project_path: String,
+    old_path: String,
+    new_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ValidateProjectParams {
     project_path: String,
 }
@@ -146,6 +154,15 @@ pub fn handle_code_ipc(
             filesystem::create_dir(&project_root, &params.dir_path)?;
             emit_file_changed(state, webview_id, &params.dir_path, "create");
             emit_project_validation_console(state, webview_id, &project_root);
+            set_active_project(state, project_root);
+            Ok(Some(json!({ "ok": true })))
+        }
+        "code_renameFile" => {
+            let params: RenameFileParams = parse_params(req)?;
+            let project_root = filesystem::resolve_project_root(&params.project_path)?;
+            filesystem::rename_file(&project_root, &params.old_path, &params.new_path)?;
+            emit_file_changed(state, webview_id, &params.old_path, "delete");
+            emit_file_changed(state, webview_id, &params.new_path, "create");
             set_active_project(state, project_root);
             Ok(Some(json!({ "ok": true })))
         }

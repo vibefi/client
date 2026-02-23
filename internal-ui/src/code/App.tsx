@@ -41,6 +41,16 @@ declare global {
   }
 }
 
+function getFileColor(name: string): string | undefined {
+  if (/\.tsx?$/.test(name)) return "#4fd1c5";
+  if (/\.jsx?$/.test(name)) return "#fbbf24";
+  if (/\.json$/.test(name)) return "#a78bfa";
+  if (/\.html?$/.test(name)) return "#fb923c";
+  if (/\.css$/.test(name)) return "#60a5fa";
+  if (/\.(webp|png|jpg|jpeg|svg)$/i.test(name)) return "#34d399";
+  return undefined;
+}
+
 const client = new IpcClient();
 
 window.__VibefiHostDispatch = (message: unknown) => {
@@ -68,11 +78,20 @@ export default function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    entry: FileEntry;
+  } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [awaitingPreviewReady, setAwaitingPreviewReady] = useState(false);
   const [previewFrameKey, setPreviewFrameKey] = useState(0);
 
   const quickOpenInputRef = useRef<HTMLInputElement | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const editorTabsRef = useRef<HTMLDivElement | null>(null);
+  const [tabsCanScrollLeft, setTabsCanScrollLeft] = useState(false);
+  const [tabsCanScrollRight, setTabsCanScrollRight] = useState(false);
 
   // ── Domain hooks ────────────────────────────────────────────────────────
   const console_ = useConsole();
@@ -142,6 +161,27 @@ export default function App() {
       setQuickOpenIndex(quickOpenFiles.length - 1);
     }
   }, [quickOpenFiles, quickOpenIndex, quickOpenVisible]);
+
+  useEffect(() => {
+    const el = editorTabsRef.current;
+    if (!el) return;
+    const timer = window.setTimeout(() => {
+      setTabsCanScrollLeft(el.scrollLeft > 2);
+      setTabsCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+    }, 20);
+    return () => window.clearTimeout(timer);
+  }, [editor.openTabs, workspaceMode]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, [!!contextMenu]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -417,9 +457,13 @@ export default function App() {
     }
   }
 
-  async function handleCreateFile() {
+  async function handleCreateFile(parentDir?: string) {
     if (!project.activeProjectPath) { setError("Open a project before creating files."); return; }
-    const suggestedPath = editor.activeFileTab?.path || project.openFilePathInput || "src/NewFile.tsx";
+    const suggestedPath = parentDir
+      ? `${parentDir}/NewFile.tsx`
+      : editor.activeFileTab?.path
+        ? `${editor.activeFileTab.path.replace(/\/[^/]+$/, "") || "src"}/NewFile.tsx`
+        : "src/NewFile.tsx";
     const response = window.prompt("New file path (relative to project root)", suggestedPath);
     const filePath = response?.trim() ?? "";
     if (!filePath) return;
@@ -436,9 +480,10 @@ export default function App() {
     }
   }
 
-  async function handleCreateFolder() {
+  async function handleCreateFolder(parentDir?: string) {
     if (!project.activeProjectPath) { setError("Open a project before creating folders."); return; }
-    const response = window.prompt("New folder path (relative to project root)", "src/components");
+    const suggested = parentDir ? `${parentDir}/components` : "src/components";
+    const response = window.prompt("New folder path (relative to project root)", suggested);
     const dirPath = response?.trim() ?? "";
     if (!dirPath) return;
     setError(null); setStatus(null);
@@ -472,6 +517,73 @@ export default function App() {
     }
   }
 
+  // ── Tab scrolling ────────────────────────────────────────────────────────
+  function onTabsScroll() {
+    const el = editorTabsRef.current;
+    if (!el) return;
+    setTabsCanScrollLeft(el.scrollLeft > 2);
+    setTabsCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+  }
+  function scrollTabsLeft() {
+    editorTabsRef.current?.scrollBy({ left: -150, behavior: "smooth" });
+    window.setTimeout(onTabsScroll, 220);
+  }
+  function scrollTabsRight() {
+    editorTabsRef.current?.scrollBy({ left: 150, behavior: "smooth" });
+    window.setTimeout(onTabsScroll, 220);
+  }
+
+  // ── Context menu actions ─────────────────────────────────────────────────
+  async function handleContextNewFile(entry: FileEntry) {
+    setContextMenu(null);
+    const parentDir = entry.isDir
+      ? entry.path
+      : entry.path.includes("/") ? entry.path.replace(/\/[^/]+$/, "") : "";
+    await handleCreateFile(parentDir || undefined);
+  }
+
+  async function handleContextNewFolder(entry: FileEntry) {
+    setContextMenu(null);
+    const parentDir = entry.isDir
+      ? entry.path
+      : entry.path.includes("/") ? entry.path.replace(/\/[^/]+$/, "") : "";
+    await handleCreateFolder(parentDir || undefined);
+  }
+
+  async function handleContextRenameFile(entry: FileEntry) {
+    setContextMenu(null);
+    if (!project.activeProjectPath) return;
+    const response = window.prompt("Rename to (path relative to project root)", entry.path);
+    const newPath = response?.trim() ?? "";
+    if (!newPath || newPath === entry.path) return;
+    setError(null); setStatus(null);
+    try {
+      await client.request(PROVIDER_IDS.code, "code_renameFile", [
+        { projectPath: project.activeProjectPath, oldPath: entry.path, newPath },
+      ]);
+      await project.refreshFileTree(project.activeProjectPath, { silent: true });
+      setStatus(`Renamed to ${newPath}`);
+    } catch (err) {
+      setError(`Rename failed: ${asErrorMessage(err)}`);
+    }
+  }
+
+  async function handleContextDeleteFile(entry: FileEntry) {
+    setContextMenu(null);
+    if (!project.activeProjectPath) return;
+    if (!window.confirm(`Delete ${entry.path}?`)) return;
+    setError(null); setStatus(null);
+    try {
+      await client.request(PROVIDER_IDS.code, "code_deleteFile", [
+        { projectPath: project.activeProjectPath, filePath: entry.path },
+      ]);
+      await project.refreshFileTree(project.activeProjectPath, { silent: true });
+      setStatus(`Deleted ${entry.path}`);
+    } catch (err) {
+      setError(`Delete failed: ${asErrorMessage(err)}`);
+    }
+  }
+
   async function handleSaveSettings() {
     const result = await settings.save();
     if (result.error) setError(result.error);
@@ -501,41 +613,58 @@ export default function App() {
 
   // ── Render helpers ──────────────────────────────────────────────────────
   function renderFileTree(entries: FileEntry[], depth = 0): React.ReactNode {
-    if (entries.length === 0) return <div className="tree-empty">No files to display.</div>;
-    return entries.map((entry) => {
-      const leftPad = 6 + depth * 14;
+    if (entries.length === 0) {
+      return depth === 0 ? <div className="tree-empty">No files to display.</div> : null;
+    }
+    const sorted = [...entries].sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return sorted.map((entry) => {
+      const indent = 8 + depth * 16;
       if (entry.isDir) {
         const expanded = project.expandedDirs.has(entry.path);
         return (
           <div key={entry.path}>
             <button
               className="tree-item"
-              style={{ paddingLeft: `${leftPad}px` }}
+              style={{ paddingLeft: `${indent}px` }}
               title={entry.path}
               onClick={() => project.toggleDir(entry.path)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenu({ x: e.clientX, y: e.clientY, entry });
+              }}
             >
-              {expanded ? "[-]" : "[+]"} {entry.name}
+              <span className="tree-arrow">{expanded ? "▾" : "▸"}</span>
+              <span className="tree-name" style={{ color: "#9eb4d4" }}>{entry.name}</span>
             </button>
             {expanded ? renderFileTree(entry.children ?? [], depth + 1) : null}
           </div>
         );
       }
-      const tabId = entry.path;
       const isActive = editor.activeFileTab?.path === entry.path;
-      const sizeSuffix = typeof entry.size === "number" ? ` (${entry.size} bytes)` : "";
+      const fileColor = getFileColor(entry.name);
+      const sizeSuffix = typeof entry.size === "number" ? ` (${entry.size}b)` : "";
       return (
         <button
           key={entry.path}
           className={`tree-item ${isActive ? "active" : ""}`}
-          style={{ paddingLeft: `${leftPad}px` }}
+          style={{ paddingLeft: `${indent + 16}px` }}
           title={`${entry.path}${sizeSuffix}`}
           onClick={() => {
             setError(null); setStatus(null);
             void editor.openFileTab(entry.path, { activate: true });
           }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY, entry });
+          }}
           disabled={!project.activeProjectPath || project.pendingAction !== null}
         >
-          {entry.name}
+          <span className="tree-name" style={fileColor ? { color: fileColor } : undefined}>
+            {entry.name}
+          </span>
         </button>
       );
     });
@@ -573,88 +702,119 @@ export default function App() {
     });
   }
 
+  function renderContextMenu(): React.ReactNode {
+    if (!contextMenu) return null;
+    const { x, y, entry } = contextMenu;
+    const menuX = Math.min(x, window.innerWidth - 194);
+    const menuY = Math.min(y, window.innerHeight - 230);
+    return (
+      <div ref={contextMenuRef} className="context-menu" style={{ left: menuX, top: menuY }}>
+        {!entry.isDir && (
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              setContextMenu(null);
+              setError(null); setStatus(null);
+              void editor.openFileTab(entry.path, { activate: true });
+            }}
+          >
+            Open
+          </button>
+        )}
+        {!entry.isDir && <div className="context-menu-sep" />}
+        <button className="context-menu-item" onClick={() => void handleContextNewFile(entry)}>
+          New File Here
+        </button>
+        <button className="context-menu-item" onClick={() => void handleContextNewFolder(entry)}>
+          New Folder Here
+        </button>
+        <div className="context-menu-sep" />
+        <button className="context-menu-item" onClick={() => void handleContextRenameFile(entry)}>
+          Rename…
+        </button>
+        {!entry.isDir && (
+          <button
+            className="context-menu-item context-menu-item-danger"
+            onClick={() => void handleContextDeleteFile(entry)}
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    );
+  }
+
   function renderSidebarPanel(): React.ReactNode {
     if (activeSidebarPanel === "projects") {
+      const busy = project.pendingAction !== null || devServer.action !== null;
       return (
         <>
           <div className="section-head">
-            <h3>Projects</h3>
+            <span className="sidebar-section-label">Projects</span>
             <button
-              className="secondary"
+              className="tree-icon-btn"
+              title="Refresh"
               onClick={() => project.loadProjects().then((r) => { if (r.error) setError(r.error); })}
-              disabled={project.loadingProjects || project.pendingAction !== null || devServer.action !== null}
+              disabled={project.loadingProjects || busy}
             >
-              {project.loadingProjects ? "Loading..." : "Refresh"}
+              ↺
             </button>
           </div>
           <div className="sidebar-scroll">
-            <div className="panel-block">
-              {project.loadingProjects ? (
-                <div className="tree-empty">Loading projects...</div>
-              ) : project.projects.length === 0 ? (
-                <div className="tree-empty">No projects found.</div>
-              ) : (
-                <div className="project-list">
-                  {project.projects.map((p) => (
-                    <div className="project-item" key={p.path}>
-                      <div>
-                        <div className="project-name">{p.name}</div>
-                        <div className="project-path">{p.path}</div>
-                        <div className="project-meta">Last modified: {formatLastModified(p.lastModified)}</div>
-                      </div>
-                      <button
-                        className="secondary"
-                        onClick={() => void handleOpenProject(p.path)}
-                        disabled={project.pendingAction !== null || devServer.action !== null}
-                      >
-                        Open
-                      </button>
+            {project.loadingProjects ? (
+              <div className="tree-empty">Loading...</div>
+            ) : project.projects.length === 0 ? (
+              <div className="tree-empty">No projects yet.</div>
+            ) : (
+              <div className="project-list">
+                {project.projects.map((p) => (
+                  <div className="project-item" key={p.path} title={`Last modified: ${formatLastModified(p.lastModified)}`}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div className="project-name">{p.name}</div>
+                      <div className="project-path">{p.path}</div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="panel-block">
-              <h3>New Project</h3>
-              <div className="field">
-                <label>Name</label>
+                    <button
+                      className="secondary"
+                      onClick={() => void handleOpenProject(p.path)}
+                      disabled={busy}
+                    >
+                      Open
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="proj-action-block">
+              <div className="proj-input-row">
                 <input
                   value={project.newProjectName}
-                  placeholder="my-vibefi-dapp"
+                  placeholder="New project name…"
                   onChange={(e) => project.setNewProjectName(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") void handleCreateProject(); }}
-                  disabled={project.pendingAction !== null || devServer.action !== null}
+                  disabled={busy}
                 />
-              </div>
-              <div className="actions">
                 <button
                   className="primary"
                   onClick={() => void handleCreateProject()}
-                  disabled={project.pendingAction !== null || devServer.action !== null}
+                  disabled={busy || !project.newProjectName.trim()}
                 >
-                  {project.pendingAction === "create" ? "Creating..." : "Create Project"}
+                  {project.pendingAction === "create" ? "…" : "Create"}
                 </button>
               </div>
-            </div>
-            <div className="panel-block">
-              <h3>Open Project</h3>
-              <div className="field">
-                <label>Path</label>
+              <div className="proj-input-row">
                 <input
                   value={project.projectPathInput}
-                  placeholder="/path/to/project"
+                  placeholder="Open by path…"
                   onChange={(e) => project.setProjectPathInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") void handleOpenProject(); }}
-                  disabled={project.pendingAction !== null || devServer.action !== null}
+                  disabled={busy}
                 />
-              </div>
-              <div className="actions">
                 <button
-                  className="primary"
+                  className="secondary"
                   onClick={() => void handleOpenProject()}
-                  disabled={project.pendingAction !== null || devServer.action !== null}
+                  disabled={busy}
                 >
-                  {project.pendingAction === "open" ? "Opening..." : "Open Project"}
+                  {project.pendingAction === "open" ? "…" : "Open"}
                 </button>
               </div>
             </div>
@@ -667,111 +827,95 @@ export default function App() {
       return (
         <>
           <div className="section-head">
-            <h3>Files</h3>
-            <button
-              className="secondary"
-              onClick={() => project.refreshFileTree(undefined, { silent: false }).then((r) => { if (r.error) setError(r.error); })}
-              disabled={!project.activeProjectPath || project.pendingAction !== null}
-            >
-              Refresh
-            </button>
-          </div>
-          <div className="sidebar-scroll">
-            <div className="file-open-row">
-              <input
-                value={project.openFilePathInput}
-                placeholder="src/App.tsx"
-                onChange={(e) => project.setOpenFilePathInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void openFileFromInput(); }}
-                disabled={!project.activeProjectPath || project.pendingAction !== null || openingFile}
-              />
+            <span className="sidebar-section-label">Files</span>
+            <div className="tree-toolbar">
               <button
-                className="secondary"
-                onClick={() => void openFileFromInput()}
-                disabled={!project.activeProjectPath || project.pendingAction !== null || openingFile}
-              >
-                {openingFile ? "Opening..." : "Open"}
-              </button>
-            </div>
-            <div className="actions" style={{ marginTop: 0, marginBottom: "10px" }}>
-              <button
-                className="secondary"
+                className="tree-icon-btn"
+                title="New File"
                 onClick={() => void handleCreateFile()}
-                disabled={!project.activeProjectPath || project.pendingAction !== null || openingFile}
+                disabled={!project.activeProjectPath || project.pendingAction !== null}
               >
-                New File
+                +
               </button>
               <button
-                className="secondary"
+                className="tree-icon-btn"
+                title="New Folder"
                 onClick={() => void handleCreateFolder()}
-                disabled={!project.activeProjectPath || project.pendingAction !== null || openingFile}
+                disabled={!project.activeProjectPath || project.pendingAction !== null}
               >
-                New Folder
+                ⊕
               </button>
               <button
-                className="secondary"
-                onClick={() => void handleDeleteFile()}
-                disabled={!project.activeProjectPath || project.pendingAction !== null || openingFile}
+                className="tree-icon-btn"
+                title="Refresh"
+                onClick={() => project.refreshFileTree(undefined, { silent: false }).then((r) => { if (r.error) setError(r.error); })}
+                disabled={!project.activeProjectPath || project.pendingAction !== null}
               >
-                Delete File
+                ↺
               </button>
             </div>
-            <div className="tree-wrap">
-              {project.activeProjectPath
-                ? renderFileTree(project.fileTree)
-                : <div className="tree-empty">Open a project.</div>}
-            </div>
+          </div>
+          <div className="tree-wrap tree-wrap-full">
+            {project.activeProjectPath
+              ? renderFileTree(project.fileTree)
+              : <div className="tree-empty">Open a project to explore files.</div>}
           </div>
         </>
       );
     }
 
     if (activeSidebarPanel === "dev-server") {
+      const busy = project.pendingAction !== null || devServer.action !== null;
+      const running = devServer.status.running;
+      const actionLabel = devServer.action === "start" ? "Starting…" : devServer.action === "stop" ? "Stopping…" : null;
       return (
         <>
           <div className="section-head">
-            <h3>Dev Server</h3>
-            <button
-              className="secondary"
-              onClick={() => devServer.loadStatus().then((r) => { if (r.error) setError(r.error); })}
-              disabled={project.pendingAction !== null || devServer.action !== null}
-            >
-              Refresh Status
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span className="sidebar-section-label">Dev Server</span>
+              <span className={`ds-dot ${running ? "ds-dot-on" : "ds-dot-off"}`} title={running ? "Running" : "Stopped"} />
+            </div>
+            <div className="tree-toolbar">
+              <button
+                className="tree-icon-btn"
+                title="Start server"
+                onClick={() => void handleStartDevServer()}
+                disabled={!project.activeProjectPath || busy || running}
+              >
+                ▶
+              </button>
+              <button
+                className="tree-icon-btn"
+                title="Stop server"
+                onClick={() => void handleStopDevServer()}
+                disabled={busy || !running}
+              >
+                ■
+              </button>
+              <button
+                className="tree-icon-btn"
+                title="Refresh status"
+                onClick={() => devServer.loadStatus().then((r) => { if (r.error) setError(r.error); })}
+                disabled={busy}
+              >
+                ↺
+              </button>
+            </div>
           </div>
           <div className="sidebar-scroll">
             <div className="dev-server-status">
-              Status: {devServer.status.running ? "Running" : "Stopped"}
-              {devServer.status.port !== null ? (
-                <> on <code>localhost:{devServer.status.port}</code></>
-              ) : null}
+              {actionLabel ?? (running
+                ? <><span style={{ color: "#4ade80" }}>●</span> Running on <code>localhost:{devServer.status.port}</code></>
+                : <><span style={{ color: "#6b7280" }}>●</span> Stopped</>
+              )}
             </div>
             {project.activeProjectPath ? (
-              <div className="project-meta">Project: <code>{project.activeProjectPath}</code></div>
+              <div className="project-path" style={{ marginTop: "6px", wordBreak: "break-all" }}>
+                {project.activeProjectPath}
+              </div>
             ) : (
-              <div className="project-meta">Open a project to enable dev server controls.</div>
+              <div className="tree-empty" style={{ marginTop: "6px" }}>Open a project first.</div>
             )}
-            <div className="actions">
-              <button
-                className="primary"
-                onClick={() => void handleStartDevServer()}
-                disabled={
-                  !project.activeProjectPath ||
-                  project.pendingAction !== null ||
-                  devServer.action !== null ||
-                  devServer.status.running
-                }
-              >
-                {devServer.action === "start" ? "Starting..." : "Start Server"}
-              </button>
-              <button
-                className="secondary"
-                onClick={() => void handleStopDevServer()}
-                disabled={project.pendingAction !== null || devServer.action !== null || !devServer.status.running}
-              >
-                {devServer.action === "stop" ? "Stopping..." : "Stop Server"}
-              </button>
-            </div>
           </div>
         </>
       );
@@ -861,7 +1005,11 @@ export default function App() {
             <div className={`ide-main mode-${workspaceMode}`}>
                 {workspaceMode === "llm-code-preview" ? (
                   <div className="editor-shell">
-                    <div className="editor-tabs">
+                    <div className="editor-tabs-shell">
+                      {tabsCanScrollLeft && (
+                        <button className="tab-scroll-btn" onClick={scrollTabsLeft} title="Scroll tabs left">‹</button>
+                      )}
+                      <div className="editor-tabs" ref={editorTabsRef} onScroll={onTabsScroll}>
                       {editor.openTabs.map((tab) => {
                         const active = tab.id === editor.activeTabId;
                         const dirty = isFileTab(tab) ? isFileTabDirty(tab) : false;
@@ -906,6 +1054,10 @@ export default function App() {
                           </div>
                         );
                       })}
+                      </div>
+                      {tabsCanScrollRight && (
+                        <button className="tab-scroll-btn" onClick={scrollTabsRight} title="Scroll tabs right">›</button>
+                      )}
                     </div>
 
                     {editor.activeFileTab ? (
@@ -1268,6 +1420,7 @@ export default function App() {
 
         {status ? <div className="status ok">{status}</div> : null}
         {error ? <div className="status err">{error}</div> : null}
+        {renderContextMenu()}
       </div>
     </>
   );

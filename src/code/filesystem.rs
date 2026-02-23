@@ -74,6 +74,28 @@ pub fn delete_file(project_root: &Path, relative_path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn rename_file(project_root: &Path, old_path: &str, new_path: &str) -> Result<()> {
+    let old = validate_relative_path(project_root, old_path)?;
+    if !old.exists() {
+        bail!("source path does not exist: {}", old_path);
+    }
+    if old.is_dir() {
+        bail!("directory rename is not supported");
+    }
+    let new = validate_relative_path(project_root, new_path)?;
+    validate_write_extension(&new)?;
+    if new.exists() {
+        bail!("destination already exists: {}", new_path);
+    }
+    if let Some(parent) = new.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create parent dirs for {}", new_path))?;
+    }
+    fs::rename(&old, &new)
+        .with_context(|| format!("failed to rename {} to {}", old_path, new_path))?;
+    Ok(())
+}
+
 pub fn create_dir(project_root: &Path, relative_path: &str) -> Result<()> {
     let path = validate_relative_path(project_root, relative_path)?;
     fs::create_dir_all(&path)
