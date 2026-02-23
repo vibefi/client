@@ -47,6 +47,8 @@ pub struct CodeSettings {
     pub api_keys: CodeApiKeys,
     #[serde(default)]
     pub llm_config: CodeLlmConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_project_path: Option<String>,
 }
 
 impl Default for CodeSettings {
@@ -54,6 +56,7 @@ impl Default for CodeSettings {
         Self {
             api_keys: CodeApiKeys::default(),
             llm_config: CodeLlmConfig::default(),
+            last_project_path: None,
         }
     }
 }

@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { FiCode, FiFile, FiFileText, FiFolder, FiImage } from "react-icons/fi";
+import { HiOutlineFolderOpen } from "react-icons/hi";
 import { ToolCallCard } from "./chat/ToolCallCard";
 import { DiffViewer } from "./editor/DiffViewer";
 import { IpcClient } from "../ipc/client";
@@ -41,6 +43,9 @@ declare global {
   }
 }
 
+const LAYOUT_STORAGE_KEY = "vibefi-code-layout-v2";
+const SPLITTER_SIZE_PX = 6;
+
 function getFileColor(name: string): string | undefined {
   if (/\.tsx?$/.test(name)) return "#4fd1c5";
   if (/\.jsx?$/.test(name)) return "#fbbf24";
@@ -49,6 +54,37 @@ function getFileColor(name: string): string | undefined {
   if (/\.css$/.test(name)) return "#60a5fa";
   if (/\.(webp|png|jpg|jpeg|svg)$/i.test(name)) return "#34d399";
   return undefined;
+}
+
+function fileExt(name: string): string {
+  const match = /\.([^.]+)$/.exec(name);
+  return match ? match[1]!.toLowerCase() : "";
+}
+
+function fileIconBadge(name: string): string | null {
+  const ext = fileExt(name);
+  if (!ext) return null;
+  if (ext === "tsx") return "TSX";
+  if (ext === "ts") return "TS";
+  if (ext === "jsx") return "JSX";
+  if (ext === "js") return "JS";
+  if (ext === "json") return "JSON";
+  if (ext === "css") return "CSS";
+  if (ext === "html" || ext === "htm") return "HTML";
+  if (["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(ext)) return "IMG";
+  return ext.length <= 4 ? ext.toUpperCase() : null;
+}
+
+function renderTreeIcon(entry: FileEntry, expanded = false): React.ReactNode {
+  if (entry.isDir) {
+    return expanded ? <HiOutlineFolderOpen /> : <FiFolder />;
+  }
+  if (/\.(tsx?|jsx?)$/i.test(entry.name)) return <FiCode />;
+  if (/\.json$/i.test(entry.name)) return <FiFileText />;
+  if (/\.css$/i.test(entry.name)) return <FiFileText />;
+  if (/\.html?$/i.test(entry.name)) return <FiFileText />;
+  if (/\.(webp|png|jpg|jpeg|gif|svg)$/i.test(entry.name)) return <FiImage />;
+  return <FiFile />;
 }
 
 const client = new IpcClient();
@@ -83,13 +119,26 @@ export default function App() {
     y: number;
     entry: FileEntry;
   } | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [previewWidth, setPreviewWidth] = useState(420);
+  const [chatPaneHeight, setChatPaneHeight] = useState(88);
+  const [chatPaneCollapsed, setChatPaneCollapsed] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [awaitingPreviewReady, setAwaitingPreviewReady] = useState(false);
   const [previewFrameKey, setPreviewFrameKey] = useState(0);
 
+  const ideWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const ideMainRef = useRef<HTMLDivElement | null>(null);
+  const chatShellRef = useRef<HTMLDivElement | null>(null);
   const quickOpenInputRef = useRef<HTMLInputElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const editorTabsRef = useRef<HTMLDivElement | null>(null);
+  const resizeDragRef = useRef<
+    | { kind: "sidebar"; startX: number; startWidth: number; containerWidth: number }
+    | { kind: "preview"; startX: number; startWidth: number; containerWidth: number }
+    | { kind: "chat"; startY: number; startHeight: number; containerHeight: number }
+    | null
+  >(null);
   const [tabsCanScrollLeft, setTabsCanScrollLeft] = useState(false);
   const [tabsCanScrollRight, setTabsCanScrollRight] = useState(false);
 
@@ -114,6 +163,7 @@ export default function App() {
     () => modelOptionsForProvider(settings.provider),
     [settings.provider]
   );
+  const hasAnyApiKey = Boolean(settings.claudeApiKey.trim() || settings.openaiApiKey.trim());
   const customModelValue = useMemo(() => {
     const trimmed = settings.model.trim();
     if (!trimmed) return null;
@@ -129,12 +179,82 @@ export default function App() {
 
   // ── Effects ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    void Promise.all([
-      project.loadProjects().then((res) => { if (res.error) setError(res.error); }),
-      devServer.loadStatus({ silent: true }),
-      settings.load({ silent: true }),
-    ]);
+    try {
+      const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const sidebar = typeof parsed.sidebarWidth === "number" ? Math.trunc(parsed.sidebarWidth) : null;
+      const preview = typeof parsed.previewWidth === "number" ? Math.trunc(parsed.previewWidth) : null;
+      const chatHeight = typeof parsed.chatPaneHeight === "number" ? Math.trunc(parsed.chatPaneHeight) : null;
+      const chatCollapsed = parsed.chatPaneCollapsed === true;
+      if (sidebar && sidebar >= 220 && sidebar <= 520) setSidebarWidth(sidebar);
+      if (preview && preview >= 280 && preview <= 900) setPreviewWidth(preview);
+      if (chatHeight && chatHeight >= 72 && chatHeight <= 420) setChatPaneHeight(chatHeight);
+      setChatPaneCollapsed(chatCollapsed);
+    } catch {
+      // ignore invalid persisted layout
+    }
   }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const [projectsResult] = await Promise.all([
+        project.loadProjects(),
+        devServer.loadStatus({ silent: true }),
+        settings.load({ silent: true }),
+      ]);
+      if (projectsResult.error) setError(projectsResult.error);
+      await handleOpenProject(undefined, { silentIfNoRememberedProject: true, restore: true });
+    })();
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        LAYOUT_STORAGE_KEY,
+        JSON.stringify({ sidebarWidth, previewWidth, chatPaneHeight, chatPaneCollapsed })
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [sidebarWidth, previewWidth, chatPaneHeight, chatPaneCollapsed]);
+
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      const drag = resizeDragRef.current;
+      if (!drag) return;
+
+      if (drag.kind === "sidebar") {
+        const next = Math.max(220, Math.min(drag.containerWidth - 320, drag.startWidth + (event.clientX - drag.startX)));
+        setSidebarWidth(Number.isFinite(next) ? Math.trunc(next) : 260);
+        return;
+      }
+
+      if (drag.kind === "preview") {
+        const next = Math.max(280, Math.min(drag.containerWidth - 320, drag.startWidth - (event.clientX - drag.startX)));
+        setPreviewWidth(Number.isFinite(next) ? Math.trunc(next) : 420);
+        return;
+      }
+
+      const next = Math.max(72, Math.min(drag.containerHeight - 120, drag.startHeight - (event.clientY - drag.startY)));
+      setChatPaneHeight(Number.isFinite(next) ? Math.trunc(next) : 88);
+      if (chatPaneCollapsed) setChatPaneCollapsed(false);
+    };
+
+    const onMouseUp = () => {
+      if (!resizeDragRef.current) return;
+      resizeDragRef.current = null;
+      document.body.classList.remove("vibefi-pane-resizing");
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.classList.remove("vibefi-pane-resizing");
+    };
+  }, [chatPaneCollapsed]);
 
   useEffect(() => {
     if (workspaceMode !== "llm-preview" && activeSidebarPanel === "console") {
@@ -358,15 +478,18 @@ export default function App() {
     return () => window.clearTimeout(fallbackTimer);
   }, [awaitingPreviewReady, devServer.status.port, devServer.status.running]);
 
-  async function handleOpenProject(pathOverride?: string) {
+  async function handleOpenProject(
+    pathOverride?: string,
+    options: { silentIfNoRememberedProject?: boolean; restore?: boolean } = {}
+  ) {
     project.setPendingAction("open");
     setError(null);
-    setStatus(null);
+    if (!options.restore) setStatus(null);
     try {
       const opened = await project.doOpenProject(pathOverride);
       editor.applyOpenedProject();
       project.setOpenFilePathInput("src/App.tsx");
-      setStatus(`Opened ${opened.projectPath}`);
+      setStatus(options.restore ? `Restored ${opened.projectPath}` : `Opened ${opened.projectPath}`);
       setAwaitingPreviewReady(true);
       setPreviewUrl(null);
       const dvResult = await devServer.start(opened.projectPath, { auto: true });
@@ -378,7 +501,14 @@ export default function App() {
       if (lResult.error) console_.append([`[system] ${lResult.error}`]);
     } catch (err) {
       setAwaitingPreviewReady(false);
-      setError(`Failed to open project: ${asErrorMessage(err)}`);
+      const message = asErrorMessage(err);
+      if (
+        options.silentIfNoRememberedProject &&
+        /no active or remembered project|requires a project path/i.test(message)
+      ) {
+        return;
+      }
+      setError(`Failed to open project: ${message}`);
     } finally {
       project.setPendingAction(null);
     }
@@ -533,6 +663,46 @@ export default function App() {
     window.setTimeout(onTabsScroll, 220);
   }
 
+  function beginSidebarResize(event: React.MouseEvent) {
+    const rect = ideWorkspaceRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    resizeDragRef.current = {
+      kind: "sidebar",
+      startX: event.clientX,
+      startWidth: sidebarWidth,
+      containerWidth: rect.width,
+    };
+    document.body.classList.add("vibefi-pane-resizing");
+  }
+
+  function beginPreviewResize(event: React.MouseEvent) {
+    const rect = ideMainRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    resizeDragRef.current = {
+      kind: "preview",
+      startX: event.clientX,
+      startWidth: previewWidth,
+      containerWidth: rect.width,
+    };
+    document.body.classList.add("vibefi-pane-resizing");
+  }
+
+  function beginChatPaneResize(event: React.MouseEvent) {
+    const rect = chatShellRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    resizeDragRef.current = {
+      kind: "chat",
+      startY: event.clientY,
+      startHeight: chatPaneHeight,
+      containerHeight: rect.height,
+    };
+    setChatPaneCollapsed(false);
+    document.body.classList.add("vibefi-pane-resizing");
+  }
+
   // ── Context menu actions ─────────────────────────────────────────────────
   async function handleContextNewFile(entry: FileEntry) {
     setContextMenu(null);
@@ -568,17 +738,27 @@ export default function App() {
     }
   }
 
-  async function handleContextDeleteFile(entry: FileEntry) {
+  async function handleContextDeleteEntry(entry: FileEntry) {
     setContextMenu(null);
     if (!project.activeProjectPath) return;
-    if (!window.confirm(`Delete ${entry.path}?`)) return;
+    const noun = entry.isDir ? "directory" : "file";
+    const confirmBody = entry.isDir
+      ? `Delete directory ${entry.path} and all contents?`
+      : `Delete file ${entry.path}?`;
+    if (!window.confirm(confirmBody)) return;
     setError(null); setStatus(null);
     try {
-      await client.request(PROVIDER_IDS.code, "code_deleteFile", [
-        { projectPath: project.activeProjectPath, filePath: entry.path },
-      ]);
+      if (entry.isDir) {
+        await client.request(PROVIDER_IDS.code, "code_deleteDir", [
+          { projectPath: project.activeProjectPath, dirPath: entry.path },
+        ]);
+      } else {
+        await client.request(PROVIDER_IDS.code, "code_deleteFile", [
+          { projectPath: project.activeProjectPath, filePath: entry.path },
+        ]);
+      }
       await project.refreshFileTree(project.activeProjectPath, { silent: true });
-      setStatus(`Deleted ${entry.path}`);
+      setStatus(`Deleted ${noun} ${entry.path}`);
     } catch (err) {
       setError(`Delete failed: ${asErrorMessage(err)}`);
     }
@@ -588,6 +768,18 @@ export default function App() {
     const result = await settings.save();
     if (result.error) setError(result.error);
     else setStatus("Saved Code LLM settings");
+  }
+
+  async function handleSaveSettingsAndContinue() {
+    const result = await settings.save();
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setStatus("Saved Code LLM settings");
+    if (settings.claudeApiKey.trim() || settings.openaiApiKey.trim()) {
+      setSettingsOpen(false);
+    }
   }
 
   // ── Quick-open / command palette ────────────────────────────────────────
@@ -624,6 +816,7 @@ export default function App() {
       const indent = 8 + depth * 16;
       if (entry.isDir) {
         const expanded = project.expandedDirs.has(entry.path);
+        const badge = fileIconBadge(entry.name);
         return (
           <div key={entry.path}>
             <button
@@ -637,7 +830,9 @@ export default function App() {
               }}
             >
               <span className="tree-arrow">{expanded ? "▾" : "▸"}</span>
+              <span className="tree-icon tree-icon-dir">{renderTreeIcon(entry, expanded)}</span>
               <span className="tree-name" style={{ color: "#9eb4d4" }}>{entry.name}</span>
+              {badge ? <span className="tree-icon-badge">{badge}</span> : null}
             </button>
             {expanded ? renderFileTree(entry.children ?? [], depth + 1) : null}
           </div>
@@ -645,6 +840,7 @@ export default function App() {
       }
       const isActive = editor.activeFileTab?.path === entry.path;
       const fileColor = getFileColor(entry.name);
+      const badge = fileIconBadge(entry.name);
       const sizeSuffix = typeof entry.size === "number" ? ` (${entry.size}b)` : "";
       return (
         <button
@@ -662,9 +858,11 @@ export default function App() {
           }}
           disabled={!project.activeProjectPath || project.pendingAction !== null}
         >
+          <span className="tree-icon">{renderTreeIcon(entry)}</span>
           <span className="tree-name" style={fileColor ? { color: fileColor } : undefined}>
             {entry.name}
           </span>
+          {badge ? <span className="tree-icon-badge">{badge}</span> : null}
         </button>
       );
     });
@@ -702,6 +900,45 @@ export default function App() {
     });
   }
 
+  function renderChatWelcome(): React.ReactNode {
+    return (
+      <div className="chat-welcome-card">
+        <div className="chat-welcome-eyebrow">Welcome to VibeFi Code</div>
+        <h3>Connect an LLM provider to start vibe-coding</h3>
+        <p>
+          Add a Claude or OpenAI API key, choose a model, then send prompts to inspect or edit the
+          current project.
+        </p>
+        <ol className="chat-welcome-steps">
+          <li>Open LLM Settings</li>
+          <li>Paste an API key</li>
+          <li>Save and send your first prompt</li>
+        </ol>
+        <div className="chat-welcome-actions">
+          <button className="primary" onClick={() => setSettingsOpen(true)}>
+            Open LLM Settings
+          </button>
+          {settingsOpen ? (
+            <button
+              className="secondary"
+              onClick={() => void handleSaveSettingsAndContinue()}
+              disabled={
+                settings.loading ||
+                settings.saving ||
+                (!settings.claudeApiKey.trim() && !settings.openaiApiKey.trim())
+              }
+            >
+              {settings.saving ? "Saving..." : "Save & Continue"}
+            </button>
+          ) : null}
+        </div>
+        <div className="chat-welcome-note">
+          Keys are stored locally in the code workspace settings file for this spike.
+        </div>
+      </div>
+    );
+  }
+
   function renderContextMenu(): React.ReactNode {
     if (!contextMenu) return null;
     const { x, y, entry } = contextMenu;
@@ -732,14 +969,12 @@ export default function App() {
         <button className="context-menu-item" onClick={() => void handleContextRenameFile(entry)}>
           Rename…
         </button>
-        {!entry.isDir && (
-          <button
-            className="context-menu-item context-menu-item-danger"
-            onClick={() => void handleContextDeleteFile(entry)}
-          >
-            Delete
-          </button>
-        )}
+        <button
+          className="context-menu-item context-menu-item-danger"
+          onClick={() => void handleContextDeleteEntry(entry)}
+        >
+          {entry.isDir ? "Delete Folder" : "Delete"}
+        </button>
       </div>
     );
   }
@@ -966,10 +1201,10 @@ export default function App() {
           </div>
 
           {/* Workspace */}
-          <div className="ide-workspace">
+          <div className="ide-workspace" ref={ideWorkspaceRef}>
 
             {/* Sidebar */}
-            <aside className="ide-sidebar surface-card">
+            <aside className="ide-sidebar surface-card" style={{ width: `${sidebarWidth}px` }}>
               <div className="sidebar-tabs">
                 <button
                   className={`sidebar-tab ${activeSidebarPanel === "projects" ? "active" : ""}`}
@@ -1000,9 +1235,25 @@ export default function App() {
               </div>
               <div className="sidebar-panel">{renderSidebarPanel()}</div>
             </aside>
+            <div
+              className="pane-splitter pane-splitter-vertical"
+              role="separator"
+              aria-label="Resize sidebar"
+              aria-orientation="vertical"
+              onMouseDown={beginSidebarResize}
+              title="Drag to resize sidebar"
+            />
 
             {/* Main area: editor + preview */}
-            <div className={`ide-main mode-${workspaceMode}`}>
+            <div
+              ref={ideMainRef}
+              className={`ide-main mode-${workspaceMode}`}
+              style={
+                workspaceMode === "llm-code-preview"
+                  ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLITTER_SIZE_PX}px minmax(280px, ${previewWidth}px)` }
+                  : undefined
+              }
+            >
                 {workspaceMode === "llm-code-preview" ? (
                   <div className="editor-shell">
                     <div className="editor-tabs-shell">
@@ -1149,6 +1400,14 @@ export default function App() {
                               </button>
                             ) : null}
                             <button
+                              className="secondary"
+                              onClick={() => setChatPaneCollapsed((v) => !v)}
+                              style={{ fontSize: "11px" }}
+                              title={chatPaneCollapsed ? "Expand composer" : "Collapse composer"}
+                            >
+                              {chatPaneCollapsed ? "Expand" : "Collapse"}
+                            </button>
+                            <button
                               className={`chat-gear-btn ${settingsOpen ? "active" : ""}`}
                               onClick={() => setSettingsOpen((v) => !v)}
                               title="LLM Settings"
@@ -1227,19 +1486,40 @@ export default function App() {
                               >
                                 {settings.saving ? "Saving..." : "Save"}
                               </button>
+                              {!hasAnyApiKey ? (
+                                <button
+                                  className="secondary"
+                                  onClick={() => void handleSaveSettingsAndContinue()}
+                                  disabled={
+                                    settings.loading ||
+                                    settings.saving ||
+                                    (!settings.claudeApiKey.trim() && !settings.openaiApiKey.trim())
+                                  }
+                                  style={{ fontSize: "11px" }}
+                                >
+                                  {settings.saving ? "Saving..." : "Save & Continue"}
+                                </button>
+                              ) : null}
                             </div>
                           </div>
-                        ) : !settings.claudeApiKey && !settings.openaiApiKey ? (
-                          <div className="chat-settings-panel" style={{ padding: "4px 10px" }}>
-                            <span style={{ fontSize: "11px", color: "var(--ide-text-dim)" }}>
-                              No API key — click ⚙ to configure.
-                            </span>
+                        ) : !hasAnyApiKey ? (
+                          <div className="chat-settings-panel chat-settings-welcome-strip">
+                            <span>No API key configured.</span>
+                            <button
+                              className="secondary"
+                              onClick={() => setSettingsOpen(true)}
+                              style={{ fontSize: "11px" }}
+                            >
+                              Open Settings
+                            </button>
                           </div>
                         ) : null}
 
-                          <div className="chat-shell">
-                            <div className="chat-history" ref={chat.chatHistoryRef}>
-                            {chat.messages.length === 0 ? (
+                        <div className="chat-shell" ref={chatShellRef}>
+                          <div className="chat-history" ref={chat.chatHistoryRef}>
+                            {!hasAnyApiKey && chat.messages.length === 0 ? (
+                              renderChatWelcome()
+                            ) : chat.messages.length === 0 ? (
                               <div className="chat-placeholder">Send a prompt to start chat.</div>
                             ) : (
                               chat.messages.map((message) => (
@@ -1265,56 +1545,85 @@ export default function App() {
                                 </div>
                               ))
                             )}
-                            </div>
-
-                          {chat.streaming ? (
-                            <div className="chat-stream-status">
-                              <span className="chat-stream-dot" />
-                              <span>{chat.streamStatus ?? "Working..."}</span>
-                            </div>
-                          ) : null}
-
-                          {chat.error ? (
-                            <div className="status err">
-                              {chat.error}
-                              {!chat.streaming && chat.lastPrompt ? (
-                                <button
-                                  className="secondary"
-                                  style={{ marginLeft: "8px" }}
-                                  onClick={() => void chat.send({ textOverride: chat.lastPrompt })}
-                                >
-                                  Retry
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : null}
-
-                          <div className="chat-input-row">
-                            <textarea
-                              value={chat.input}
-                              placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
-                              onChange={(e) => chat.setInput(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                  e.preventDefault();
-                                  void chat.send();
-                                }
-                              }}
-                              disabled={chat.streaming || settings.loading || settings.saving}
-                            />
-                            <button
-                              className="primary"
-                              onClick={() => void chat.send()}
-                              disabled={
-                                chat.streaming ||
-                                settings.loading ||
-                                settings.saving ||
-                                chat.input.trim().length === 0
-                              }
-                            >
-                              {chat.streaming ? "Sending..." : "Send"}
-                            </button>
                           </div>
+
+                          <div
+                            className={`chat-pane-splitter ${chatPaneCollapsed ? "collapsed" : ""}`}
+                            role="separator"
+                            aria-label="Resize chat composer"
+                            aria-orientation="horizontal"
+                            onMouseDown={beginChatPaneResize}
+                            title="Drag to resize composer"
+                          />
+
+                          {chatPaneCollapsed ? (
+                            <div className="chat-pane-collapsed">
+                              <button
+                                className="secondary"
+                                onClick={() => setChatPaneCollapsed(false)}
+                                style={{ fontSize: "11px" }}
+                              >
+                                Expand composer
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="chat-bottom-panel" style={{ height: `${chatPaneHeight}px` }}>
+                              {chat.streaming ? (
+                                <div className="chat-stream-status">
+                                  <span className="chat-stream-dot" />
+                                  <span>{chat.streamStatus ?? "Working..."}</span>
+                                </div>
+                              ) : null}
+
+                              {chat.error ? (
+                                <div className="status err">
+                                  {chat.error}
+                                  {!chat.streaming && chat.lastPrompt ? (
+                                    <button
+                                      className="secondary"
+                                      style={{ marginLeft: "8px" }}
+                                      onClick={() => void chat.send({ textOverride: chat.lastPrompt })}
+                                      disabled={!hasAnyApiKey}
+                                    >
+                                      Retry
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ) : null}
+
+                              <div className="chat-input-row">
+                                <textarea
+                                  value={chat.input}
+                                  placeholder={
+                                    hasAnyApiKey
+                                      ? "Type a message... (Enter to send, Shift+Enter for newline)"
+                                      : "Add an API key in LLM Settings to enable chat"
+                                  }
+                                  onChange={(e) => chat.setInput(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" && !e.shiftKey && hasAnyApiKey) {
+                                      e.preventDefault();
+                                      void chat.send();
+                                    }
+                                  }}
+                                  disabled={chat.streaming || settings.loading || settings.saving || !hasAnyApiKey}
+                                />
+                                <button
+                                  className="primary"
+                                  onClick={() => void chat.send()}
+                                  disabled={
+                                    !hasAnyApiKey ||
+                                    chat.streaming ||
+                                    settings.loading ||
+                                    settings.saving ||
+                                    chat.input.trim().length === 0
+                                  }
+                                >
+                                  {chat.streaming ? "Sending..." : "Send"}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </>
                     ) : (
@@ -1335,6 +1644,17 @@ export default function App() {
                       </>
                     )}
                   </div>
+                ) : null}
+
+                {workspaceMode === "llm-code-preview" ? (
+                  <div
+                    className="pane-splitter pane-splitter-vertical pane-splitter-main"
+                    role="separator"
+                    aria-label="Resize preview"
+                    aria-orientation="vertical"
+                    onMouseDown={beginPreviewResize}
+                    title="Drag to resize preview"
+                  />
                 ) : null}
 
                 {/* Preview panel */}

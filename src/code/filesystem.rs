@@ -74,6 +74,18 @@ pub fn delete_file(project_root: &Path, relative_path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn delete_dir(project_root: &Path, relative_path: &str) -> Result<()> {
+    let path = validate_relative_path(project_root, relative_path)?;
+    if !path.exists() {
+        bail!("directory not found: {}", relative_path);
+    }
+    if !path.is_dir() {
+        bail!("expected directory path, found file: {}", relative_path);
+    }
+    fs::remove_dir_all(&path).with_context(|| format!("failed to delete directory {}", relative_path))?;
+    Ok(())
+}
+
 pub fn rename_file(project_root: &Path, old_path: &str, new_path: &str) -> Result<()> {
     let old = validate_relative_path(project_root, old_path)?;
     if !old.exists() {

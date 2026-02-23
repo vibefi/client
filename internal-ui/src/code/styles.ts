@@ -13,6 +13,16 @@ export const localStyles = `
     overflow: hidden;
     margin: 0;
   }
+  body.vibefi-pane-resizing,
+  body.vibefi-pane-resizing * {
+    user-select: none !important;
+  }
+  body.vibefi-pane-resizing {
+    cursor: col-resize;
+  }
+  body.vibefi-pane-resizing .preview-frame {
+    pointer-events: none !important;
+  }
   .page-container.code-page {
     --ide-bg: #060d18;
     --ide-surface: #0d1627;
@@ -164,7 +174,7 @@ export const localStyles = `
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    gap: 8px;
+    gap: 0;
   }
   .ide-sidebar {
     flex-shrink: 0;
@@ -322,7 +332,7 @@ export const localStyles = `
     min-height: 0;
     overflow: hidden;
     display: grid;
-    gap: 8px;
+    gap: 0;
   }
   .ide-main.mode-llm-code-preview {
     grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
@@ -587,7 +597,7 @@ export const localStyles = `
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 0;
     padding: 10px;
   }
   .chat-history {
@@ -597,6 +607,7 @@ export const localStyles = `
     display: flex;
     flex-direction: column;
     gap: 8px;
+    margin-bottom: 8px;
   }
   .chat-placeholder {
     color: #7f95b6;
@@ -867,12 +878,15 @@ export const localStyles = `
       flex-direction: column;
     }
     .ide-sidebar {
-      width: 100%;
+      width: 100% !important;
       flex-shrink: 0;
       max-height: 200px;
     }
     .ide-main.mode-llm-code-preview {
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+    .pane-splitter.pane-splitter-vertical {
+      display: none;
     }
   }
   @media (max-width: 760px) {
@@ -918,6 +932,32 @@ export const localStyles = `
     text-align: center;
     color: var(--ide-text-dim);
     opacity: 0.75;
+  }
+  .tree-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    min-width: 14px;
+    color: #8ea5c7;
+    opacity: 0.95;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .tree-icon-dir {
+    color: #8db5ff;
+  }
+  .tree-icon-badge {
+    margin-left: 4px;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    background: rgba(30, 58, 95, 0.5);
+    color: #95abd0;
+    border-radius: 999px;
+    padding: 1px 5px;
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+    flex-shrink: 0;
   }
   .tree-name {
     flex: 1;
@@ -1114,6 +1154,128 @@ export const localStyles = `
     height: 1px;
     background: var(--ide-border);
     margin: 3px 6px;
+  }
+
+  /* ── Splitters / resizable panes ─────────────────────────────── */
+  .pane-splitter {
+    position: relative;
+    flex-shrink: 0;
+    border-radius: 8px;
+    background: transparent;
+  }
+  .pane-splitter::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: rgba(34, 50, 76, 0.55);
+    transition: background 120ms ease;
+  }
+  .pane-splitter:hover::before {
+    background: rgba(79, 209, 197, 0.3);
+  }
+  .pane-splitter-vertical {
+    width: 6px;
+    cursor: col-resize;
+    align-self: stretch;
+    margin: 0 4px;
+  }
+  .pane-splitter-main {
+    margin: 0;
+    width: auto;
+    cursor: col-resize;
+  }
+  .pane-splitter-main::before {
+    margin: 0 auto;
+  }
+  .chat-pane-splitter {
+    height: 6px;
+    border-radius: 999px;
+    cursor: row-resize;
+    background: rgba(34, 50, 76, 0.65);
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .chat-pane-splitter:hover {
+    background: rgba(79, 209, 197, 0.35);
+  }
+  .chat-pane-splitter.collapsed {
+    margin-bottom: 6px;
+  }
+  .chat-bottom-panel {
+    flex-shrink: 0;
+    min-height: 72px;
+    border: 1px solid rgba(34, 50, 76, 0.6);
+    border-radius: 8px;
+    background: rgba(9, 15, 29, 0.7);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: auto;
+  }
+  .chat-pane-collapsed {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 2px;
+  }
+  .chat-bottom-panel .chat-stream-status {
+    align-self: flex-start;
+  }
+
+  /* ── Chat welcome / onboarding ───────────────────────────────── */
+  .chat-settings-welcome-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--ide-text-dim);
+  }
+  .chat-welcome-card {
+    border: 1px solid rgba(79, 209, 197, 0.22);
+    background: linear-gradient(180deg, rgba(17, 31, 53, 0.92), rgba(9, 15, 29, 0.92));
+    border-radius: 10px;
+    padding: 12px;
+    color: #d7e2f2;
+    max-width: 720px;
+  }
+  .chat-welcome-card h3 {
+    margin: 4px 0 8px;
+    font-size: 14px;
+    color: #ecf5ff;
+  }
+  .chat-welcome-card p {
+    margin: 0;
+    font-size: 12px;
+    color: #b1c3df;
+    line-height: 1.45;
+  }
+  .chat-welcome-eyebrow {
+    color: var(--ide-accent);
+    font-size: 10px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .chat-welcome-steps {
+    margin: 10px 0 0 18px;
+    padding: 0;
+    color: #bdd0ea;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .chat-welcome-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .chat-welcome-note {
+    margin-top: 8px;
+    color: #89a0c2;
+    font-size: 11px;
   }
 `;
 

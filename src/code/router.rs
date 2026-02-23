@@ -41,6 +41,13 @@ struct DeleteFileParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DeleteDirParams {
+    project_path: String,
+    dir_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateDirParams {
     project_path: String,
     dir_path: String,
@@ -148,6 +155,15 @@ pub fn handle_code_ipc(
             set_active_project(state, project_root);
             Ok(Some(json!({ "ok": true })))
         }
+        "code_deleteDir" => {
+            let params: DeleteDirParams = parse_params(req)?;
+            let project_root = filesystem::resolve_project_root(&params.project_path)?;
+            filesystem::delete_dir(&project_root, &params.dir_path)?;
+            emit_file_changed(state, webview_id, &params.dir_path, "delete");
+            emit_project_validation_console(state, webview_id, &project_root);
+            set_active_project(state, project_root);
+            Ok(Some(json!({ "ok": true })))
+        }
         "code_createDir" => {
             let params: CreateDirParams = parse_params(req)?;
             let project_root = filesystem::resolve_project_root(&params.project_path)?;
@@ -179,7 +195,8 @@ pub fn handle_code_ipc(
             let workspace_root = resolve_workspace_root(state)?;
             let project_root = project::create_project(&workspace_root, &params.name)?;
             let project_path = project_root.to_string_lossy().into_owned();
-            set_active_project(state, project_root);
+            set_active_project(state, project_root.clone());
+            persist_last_project_path(state, &project_root);
             Ok(Some(json!({ "projectPath": project_path })))
         }
         "code_listProjects" => {
@@ -195,11 +212,18 @@ pub fn handle_code_ipc(
                 Some(path) => project::resolve_open_project_path(&workspace_root, &path)?,
                 None => {
                     let active_project = current_active_project(state)?;
-                    let Some(project_root) = active_project else {
-                        bail!("code_openProject requires a project path");
-                    };
-                    project::validate_project_root(&project_root)?;
-                    project_root
+                    if let Some(project_root) = active_project {
+                        project::validate_project_root(&project_root)?;
+                        project_root
+                    } else {
+                        let code_settings = settings::load_settings(&workspace_root);
+                        let remembered_path = code_settings.last_project_path.ok_or_else(|| {
+                            anyhow!(
+                                "code_openProject requires a project path (no active or remembered project)"
+                            )
+                        })?;
+                        project::resolve_open_project_path(&workspace_root, &remembered_path)?
+                    }
                 }
             };
 
@@ -212,7 +236,8 @@ pub fn handle_code_ipc(
                     "failed to ensure preview console bridge for opened project"
                 );
             }
-            set_active_project(state, project_root);
+            set_active_project(state, project_root.clone());
+            persist_last_project_path(state, &project_root);
             Ok(Some(json!({ "projectPath": project_path, "files": files })))
         }
         "code_startDevServer" => {
@@ -314,7 +339,8 @@ pub fn handle_code_ipc(
                 );
             }
             let forked_project_path = forked_project.to_string_lossy().into_owned();
-            set_active_project(state, forked_project);
+            set_active_project(state, forked_project.clone());
+            persist_last_project_path(state, &forked_project);
 
             let _ = state.proxy.send_event(UserEvent::ProviderEvent {
                 webview_id: webview_id.to_string(),
@@ -414,6 +440,26 @@ fn current_active_project(state: &AppState) -> Result<Option<PathBuf>> {
 fn set_active_project(state: &AppState, project_root: PathBuf) {
     if let Ok(mut guard) = state.code.lock() {
         guard.active_project = Some(project_root);
+    }
+}
+
+fn persist_last_project_path(state: &AppState, project_root: &Path) {
+    let workspace_root = match resolve_workspace_root(state) {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to resolve code workspace root for last project persistence");
+            return;
+        }
+    };
+
+    let mut code_settings = settings::load_settings(&workspace_root);
+    code_settings.last_project_path = Some(project_root.to_string_lossy().into_owned());
+    if let Err(error) = settings::save_settings(&workspace_root, &code_settings) {
+        tracing::warn!(
+            error = %error,
+            project = %project_root.display(),
+            "failed to persist last opened code project"
+        );
     }
 }
 
