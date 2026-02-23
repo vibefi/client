@@ -100,6 +100,7 @@ button:hover {
 "#;
 
 const PREVIEW_CONSOLE_BRIDGE_MARKER: &str = "__VIBEFI_PREVIEW_CONSOLE_BRIDGE__";
+const PREVIEW_WALLET_BRIDGE_MARKER: &str = "__VIBEFI_PREVIEW_WALLET_BRIDGE__";
 
 const LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT: &str = r#"    <script>
       window.addEventListener("error", (event) => {
@@ -220,6 +221,120 @@ const PREVIEW_CONSOLE_BRIDGE_SCRIPT: &str = r#"    <script>
             stack,
           });
         });
+      })();
+    </script>"#;
+
+const PREVIEW_WALLET_BRIDGE_SCRIPT: &str = r#"    <script>
+      (() => {
+        if (window.__VIBEFI_PREVIEW_WALLET_BRIDGE__) return;
+        window.__VIBEFI_PREVIEW_WALLET_BRIDGE__ = true;
+
+        let nextId = 1;
+        const pending = new Map();
+        const listeners = new Map();
+        let selectedAddress = null;
+        let chainId = null;
+
+        const emit = (event, value) => {
+          const set = listeners.get(event);
+          if (!set) return;
+          for (const handler of Array.from(set)) {
+            try {
+              handler(value);
+            } catch (_) {}
+          }
+        };
+
+        const request = ({ method, params }) =>
+          new Promise((resolve, reject) => {
+            if (!window.parent || window.parent === window) {
+              reject(new Error("Preview host bridge unavailable"));
+              return;
+            }
+            const id = nextId++;
+            pending.set(id, { resolve, reject, method });
+            window.parent.postMessage(
+              {
+                type: "vibefi-preview-eth-request",
+                id,
+                method,
+                params: Array.isArray(params) ? params : [],
+              },
+              "*"
+            );
+          });
+
+        window.addEventListener("message", (event) => {
+          const data = event.data;
+          if (!data || typeof data !== "object") return;
+
+          if (data.type === "vibefi-preview-eth-response") {
+            const entry = pending.get(data.id);
+            if (!entry) return;
+            pending.delete(data.id);
+            if (data.error) {
+              const message =
+                data.error && typeof data.error.message === "string"
+                  ? data.error.message
+                  : "Provider request failed";
+              entry.reject(new Error(message));
+              return;
+            }
+            if (entry.method === "eth_requestAccounts" || entry.method === "eth_accounts") {
+              if (Array.isArray(data.result)) {
+                selectedAddress = typeof data.result[0] === "string" ? data.result[0] : null;
+              }
+            }
+            if (entry.method === "eth_chainId" && typeof data.result === "string") {
+              chainId = data.result;
+            }
+            entry.resolve(data.result);
+            return;
+          }
+
+          if (data.type !== "vibefi-preview-eth-event") return;
+          if (data.event === "accountsChanged" && Array.isArray(data.value)) {
+            selectedAddress = typeof data.value[0] === "string" ? data.value[0] : null;
+          }
+          if (data.event === "chainChanged" && typeof data.value === "string") {
+            chainId = data.value;
+          }
+          emit(data.event, data.value);
+        });
+
+        const ethereum = {
+          isMetaMask: false,
+          isVibefi: true,
+          request,
+          enable: () => request({ method: "eth_requestAccounts", params: [] }),
+          on: (event, handler) => {
+            if (!listeners.has(event)) listeners.set(event, new Set());
+            listeners.get(event).add(handler);
+            return ethereum;
+          },
+          removeListener: (event, handler) => {
+            listeners.get(event)?.delete(handler);
+            return ethereum;
+          },
+          off: (event, handler) => {
+            listeners.get(event)?.delete(handler);
+            return ethereum;
+          },
+          get selectedAddress() {
+            return selectedAddress;
+          },
+          get chainId() {
+            return chainId;
+          },
+        };
+
+        if (!window.ethereum) {
+          Object.defineProperty(window, "ethereum", {
+            value: ethereum,
+            configurable: true,
+            writable: false,
+          });
+        }
       })();
     </script>"#;
 
@@ -481,37 +596,49 @@ pub fn ensure_preview_console_bridge(project_root: &Path) -> Result<()> {
 
     let contents = std::fs::read_to_string(&index_path)
         .with_context(|| format!("failed to read project index at {}", index_path.display()))?;
-    if contents.contains(PREVIEW_CONSOLE_BRIDGE_MARKER) {
-        return Ok(());
+    let mut updated = contents.clone();
+    let mut changed = false;
+
+    if !updated.contains(PREVIEW_CONSOLE_BRIDGE_MARKER) {
+        updated = if updated.contains(LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT) {
+            updated.replacen(
+                LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT,
+                PREVIEW_CONSOLE_BRIDGE_SCRIPT,
+                1,
+            )
+        } else {
+            inject_preview_bridge_script(&updated, PREVIEW_CONSOLE_BRIDGE_SCRIPT)
+        };
+        changed = true;
     }
 
-    let updated = if contents.contains(LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT) {
-        contents.replacen(
-            LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT,
-            PREVIEW_CONSOLE_BRIDGE_SCRIPT,
-            1,
-        )
-    } else if let Some(body_close) = contents.rfind("</body>") {
-        let mut value =
-            String::with_capacity(contents.len() + PREVIEW_CONSOLE_BRIDGE_SCRIPT.len() + 2);
-        value.push_str(&contents[..body_close]);
-        if !value.ends_with('\n') {
-            value.push('\n');
-        }
-        value.push_str(PREVIEW_CONSOLE_BRIDGE_SCRIPT);
-        value.push('\n');
-        value.push_str(&contents[body_close..]);
-        value
-    } else {
-        format!("{contents}\n{PREVIEW_CONSOLE_BRIDGE_SCRIPT}\n")
-    };
+    if !updated.contains(PREVIEW_WALLET_BRIDGE_MARKER) {
+        updated = inject_preview_bridge_script(&updated, PREVIEW_WALLET_BRIDGE_SCRIPT);
+        changed = true;
+    }
 
-    if updated == contents {
+    if !changed || updated == contents {
         return Ok(());
     }
 
     std::fs::write(&index_path, updated)
         .with_context(|| format!("failed to write project index at {}", index_path.display()))
+}
+
+fn inject_preview_bridge_script(contents: &str, script: &str) -> String {
+    if let Some(body_close) = contents.rfind("</body>") {
+        let mut value = String::with_capacity(contents.len() + script.len() + 2);
+        value.push_str(&contents[..body_close]);
+        if !value.ends_with('\n') {
+            value.push('\n');
+        }
+        value.push_str(script);
+        value.push('\n');
+        value.push_str(&contents[body_close..]);
+        value
+    } else {
+        format!("{contents}\n{script}\n")
+    }
 }
 
 fn render_index_html() -> String {

@@ -5,6 +5,18 @@ use std::path::{Path, PathBuf};
 
 const SETTINGS_FILE: &str = "code-settings.json";
 
+const fn default_anvil_auto_start_on_open() -> bool {
+    true
+}
+
+const fn default_anvil_port() -> u16 {
+    9545
+}
+
+const fn default_anvil_chain_id() -> u64 {
+    1
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeApiKeys {
@@ -42,11 +54,55 @@ impl Default for CodeLlmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CodeAnvilConfig {
+    #[serde(default = "default_anvil_auto_start_on_open")]
+    pub auto_start_on_open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_url: Option<String>,
+    #[serde(default = "default_anvil_port")]
+    pub port: u16,
+    #[serde(default = "default_anvil_chain_id")]
+    pub chain_id: u64,
+}
+
+impl Default for CodeAnvilConfig {
+    fn default() -> Self {
+        Self {
+            auto_start_on_open: default_anvil_auto_start_on_open(),
+            fork_url: None,
+            port: default_anvil_port(),
+            chain_id: default_anvil_chain_id(),
+        }
+    }
+}
+
+impl CodeAnvilConfig {
+    pub fn normalized(mut self) -> Self {
+        self.fork_url = self
+            .fork_url
+            .and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            });
+        if self.port == 0 {
+            self.port = default_anvil_port();
+        }
+        if self.chain_id == 0 {
+            self.chain_id = default_anvil_chain_id();
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodeSettings {
     #[serde(default)]
     pub api_keys: CodeApiKeys,
     #[serde(default)]
     pub llm_config: CodeLlmConfig,
+    #[serde(default)]
+    pub anvil: CodeAnvilConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_project_path: Option<String>,
 }
@@ -56,6 +112,7 @@ impl Default for CodeSettings {
         Self {
             api_keys: CodeApiKeys::default(),
             llm_config: CodeLlmConfig::default(),
+            anvil: CodeAnvilConfig::default(),
             last_project_path: None,
         }
     }

@@ -178,6 +178,8 @@ fn main() -> Result<()> {
             workspace_root: code_workspace_root,
             dev_server: None,
             next_dev_server_id: 1,
+            anvil: None,
+            next_anvil_id: 1,
         })),
         selector_webview_id: Arc::new(Mutex::new(None)),
         rpc_manager: Arc::new(Mutex::new(rpc_manager)),
@@ -711,6 +713,9 @@ fn main() -> Result<()> {
             Event::LoopDestroyed => {
                 if let Err(err) = code::dev_server::stop_dev_server_for_shutdown(&state) {
                     tracing::warn!(error = %err, "failed to stop Code dev server during shutdown");
+                }
+                if let Err(err) = code::anvil::stop_anvil_for_shutdown(&state) {
+                    tracing::warn!(error = %err, "failed to stop Code anvil during shutdown");
                 }
             }
             Event::WindowEvent {

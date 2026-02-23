@@ -12,6 +12,8 @@ import type {
 } from "./chat/llm/tools";
 import { CHAT_TAB_ID, CONSOLE_TAB_ID, DIFF_TAB_ID } from "./constants";
 import type {
+  AnvilConfig,
+  AnvilStatus,
   ChatTab,
   ConsolePathMatch,
   ConsoleTab,
@@ -125,6 +127,44 @@ export function parseDevServerStatus(value: unknown): DevServerStatus {
   return {
     running: value.running === true,
     port: parsePort(value.port),
+  };
+}
+
+function parsePositiveInt(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.trunc(parsed);
+    }
+  }
+  return fallback;
+}
+
+export function parseAnvilConfig(value: unknown): AnvilConfig {
+  const record = isRecord(value) ? value : {};
+  return {
+    autoStartOnOpen: record.autoStartOnOpen !== false,
+    forkUrl: typeof record.forkUrl === "string" ? record.forkUrl : "",
+    port: parsePositiveInt(record.port, 9545),
+    chainId: parsePositiveInt(record.chainId, 1),
+  };
+}
+
+export function parseAnvilStatus(value: unknown): AnvilStatus {
+  const record = isRecord(value) ? value : {};
+  const config = parseAnvilConfig(isRecord(record.config) ? record.config : undefined);
+  return {
+    running: record.running === true,
+    port: parsePort(record.port),
+    url: typeof record.url === "string" && record.url.trim() ? record.url : null,
+    projectPath: typeof record.projectPath === "string" && record.projectPath.trim() ? record.projectPath : null,
+    chainId: parsePositiveInt(record.chainId, config.chainId),
+    account: typeof record.account === "string" && record.account.trim() ? record.account : null,
+    accountIndex: parsePositiveInt(record.accountIndex, 1),
+    config,
   };
 }
 

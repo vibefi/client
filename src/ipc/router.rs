@@ -20,6 +20,8 @@ pub fn handle_ipc(
     msg: String,
 ) -> Result<()> {
     let req: IpcRequest = serde_json::from_str(&msg).context("invalid IPC JSON")?;
+    let app_kind = manager.app_kind_for_id(webview_id);
+    let is_code_surface = app_kind == Some(AppWebViewKind::Code);
     let provider = req.provider();
     tracing::debug!(
         webview_id,
@@ -121,8 +123,24 @@ pub fn handle_ipc(
 
     let backend = state.get_wallet_backend();
 
+    let is_connect_request = matches!(
+        req.method.as_str(),
+        "eth_requestAccounts" | "wallet_requestPermissions"
+    );
+
+    // Code preview connect should only ever use the local Anvil wallet, never the selector.
+    if is_code_surface && is_connect_request && backend != Some(WalletBackend::Local) {
+        return respond_option_result(
+            webview,
+            req.id,
+            Err(anyhow!(
+                "Code preview only supports the local Anvil wallet. Start Anvil in the Code sidebar and try again."
+            )),
+        );
+    }
+
     // If no wallet backend is chosen yet and the dapp calls eth_requestAccounts,
-    // open the wallet selector tab and park the request.
+    // open the wallet selector tab and park the request (non-Code surfaces only).
     if backend.is_none() && req.method == "eth_requestAccounts" {
         {
             let mut pending = lock_or_err(&state.pending_connect, "pending_connect")?;

@@ -1,3 +1,4 @@
+pub mod anvil;
 pub mod dev_server;
 pub mod filesystem;
 pub mod project;

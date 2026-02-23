@@ -25,6 +25,24 @@ export type DevServerStatus = {
   port: number | null;
 };
 
+export type AnvilConfig = {
+  autoStartOnOpen: boolean;
+  forkUrl: string;
+  port: number;
+  chainId: number;
+};
+
+export type AnvilStatus = {
+  running: boolean;
+  port: number | null;
+  url: string | null;
+  projectPath: string | null;
+  chainId: number;
+  account: string | null;
+  accountIndex: number;
+  config: AnvilConfig;
+};
+
 export type FileTab = {
   id: string;
   kind: "file";
@@ -74,4 +92,4 @@ export type ChatUiMessage = {
 
 export type WorkspaceMode = "llm-preview" | "llm-code-preview";
 
-export type SidebarPanelId = "projects" | "files" | "dev-server" | "console";
+export type SidebarPanelId = "projects" | "files" | "dev-server" | "anvil" | "console";

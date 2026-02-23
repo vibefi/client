@@ -32,6 +32,7 @@ import {
 } from "./utils";
 import { useConsole } from "./hooks/useConsole";
 import { useSettings } from "./hooks/useSettings";
+import { useAnvil } from "./hooks/useAnvil";
 import { useDevServer } from "./hooks/useDevServer";
 import { useProject } from "./hooks/useProject";
 import { useEditor } from "./hooks/useEditor";
@@ -88,8 +89,10 @@ function renderTreeIcon(entry: FileEntry, expanded = false): React.ReactNode {
 }
 
 const client = new IpcClient();
+const previousHostDispatch = window.__VibefiHostDispatch;
 
 window.__VibefiHostDispatch = (message: unknown) => {
+  previousHostDispatch?.(message);
   handleHostDispatch(message, {
     onRpcResponse: (payload) => {
       client.resolve(payload.id, payload.result ?? null, payload.error ?? null);
@@ -130,6 +133,7 @@ export default function App() {
   const ideWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const ideMainRef = useRef<HTMLDivElement | null>(null);
   const chatShellRef = useRef<HTMLDivElement | null>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const quickOpenInputRef = useRef<HTMLInputElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const editorTabsRef = useRef<HTMLDivElement | null>(null);
@@ -147,6 +151,7 @@ export default function App() {
   const settings = useSettings(client);
   const project = useProject(client);
   const editor = useEditor(client, project.activeProjectPath, console_);
+  const anvil = useAnvil(client, console_);
   const devServer = useDevServer(client, console_);
   const chat = useChat(client, settings, project, editor, console_);
 
@@ -200,6 +205,7 @@ export default function App() {
     void (async () => {
       const [projectsResult] = await Promise.all([
         project.loadProjects(),
+        anvil.loadStatus({ silent: true }),
         devServer.loadStatus({ silent: true }),
         settings.load({ silent: true }),
       ]);
@@ -341,6 +347,48 @@ export default function App() {
       if (typeof event.origin !== "string" || !event.origin.startsWith("http://localhost:")) return;
       if (!isRecord(event.data)) return;
 
+      if (event.data.type === "vibefi-preview-eth-request") {
+        const source = event.source as WindowProxy | null;
+        const id = typeof event.data.id === "number" || typeof event.data.id === "string"
+          ? event.data.id
+          : null;
+        const method = typeof event.data.method === "string" ? event.data.method.trim() : "";
+        const params = Array.isArray(event.data.params) ? event.data.params : [];
+        if (!source || id === null || !method) return;
+
+        const request = window.ethereum?.request;
+        if (typeof request !== "function") {
+          source.postMessage(
+            {
+              type: "vibefi-preview-eth-response",
+              id,
+              error: { message: "Host Ethereum provider is not available" },
+            },
+            event.origin
+          );
+          return;
+        }
+
+        void request({ method, params })
+          .then((result) => {
+            source.postMessage(
+              { type: "vibefi-preview-eth-response", id, result: result ?? null },
+              event.origin
+            );
+          })
+          .catch((err: unknown) => {
+            source.postMessage(
+              {
+                type: "vibefi-preview-eth-response",
+                id,
+                error: { message: asErrorMessage(err) },
+              },
+              event.origin
+            );
+          });
+        return;
+      }
+
       if (event.data.type === "vibefi-code-console") {
         const level =
           typeof event.data.level === "string" && event.data.level.trim()
@@ -431,6 +479,47 @@ export default function App() {
         return;
       }
 
+      if (payload.event === "codeAnvilReady") {
+        void anvil.loadStatus({ silent: true });
+        const value = payload.value;
+        const port = isRecord(value) ? parsePort(value.port) : null;
+        const account =
+          isRecord(value) && typeof value.account === "string" && value.account.trim()
+            ? value.account
+            : null;
+        console_.append([
+          port !== null
+            ? `[system] anvil ready on localhost:${port}${account ? ` (acct #1 ${account.slice(0, 8)}...)` : ""}`
+            : "[system] anvil ready",
+        ]);
+        return;
+      }
+
+      if (payload.event === "codeAnvilExit") {
+        void anvil.loadStatus({ silent: true });
+        const value = payload.value;
+        const exitCode =
+          isRecord(value) && typeof value.code === "number" && Number.isFinite(value.code)
+            ? Math.trunc(value.code)
+            : null;
+        console_.append([
+          exitCode === null ? "[system] anvil exited" : `[system] anvil exited with code ${exitCode}`,
+        ]);
+        return;
+      }
+
+      if (payload.event === "codeAnvilError") {
+        void anvil.loadStatus({ silent: true });
+        const value = payload.value;
+        const message =
+          isRecord(value) && typeof value.message === "string" && value.message.trim()
+            ? value.message.trim()
+            : "Anvil failed";
+        console_.append([`[system] anvil error: ${message}`]);
+        setError(`Anvil error: ${message}`);
+        return;
+      }
+
       if (payload.event === "codeFileChanged") {
         void editor.handleCodeFileChanged(payload.value);
         return;
@@ -444,6 +533,23 @@ export default function App() {
         setError(null);
         setStatus(`Fork created at ${projectPath}. Opening in Code...`);
         void handleOpenProject(projectPath);
+        return;
+      }
+
+      if (
+        payload.event === "accountsChanged" ||
+        payload.event === "chainChanged" ||
+        payload.event === "connect" ||
+        payload.event === "disconnect"
+      ) {
+        previewFrameRef.current?.contentWindow?.postMessage(
+          {
+            type: "vibefi-preview-eth-event",
+            event: payload.event,
+            value: payload.value ?? null,
+          },
+          "*"
+        );
       }
     };
     window.addEventListener(CODE_PROVIDER_EVENT, onCodeProviderEvent);
@@ -497,6 +603,7 @@ export default function App() {
         setAwaitingPreviewReady(false);
         setError(dvResult.error);
       }
+      void anvil.loadStatus({ silent: true });
       const lResult = await project.loadProjects();
       if (lResult.error) console_.append([`[system] ${lResult.error}`]);
     } catch (err) {
@@ -531,6 +638,7 @@ export default function App() {
         setAwaitingPreviewReady(false);
         setError(dvResult.error);
       }
+      void anvil.loadStatus({ silent: true });
       project.setNewProjectName("");
       setStatus(`Created and opened ${opened.projectPath}`);
       const lResult = await project.loadProjects();
@@ -561,6 +669,28 @@ export default function App() {
     setPreviewUrl(null);
     if (result.error) setError(result.error);
     if (result.status) setStatus(result.status);
+  }
+
+  async function handleStartAnvil() {
+    if (!project.activeProjectPath) return;
+    const result = await anvil.start(project.activeProjectPath);
+    if (result.error) setError(result.error);
+    if (result.status) setStatus(result.status);
+    void anvil.loadStatus({ silent: true });
+  }
+
+  async function handleStopAnvil() {
+    const result = await anvil.stop();
+    if (result.error) setError(result.error);
+    if (result.status) setStatus(result.status);
+    void anvil.loadStatus({ silent: true });
+  }
+
+  async function handleSaveAnvilConfig() {
+    const result = await anvil.saveConfig(anvil.config);
+    if (result.error) setError(result.error);
+    if (result.status) setStatus(result.status);
+    void anvil.loadStatus({ silent: true });
   }
 
   async function handleSaveActiveTab() {
@@ -1156,6 +1286,146 @@ export default function App() {
       );
     }
 
+    if (activeSidebarPanel === "anvil") {
+      const busy = project.pendingAction !== null || anvil.action !== null;
+      const running = anvil.status.running;
+      const actionLabel =
+        anvil.action === "start"
+          ? "Starting…"
+          : anvil.action === "stop"
+            ? "Stopping…"
+            : anvil.action === "save"
+              ? "Saving…"
+              : null;
+      return (
+        <>
+          <div className="section-head">
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span className="sidebar-section-label">Anvil</span>
+              <span className={`ds-dot ${running ? "ds-dot-on" : "ds-dot-off"}`} title={running ? "Running" : "Stopped"} />
+            </div>
+            <div className="tree-toolbar">
+              <button
+                className="tree-icon-btn"
+                title="Start anvil"
+                onClick={() => void handleStartAnvil()}
+                disabled={!project.activeProjectPath || busy || running}
+              >
+                ▶
+              </button>
+              <button
+                className="tree-icon-btn"
+                title="Stop anvil"
+                onClick={() => void handleStopAnvil()}
+                disabled={busy || !running}
+              >
+                ■
+              </button>
+              <button
+                className="tree-icon-btn"
+                title="Refresh anvil status"
+                onClick={() => anvil.loadStatus().then((r) => { if (r.error) setError(r.error); })}
+                disabled={busy}
+              >
+                ↺
+              </button>
+            </div>
+          </div>
+          <div className="sidebar-scroll">
+            <div className="dev-server-status">
+              {actionLabel ?? (running
+                ? <><span style={{ color: "#4ade80" }}>●</span> Running on <code>localhost:{anvil.status.port ?? anvil.config.port}</code></>
+                : <><span style={{ color: "#6b7280" }}>●</span> Stopped</>
+              )}
+            </div>
+            <div className="project-path" style={{ marginTop: "6px", wordBreak: "break-all" }}>
+              Preview wallet connect uses local Anvil account #{anvil.status.accountIndex} while Anvil is running.
+            </div>
+            {anvil.status.account ? (
+              <div className="project-path" style={{ marginTop: "6px", wordBreak: "break-all" }}>
+                Account #{anvil.status.accountIndex}: {anvil.status.account}
+              </div>
+            ) : null}
+            {anvil.status.projectPath ? (
+              <div className="project-path" style={{ marginTop: "6px", wordBreak: "break-all" }}>
+                Project: {anvil.status.projectPath}
+              </div>
+            ) : null}
+            <div className="proj-action-block" style={{ marginTop: "10px" }}>
+              <label className="project-path" style={{ display: "block", marginBottom: "4px" }}>
+                Fork RPC URL Override
+              </label>
+              <div className="proj-input-row">
+                <input
+                  value={anvil.config.forkUrl}
+                  placeholder="Use default config rpcUrl if empty"
+                  onChange={(e) => anvil.setConfig({ ...anvil.config, forkUrl: e.target.value })}
+                  disabled={busy}
+                />
+              </div>
+              <div className="proj-input-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={anvil.config.port}
+                  placeholder="Port"
+                  onChange={(e) =>
+                    anvil.setConfig({
+                      ...anvil.config,
+                      port: Math.max(1, Math.min(65535, Number(e.target.value) || anvil.config.port)),
+                    })
+                  }
+                  disabled={busy}
+                />
+                <input
+                  type="number"
+                  min={1}
+                  value={anvil.config.chainId}
+                  placeholder="Chain ID"
+                  onChange={(e) =>
+                    anvil.setConfig({
+                      ...anvil.config,
+                      chainId: Math.max(1, Number(e.target.value) || anvil.config.chainId),
+                    })
+                  }
+                  disabled={busy}
+                />
+              </div>
+              <label
+                className="project-path"
+                style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={anvil.config.autoStartOnOpen}
+                  onChange={(e) => anvil.setConfig({ ...anvil.config, autoStartOnOpen: e.target.checked })}
+                  disabled={busy}
+                />
+                Auto-start when opening a project
+              </label>
+              <div className="proj-input-row" style={{ marginTop: "8px" }}>
+                <button
+                  className="primary"
+                  onClick={() => void handleSaveAnvilConfig()}
+                  disabled={busy}
+                >
+                  {anvil.action === "save" ? "…" : "Save Config"}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => anvil.loadConfig().then((r) => { if (r.error) setError(r.error); })}
+                  disabled={busy}
+                >
+                  Reload
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      );
+    }
+
     // console panel
     return (
       <>
@@ -1223,6 +1493,12 @@ export default function App() {
                   onClick={() => setActiveSidebarPanel("dev-server")}
                 >
                   Dev Server
+                </button>
+                <button
+                  className={`sidebar-tab ${activeSidebarPanel === "anvil" ? "active" : ""}`}
+                  onClick={() => setActiveSidebarPanel("anvil")}
+                >
+                  Anvil
                 </button>
                 {workspaceMode === "llm-preview" ? (
                   <button
@@ -1673,6 +1949,7 @@ export default function App() {
                     <div className="preview-frame-wrap">
                       <iframe
                         key={previewFrameKey}
+                        ref={previewFrameRef}
                         className="preview-frame"
                         src={previewUrl}
                         title="Live project preview"

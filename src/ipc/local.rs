@@ -14,6 +14,19 @@ use super::rpc::{
 };
 use super::{emit_accounts_changed, emit_chain_changed, try_spawn_rpc_passthrough};
 
+fn wallet_permissions_response(account: Option<String>) -> Value {
+    let mut permission = serde_json::json!({
+        "parentCapability": "eth_accounts",
+    });
+    if let Some(account) = account {
+        permission["caveats"] = serde_json::json!([{
+            "type": "restrictReturnedAccounts",
+            "value": [account],
+        }]);
+    }
+    Value::Array(vec![permission])
+}
+
 pub(super) fn handle_local_ipc(
     webview: &WebView,
     state: &AppState,
@@ -55,6 +68,47 @@ pub(super) fn handle_local_ipc(
             emit_accounts_changed(webview, vec![account.clone()]);
             tracing::info!(webview_id, account, "local wallet authorized account");
             Ok(Some(Value::Array(vec![Value::String(account)])))
+        }
+        "wallet_requestPermissions" => {
+            // MetaMask-compatible connect preflight used by many injected-wallet libraries.
+            let account = state
+                .local_signer_address()
+                .ok_or_else(|| anyhow!("Local signer unavailable"))?;
+            {
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while authorizing local wallet permissions");
+                ws.authorized = true;
+                ws.account = Some(account.clone());
+            }
+            emit_accounts_changed(webview, vec![account.clone()]);
+            tracing::info!(webview_id, account, "local wallet granted eth_accounts permission");
+            Ok(Some(wallet_permissions_response(Some(account))))
+        }
+        "wallet_getPermissions" => {
+            let ws = state
+                .wallet
+                .lock()
+                .expect("poisoned wallet lock while handling wallet_getPermissions");
+            if ws.authorized {
+                let account = ws.account.clone().or_else(|| state.local_signer_address());
+                Ok(Some(wallet_permissions_response(account)))
+            } else {
+                Ok(Some(Value::Array(vec![])))
+            }
+        }
+        "wallet_revokePermissions" => {
+            {
+                let mut ws = state
+                    .wallet
+                    .lock()
+                    .expect("poisoned wallet lock while revoking local wallet permissions");
+                ws.authorized = false;
+                ws.account = None;
+            }
+            emit_accounts_changed(webview, vec![]);
+            Ok(Some(Value::Bool(true)))
         }
         "wallet_switchEthereumChain" => {
             let chain_id_hex = req

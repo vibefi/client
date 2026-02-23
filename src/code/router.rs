@@ -8,7 +8,7 @@ use crate::ipc_contract::IpcRequest;
 use crate::state::{AppState, UserEvent};
 use crate::webview_manager::{AppWebViewKind, WebViewManager};
 
-use super::{dev_server, filesystem, project, settings, validator};
+use super::{anvil, dev_server, filesystem, project, settings, validator};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +83,13 @@ struct OpenProjectParams {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StartDevServerParams {
+    #[serde(default, alias = "path")]
+    project_path: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartAnvilParams {
     #[serde(default, alias = "path")]
     project_path: Option<String>,
 }
@@ -238,6 +245,23 @@ pub fn handle_code_ipc(
             }
             set_active_project(state, project_root.clone());
             persist_last_project_path(state, &project_root);
+            if let Err(error) = anvil::auto_start_anvil_for_project(state, webview_id, project_root.clone())
+            {
+                tracing::warn!(
+                    error = %error,
+                    project = %project_root.display(),
+                    "failed to auto-start anvil for opened project"
+                );
+                emit_code_provider_event(
+                    state,
+                    webview_id,
+                    "codeAnvilError",
+                    json!({
+                        "message": error.to_string(),
+                        "projectPath": project_root.to_string_lossy().to_string(),
+                    }),
+                );
+            }
             Ok(Some(json!({ "projectPath": project_path, "files": files })))
         }
         "code_startDevServer" => {
@@ -261,6 +285,34 @@ pub fn handle_code_ipc(
         "code_devServerStatus" => {
             let response = dev_server::dev_server_status(state)?;
             Ok(Some(response))
+        }
+        "code_startAnvil" => {
+            let params: StartAnvilParams = parse_params_or_default(req)?;
+            let project_root = resolve_dev_server_project_root(state, params.project_path)?;
+            let response = anvil::start_anvil(state, webview_id, project_root.clone())?;
+            set_active_project(state, project_root);
+            Ok(Some(response))
+        }
+        "code_stopAnvil" => {
+            let response = anvil::stop_anvil(state)?;
+            Ok(Some(response))
+        }
+        "code_anvilStatus" => {
+            let response = anvil::anvil_status(state)?;
+            Ok(Some(response))
+        }
+        "code_getAnvilConfig" => {
+            let workspace_root = resolve_workspace_root(state)?;
+            let code_settings = settings::load_settings(&workspace_root);
+            Ok(Some(serde_json::to_value(code_settings.anvil)?))
+        }
+        "code_setAnvilConfig" => {
+            let workspace_root = resolve_workspace_root(state)?;
+            let params: settings::CodeAnvilConfig = parse_params(req)?;
+            let mut code_settings = settings::load_settings(&workspace_root);
+            code_settings.anvil = params.normalized();
+            settings::save_settings(&workspace_root, &code_settings)?;
+            Ok(Some(serde_json::to_value(code_settings.anvil)?))
         }
         "code_getApiKeys" => {
             let workspace_root = resolve_workspace_root(state)?;
@@ -498,13 +550,27 @@ fn emit_project_validation_console(state: &AppState, webview_id: &str, project_r
 }
 
 fn emit_code_console_output(state: &AppState, webview_id: &str, source: &str, line: &str) {
-    let _ = state.proxy.send_event(UserEvent::ProviderEvent {
-        webview_id: webview_id.to_string(),
-        event: "codeConsoleOutput".to_string(),
-        value: json!({
+    emit_code_provider_event(
+        state,
+        webview_id,
+        "codeConsoleOutput",
+        json!({
             "source": source,
             "line": line,
         }),
+    );
+}
+
+fn emit_code_provider_event(
+    state: &AppState,
+    webview_id: &str,
+    event: &str,
+    value: serde_json::Value,
+) {
+    let _ = state.proxy.send_event(UserEvent::ProviderEvent {
+        webview_id: webview_id.to_string(),
+        event: event.to_string(),
+        value,
     });
 }
 

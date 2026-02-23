@@ -145,11 +145,23 @@ pub struct RunningCodeDevServer {
 }
 
 #[derive(Debug)]
+pub struct RunningCodeAnvil {
+    pub id: u64,
+    pub project_root: PathBuf,
+    pub webview_id: String,
+    pub port: u16,
+    pub child: Arc<Mutex<Child>>,
+    pub uses_process_group: bool,
+}
+
+#[derive(Debug)]
 pub struct CodeState {
     pub active_project: Option<PathBuf>,
     pub workspace_root: PathBuf,
     pub dev_server: Option<RunningCodeDevServer>,
     pub next_dev_server_id: u64,
+    pub anvil: Option<RunningCodeAnvil>,
+    pub next_anvil_id: u64,
 }
 
 #[derive(Clone)]
