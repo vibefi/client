@@ -8,6 +8,7 @@ pub const PROVIDER_ID_PROVIDER: &str = "vibefi-provider";
 pub const PROVIDER_ID_SETTINGS: &str = "vibefi-settings";
 pub const PROVIDER_ID_IPFS: &str = "vibefi-ipfs";
 pub const PROVIDER_ID_CODE: &str = "vibefi-code";
+pub const PROVIDER_ID_AUTOMATION: &str = "vibefi-automation";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnownProviderId {
@@ -18,6 +19,7 @@ pub enum KnownProviderId {
     Settings,
     Ipfs,
     Code,
+    Automation,
 }
 
 impl KnownProviderId {
@@ -30,6 +32,7 @@ impl KnownProviderId {
             PROVIDER_ID_SETTINGS => Some(Self::Settings),
             PROVIDER_ID_IPFS => Some(Self::Ipfs),
             PROVIDER_ID_CODE => Some(Self::Code),
+            PROVIDER_ID_AUTOMATION => Some(Self::Automation),
             _ => None,
         }
     }

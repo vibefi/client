@@ -499,5 +499,14 @@ fn open_app_tab(
     manager.active_app_index = Some(idx);
     manager.update_tab_bar();
 
-    Ok(manager.apps[idx].id.clone())
+    let entry = &manager.apps[idx];
+    if state.automation {
+        crate::automation::emit_webview_created(
+            &entry.id,
+            &format!("{:?}", entry.kind),
+            &entry.label,
+        );
+    }
+
+    Ok(entry.id.clone())
 }
