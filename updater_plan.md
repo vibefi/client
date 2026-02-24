@@ -51,6 +51,10 @@ Create a new versioned manifest format (`manifestVersion = 1`):
 }
 ```
 
+Two manifest artifacts are produced:
+- `manifest.unsigned.json`: canonical payload without signature, plus computed digest metadata.
+- `manifest.json`: final publishable manifest with the Safe signature embedded.
+
 Typed data primary type: `UpdateManifest` with canonical field order:
 - `string channel`
 - `string version`
@@ -224,17 +228,30 @@ This avoids signing large dynamic JSON directly and makes digest deterministic.
 ## 6) Release pipeline + manifest signer
 ### Files
 - `.github/workflows/release.yml` (existing in release repo; update, do not create duplicate)
-- `client/packaging/updater/build-manifest.mjs` (new)
-- `client/packaging/updater/sign-manifest.ts` (new)
+- `client/packaging/updater/build-manifest.mjs` (new, deterministic unsigned manifest builder)
+- `client/packaging/updater/finalize-manifest.mjs` (new, inject Safe signature + final validation)
+- `client/packaging/updater/verify-manifest.mjs` (new, local/CI verification helper)
 
 ### Changes
-1. Build artifacts as today.
-2. Generate deterministic manifest JSON with artifact hashes/sizes/URLs.
-3. Sign EIP-712 digest with Safe-approved signer key in CI secret (EOA that Safe accepts via `isValidSignature`, typically owner signature set serialized into Safe-compatible signature bytes).
-4. Upload artifacts + manifest in one transaction-like publish step.
-5. Add CI job to verify:
-- manifest digest recomputation matches.
-- onchain `isValidSignature` returns magic value against both mainnet (`chainId=1`) and Sepolia (`chainId=11155111`) fixtures.
+1. Split release into two explicit stages with a hard gate.
+2. Stage 1 (`prepare-release`, CI):
+- build artifacts as today.
+- generate deterministic `manifest.unsigned.json`.
+- compute and output canonical EIP-712 digest (`digest.txt`) and typed-data payload (`typed-data.json`) as workflow artifacts and release draft assets.
+- stop before publish; no signature keys in CI.
+3. Stage 2 (`finalize-release`, manual + CI resume):
+- operator signs the Stage 1 digest using the Safe flow (onchain Safe transaction or Safe-compatible signature collection process).
+- operator supplies resulting Safe signature bytes to CI via `workflow_dispatch` input or uploads a `signature.txt` artifact.
+- CI runs `finalize-manifest.mjs` to produce `manifest.json` from `manifest.unsigned.json` + provided signature.
+- CI verifies digest recomputation and onchain `isValidSignature` against the correct chain Safe.
+- CI publishes assets only after verification passes.
+4. Add guardrails:
+- final publish job requires Stage 1 artifact hash match (prevents swapping unsigned payloads between stages).
+- signature input format validation (hex length, prefix, structure).
+- immutable linkage between release tag/version and unsigned manifest digest.
+5. Add CI verification matrix:
+- fixture checks for mainnet (`chainId=1`) and Sepolia (`chainId=11155111`) paths.
+- production release path must verify against chain id declared in final manifest.
 
 ## 7) Download page alignment (`lander`)
 ### Files
@@ -242,9 +259,7 @@ This avoids signing large dynamic JSON directly and makes digest deterministic.
 - `client/packaging/macos/install-vibefi-macos.sh`
 
 ### Changes
-1. Unify release repo constants (currently inconsistent).
 1. Keep release repo constants unified across installer + download page (already aligned to `vibefi/client`; add CI guard to prevent drift).
-2. Show “Update signature verified via Ethereum mainnet Safe” on download page.
 2. Show “Update signature verified via Ethereum Safe (mainnet + Sepolia test support)” on download page.
 3. Expose manifest URL/channel for transparency.
 
@@ -271,8 +286,8 @@ This avoids signing large dynamic JSON directly and makes digest deterministic.
 - D3: Linux appimage/deb strategy.
 
 ## Track E: Release infra
-- E1: release workflow.
-- E2: manifest generator + signer.
+- E1: Stage 1 release workflow (unsigned manifest + digest export).
+- E2: manual Safe signing handoff + Stage 2 finalize workflow.
 - E3: CI verification against mainnet + Sepolia `isValidSignature`.
 
 Dependency edges:
@@ -323,6 +338,6 @@ Dependency edges:
 ## Done Definition
 - New updater module merged with tests.
 - Settings UI supports check/download/apply.
-- Release pipeline emits signed manifests.
+- Release pipeline is two-stage and emits signed manifests without CI-held signing keys.
 - Client verifies EIP-1271 signature against baked Safe anchors (mainnet + Sepolia) before update acceptance.
 - `README.md` documents updater config/env and operational runbook.
