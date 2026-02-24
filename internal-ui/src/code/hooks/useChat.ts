@@ -153,6 +153,36 @@ export function useChat(
       role: "assistant",
       content: "",
     };
+    const runId = chatMessageId("run");
+    const runStartedAt = Date.now();
+    const runStartedPerf = typeof performance !== "undefined" ? performance.now() : null;
+    const runMetrics = {
+      assistantChars: 0,
+      toolCalls: 0,
+      toolFailures: 0,
+      reads: 0,
+      cachedReads: 0,
+      readChars: 0,
+      writes: 0,
+      writeChars: 0,
+      deletes: 0,
+      touchedPaths: new Set<string>(),
+    };
+
+    const formatDurationMs = (): number =>
+      runStartedPerf !== null
+        ? Math.max(0, Math.round(performance.now() - runStartedPerf))
+        : Date.now() - runStartedAt;
+
+    const summarizeError = (value: string): string =>
+      value
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 180);
+
+    const logRun = (line: string) => {
+      console_.append([`[chat:${runId}] ${line}`]);
+    };
 
     const toolChanges: DiffChange[] = [];
     const readFileCache = new Map<string, string>();
@@ -191,6 +221,66 @@ export function useChat(
       }
     };
 
+    const recordToolTelemetry = (
+      toolCall: ToolCall,
+      result: ToolExecutionResult,
+      meta: { cached?: boolean; readChars?: number; writeChars?: number } = {}
+    ) => {
+      runMetrics.toolCalls += 1;
+      const normalizedPath = normalizeToolPath(toolCall.input.path);
+      if (normalizedPath) runMetrics.touchedPaths.add(normalizedPath);
+      if (!result.ok) runMetrics.toolFailures += 1;
+
+      if (toolCall.name === "read_file" && result.ok) {
+        runMetrics.reads += 1;
+        if (typeof meta.readChars === "number") {
+          runMetrics.readChars += Math.max(0, Math.trunc(meta.readChars));
+        }
+        if (meta.cached) runMetrics.cachedReads += 1;
+      }
+      if (toolCall.name === "write_file" && result.ok) {
+        runMetrics.writes += 1;
+        if (typeof meta.writeChars === "number") {
+          runMetrics.writeChars += Math.max(0, Math.trunc(meta.writeChars));
+        }
+      }
+      if (toolCall.name === "delete_file" && result.ok) {
+        runMetrics.deletes += 1;
+      }
+
+      const parts = [
+        `tool=${toolCall.name}`,
+        `ok=${result.ok ? "1" : "0"}`,
+        `path=${toolCall.input.path}`,
+      ];
+      if (typeof meta.readChars === "number") {
+        parts.push(`chars=${Math.max(0, Math.trunc(meta.readChars))}`);
+      }
+      if (typeof meta.writeChars === "number") {
+        parts.push(`chars=${Math.max(0, Math.trunc(meta.writeChars))}`);
+      }
+      if (meta.cached) {
+        parts.push("cached=1");
+      }
+      if (!result.ok) {
+        parts.push(`error=${summarizeError(result.output)}`);
+      }
+      logRun(parts.join(" "));
+    };
+
+    const buildFallbackSummary = (): string => {
+      if (toolChanges.length > 0) {
+        return `Done. Updated ${toolChanges.length} file change${toolChanges.length === 1 ? "" : "s"} (${runMetrics.writes} write${runMetrics.writes === 1 ? "" : "s"}, ${runMetrics.deletes} delete${runMetrics.deletes === 1 ? "" : "s"}).`;
+      }
+      if (runMetrics.reads > 0) {
+        return `Done. Reviewed ${runMetrics.reads} file${runMetrics.reads === 1 ? "" : "s"} and made no file changes.`;
+      }
+      if (runMetrics.toolCalls > 0) {
+        return "Done. No file changes were made.";
+      }
+      return "Done.";
+    };
+
     const nextMessages = [...messagesRef.current, userMessage];
     setMessages((previous) => [...previous, userMessage, assistantMessage]);
     if (!options.textOverride) setInput("");
@@ -202,6 +292,12 @@ export function useChat(
     const controller = new AbortController();
     abortRef.current = controller;
 
+    logRun(
+      `start provider=${provider} model=${model} promptChars=${text.length} historyMessages=${nextMessages.length} projectFiles=${flattenFilePaths(
+        project.fileTree
+      ).length}`
+    );
+
     try {
       const result = await sendChatStream({
         provider,
@@ -210,8 +306,8 @@ export function useChat(
         systemPrompt: buildContextPrompt(),
         messages: mapToLlmMessages(nextMessages),
         signal: controller.signal,
-        maxToolRounds: 8,
         onDelta: (chunk) => {
+          runMetrics.assistantChars += chunk.length;
           appendDelta(assistantMessageId, chunk);
           setStreamStatus((current) =>
             current === "Writing response..." ? current : "Writing response..."
@@ -250,6 +346,7 @@ export function useChat(
                   : message
               )
             );
+            recordToolTelemetry(toolCall, failed);
             return failed;
           }
 
@@ -290,6 +387,10 @@ export function useChat(
                       : message
                   )
                 );
+                recordToolTelemetry(toolCall, success, {
+                  cached: true,
+                  readChars: cached.length,
+                });
                 return success;
               }
 
@@ -331,6 +432,9 @@ export function useChat(
                     : message
                 )
               );
+              recordToolTelemetry(toolCall, success, {
+                readChars: content.length,
+              });
               return success;
             }
 
@@ -365,6 +469,9 @@ export function useChat(
                       : message
                   )
                 );
+                recordToolTelemetry(toolCall, failed, {
+                  writeChars: content.length,
+                });
                 return failed;
               }
               await client.request(PROVIDER_IDS.code, "code_writeFile", [
@@ -402,6 +509,9 @@ export function useChat(
                     : message
                 )
               );
+              recordToolTelemetry(toolCall, success, {
+                writeChars: content.length,
+              });
               return success;
             }
 
@@ -439,6 +549,7 @@ export function useChat(
                     : message
                 )
               );
+              recordToolTelemetry(toolCall, success);
               return success;
             }
 
@@ -473,10 +584,23 @@ export function useChat(
                   : message
               )
             );
+            recordToolTelemetry(
+              toolCall,
+              failed,
+              isWriteFileInput(toolCall.input)
+                ? { writeChars: toolCall.input.content.length }
+                : {}
+            );
             return failed;
           }
         },
       });
+
+      if (runMetrics.assistantChars === 0) {
+        const fallback = buildFallbackSummary();
+        runMetrics.assistantChars += fallback.length;
+        appendDelta(assistantMessageId, fallback);
+      }
 
       setMessages((previous) =>
         previous.map((message) =>
@@ -492,6 +616,61 @@ export function useChat(
       if (result.toolResults.length > 0) {
         await project.refreshFileTree(undefined, { silent: true });
       }
+
+      const usageParts: string[] = [];
+      if (typeof result.telemetry?.usage?.inputTokens === "number") {
+        usageParts.push(`inputTokens=${result.telemetry.usage.inputTokens}`);
+      }
+      if (typeof result.telemetry?.usage?.outputTokens === "number") {
+        usageParts.push(`outputTokens=${result.telemetry.usage.outputTokens}`);
+      }
+      if (typeof result.telemetry?.usage?.totalTokens === "number") {
+        usageParts.push(`totalTokens=${result.telemetry.usage.totalTokens}`);
+      }
+      const chunkCounts = result.telemetry?.chunkCounts
+        ? Object.entries(result.telemetry.chunkCounts)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([type, count]) => `${type}:${count}`)
+            .join(",")
+        : "";
+      if (chunkCounts) {
+        usageParts.push(`chunks=${chunkCounts}`);
+      }
+
+      const limitLikelyHit =
+        typeof result.telemetry?.steps === "number" &&
+        typeof result.telemetry?.maxToolRounds === "number" &&
+        result.telemetry.steps >= result.telemetry.maxToolRounds &&
+        (result.telemetry.finishReason === "tool-calls" ||
+          result.telemetry.rawFinishReason === "tool_calls");
+      if (limitLikelyHit) {
+        logRun(
+          `warning step-limit-likely-hit steps=${result.telemetry?.steps} limit=${result.telemetry?.maxToolRounds} finishReason=${result.telemetry?.finishReason ?? "unknown"}`
+        );
+      }
+
+      logRun(
+        [
+          `finish status=ok`,
+          `durationMs=${formatDurationMs()}`,
+          `timeoutMs=${result.telemetry?.timeoutMs ?? 0}`,
+          `steps=${result.telemetry?.steps ?? 0}`,
+          `finishReason=${result.telemetry?.finishReason ?? "unknown"}`,
+          `rawFinishReason=${result.telemetry?.rawFinishReason ?? "n/a"}`,
+          `tools=${runMetrics.toolCalls}`,
+          `toolFailures=${runMetrics.toolFailures}`,
+          `reads=${runMetrics.reads}`,
+          `cachedReads=${runMetrics.cachedReads}`,
+          `readChars=${runMetrics.readChars}`,
+          `writes=${runMetrics.writes}`,
+          `writeChars=${runMetrics.writeChars}`,
+          `deletes=${runMetrics.deletes}`,
+          `touchedPaths=${runMetrics.touchedPaths.size}`,
+          `changes=${toolChanges.length}`,
+          `assistantChars=${runMetrics.assistantChars}`,
+          ...usageParts,
+        ].join(" ")
+      );
     } catch (error) {
       const message = asErrorMessage(error);
       const isAbort =
@@ -506,6 +685,20 @@ export function useChat(
           assistantMessageId,
           message ? `\n\n[error] ${message}` : "\n\n[error] Chat request failed"
         );
+        logRun(
+          [
+            `finish status=error`,
+            `durationMs=${formatDurationMs()}`,
+            `tools=${runMetrics.toolCalls}`,
+            `toolFailures=${runMetrics.toolFailures}`,
+            `reads=${runMetrics.reads}`,
+            `writes=${runMetrics.writes}`,
+            `deletes=${runMetrics.deletes}`,
+            `changes=${toolChanges.length}`,
+            `assistantChars=${runMetrics.assistantChars}`,
+            `error=${summarizeError(message)}`,
+          ].join(" ")
+        );
       } else {
         setError("Chat request canceled.");
         setStreamStatus("Canceled.");
@@ -517,6 +710,19 @@ export function useChat(
           if (hasVisibleContent) return previous;
           return previous.filter((entry) => entry.id !== assistantMessageId);
         });
+        logRun(
+          [
+            `finish status=canceled`,
+            `durationMs=${formatDurationMs()}`,
+            `tools=${runMetrics.toolCalls}`,
+            `toolFailures=${runMetrics.toolFailures}`,
+            `reads=${runMetrics.reads}`,
+            `writes=${runMetrics.writes}`,
+            `deletes=${runMetrics.deletes}`,
+            `changes=${toolChanges.length}`,
+            `assistantChars=${runMetrics.assistantChars}`,
+          ].join(" ")
+        );
       }
     } finally {
       abortRef.current = null;

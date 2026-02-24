@@ -3,8 +3,10 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { buildFileTools } from "./aiSdkTools";
 import type { SendChatParams, SendChatResult } from "./provider";
 import type { ToolExecutionResult } from "./tools";
+import { asErrorMessage } from "../../utils";
 
-const STREAM_TIMEOUT_MS = 90_000;
+const STREAM_TIMEOUT_MS = 240_000;
+const DEFAULT_MAX_TOOL_ROUNDS = 64;
 
 function extractToolPath(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
@@ -16,7 +18,16 @@ function extractToolPath(input: unknown): string | null {
 
 export async function streamOpenAiChat(params: SendChatParams): Promise<SendChatResult> {
   const toolResults: ToolExecutionResult[] = [];
-  const maxToolRounds = Math.max(1, Math.trunc(params.maxToolRounds ?? 8));
+  // Keep a high upper bound as a runaway-cost guard while allowing long tool loops.
+  const maxToolRounds = Math.max(1, Math.trunc(params.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS));
+  const chunkCounts: Record<string, number> = {};
+  let stepCount = 0;
+  let finishReason: string | undefined;
+  let rawFinishReason: string | undefined;
+  let aborted = false;
+  let abortReason: string | undefined;
+  let errorMessage: string | undefined;
+  let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
 
   const openai = createOpenAI({
     apiKey: params.apiKey,
@@ -44,6 +55,8 @@ export async function streamOpenAiChat(params: SendChatParams): Promise<SendChat
 
   emitStatus("Connecting to OpenAI...");
   for await (const chunk of result.fullStream) {
+    chunkCounts[chunk.type] = (chunkCounts[chunk.type] ?? 0) + 1;
+
     if (chunk.type === "start") {
       emitStatus("Thinking...");
       continue;
@@ -71,6 +84,7 @@ export async function streamOpenAiChat(params: SendChatParams): Promise<SendChat
     }
 
     if (chunk.type === "finish-step") {
+      stepCount += 1;
       emitStatus("Processing step result...");
       continue;
     }
@@ -82,14 +96,54 @@ export async function streamOpenAiChat(params: SendChatParams): Promise<SendChat
     }
 
     if (chunk.type === "finish") {
+      finishReason = chunk.finishReason;
+      rawFinishReason = chunk.rawFinishReason;
+      usage = {
+        inputTokens: chunk.totalUsage.inputTokens,
+        outputTokens: chunk.totalUsage.outputTokens,
+        totalTokens: chunk.totalUsage.totalTokens,
+      };
       emitStatus("Done.");
       continue;
     }
 
+    if (chunk.type === "abort") {
+      aborted = true;
+      abortReason = typeof chunk.reason === "string" ? chunk.reason : undefined;
+      finishReason = finishReason ?? "abort";
+      emitStatus("Request aborted.");
+      continue;
+    }
+
     if (chunk.type === "error") {
+      errorMessage = asErrorMessage(chunk.error);
+      finishReason = finishReason ?? "error";
       emitStatus("Model returned an error.");
     }
   }
 
-  return { toolResults };
+  if (errorMessage) {
+    throw new Error(`Chat stream error: ${errorMessage}`);
+  }
+  if (aborted) {
+    throw new Error(`AbortError: ${abortReason ?? "stream aborted"}`);
+  }
+
+  return {
+    toolResults,
+    telemetry: {
+      provider: params.provider,
+      model: params.model,
+      timeoutMs: STREAM_TIMEOUT_MS,
+      maxToolRounds,
+      steps: stepCount,
+      finishReason,
+      rawFinishReason,
+      aborted,
+      abortReason,
+      errorMessage,
+      usage,
+      chunkCounts,
+    },
+  };
 }

@@ -25,8 +25,28 @@ export type SendChatParams = {
   onToolResult?: (result: ToolExecutionResult) => void;
 };
 
+export type ChatRunTelemetry = {
+  provider: ChatProvider;
+  model: string;
+  timeoutMs: number;
+  maxToolRounds: number;
+  steps: number;
+  finishReason?: string;
+  rawFinishReason?: string;
+  aborted?: boolean;
+  abortReason?: string;
+  errorMessage?: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+  chunkCounts?: Record<string, number>;
+};
+
 export type SendChatResult = {
   toolResults: ToolExecutionResult[];
+  telemetry?: ChatRunTelemetry;
 };
 
 export async function sendChatStream(params: SendChatParams): Promise<SendChatResult> {
