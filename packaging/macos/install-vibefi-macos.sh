@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="vibefi/client-staging-public"
+REPO="vibefi/client"
 LATEST_RELEASE_API="https://api.github.com/repos/${REPO}/releases/latest"
 INSTALL_DIR="${HOME}/Applications"
 APP_NAME="VibeFi.app"
