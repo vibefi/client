@@ -1,16 +1,19 @@
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::{Context, Result, anyhow, bail};
-use serde_json::{Value, json};
+use anyhow::{anyhow, bail, Context, Result};
+use listeners::get_processes_by_port;
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use sysinfo::{Pid, Signal, System};
 
 use crate::code::settings as code_settings;
-use crate::rpc_manager::{DEFAULT_MAX_CONCURRENT_RPC, RpcEndpoint, RpcEndpointManager};
+use crate::rpc_manager::{RpcEndpoint, RpcEndpointManager, DEFAULT_MAX_CONCURRENT_RPC};
 use crate::state::{AppState, RunningCodeAnvil, UserEvent, WalletBackend};
 
 const DEFAULT_ANVIL_HOST: &str = "127.0.0.1";
@@ -38,7 +41,11 @@ struct EffectiveAnvilConfig {
     chain_id: u64,
 }
 
-pub fn auto_start_anvil_for_project(state: &AppState, webview_id: &str, project_root: PathBuf) -> Result<Value> {
+pub fn auto_start_anvil_for_project(
+    state: &AppState,
+    webview_id: &str,
+    project_root: PathBuf,
+) -> Result<Value> {
     let cfg = effective_config(state)?;
     if !cfg.auto_start_on_open {
         return anvil_status(state);
@@ -118,6 +125,8 @@ fn start_anvil_with_config(
         }
     }
 
+    ensure_anvil_port_available(cfg.port)?;
+
     let mut command = Command::new("anvil");
     command
         .arg("--host")
@@ -145,7 +154,10 @@ fn start_anvil_with_config(
 
     let mut child = command.spawn().with_context(|| {
         if auto {
-            format!("failed to spawn anvil (auto-start) for {}", project_root.display())
+            format!(
+                "failed to spawn anvil (auto-start) for {}",
+                project_root.display()
+            )
         } else {
             format!("failed to spawn anvil for {}", project_root.display())
         }
@@ -199,7 +211,10 @@ fn start_anvil_with_config(
 
 fn effective_config(state: &AppState) -> Result<EffectiveAnvilConfig> {
     let workspace_root = {
-        let guard = state.code.lock().map_err(|_| anyhow!("poisoned lock: code"))?;
+        let guard = state
+            .code
+            .lock()
+            .map_err(|_| anyhow!("poisoned lock: code"))?;
         guard.workspace_root.clone()
     };
     let code_settings = code_settings::load_settings(&workspace_root);
@@ -226,7 +241,10 @@ fn apply_runtime_for_anvil(state: &AppState, port: u16, chain_id: u64) -> Result
     let signer = Arc::new(signer);
 
     {
-        let mut s = state.signer.lock().map_err(|_| anyhow!("poisoned lock: signer"))?;
+        let mut s = state
+            .signer
+            .lock()
+            .map_err(|_| anyhow!("poisoned lock: signer"))?;
         *s = Some(signer.clone());
     }
     {
@@ -251,7 +269,10 @@ fn apply_runtime_for_anvil(state: &AppState, port: u16, chain_id: u64) -> Result
         *hs = None;
     }
     {
-        let mut ws = state.wallet.lock().map_err(|_| anyhow!("poisoned lock: wallet"))?;
+        let mut ws = state
+            .wallet
+            .lock()
+            .map_err(|_| anyhow!("poisoned lock: wallet"))?;
         ws.authorized = false;
         ws.account = None;
         ws.walletconnect_uri = None;
@@ -494,13 +515,22 @@ fn spawn_exit_watcher(state: AppState, snapshot: RunningSnapshot, _ready: Arc<At
 }
 
 fn running_snapshot(state: &AppState) -> Result<Option<RunningSnapshot>> {
-    let guard = state.code.lock().map_err(|_| anyhow!("poisoned lock: code"))?;
+    let guard = state
+        .code
+        .lock()
+        .map_err(|_| anyhow!("poisoned lock: code"))?;
     Ok(guard.anvil.as_ref().map(RunningSnapshot::from))
 }
 
 fn take_running_anvil(state: &AppState) -> Result<Option<RunningSnapshot>> {
-    let mut guard = state.code.lock().map_err(|_| anyhow!("poisoned lock: code"))?;
-    Ok(guard.anvil.take().map(|anvil| RunningSnapshot::from(&anvil)))
+    let mut guard = state
+        .code
+        .lock()
+        .map_err(|_| anyhow!("poisoned lock: code"))?;
+    Ok(guard
+        .anvil
+        .take()
+        .map(|anvil| RunningSnapshot::from(&anvil)))
 }
 
 fn install_running_anvil(
@@ -511,7 +541,10 @@ fn install_running_anvil(
     child: Arc<Mutex<Child>>,
     uses_process_group: bool,
 ) -> Result<RunningSnapshot> {
-    let mut guard = state.code.lock().map_err(|_| anyhow!("poisoned lock: code"))?;
+    let mut guard = state
+        .code
+        .lock()
+        .map_err(|_| anyhow!("poisoned lock: code"))?;
     let id = guard.next_anvil_id;
     guard.next_anvil_id = guard.next_anvil_id.saturating_add(1);
     let anvil = RunningCodeAnvil {
@@ -546,7 +579,9 @@ fn status_json(state: &AppState, running: Option<&RunningSnapshot>, ok: bool) ->
         if workspace_root.as_os_str().is_empty() {
             code_settings::CodeAnvilConfig::default()
         } else {
-            code_settings::load_settings(&workspace_root).anvil.normalized()
+            code_settings::load_settings(&workspace_root)
+                .anvil
+                .normalized()
         }
     };
 
@@ -583,7 +618,10 @@ fn is_process_running(child: &Arc<Mutex<Child>>) -> Result<bool> {
     let mut child = child
         .lock()
         .map_err(|_| anyhow!("poisoned lock: code anvil child"))?;
-    Ok(child.try_wait().context("failed to query anvil process")?.is_none())
+    Ok(child
+        .try_wait()
+        .context("failed to query anvil process")?
+        .is_none())
 }
 
 fn emit_provider_event(
@@ -610,6 +648,136 @@ impl From<&RunningCodeAnvil> for RunningSnapshot {
             uses_process_group: server.uses_process_group,
         }
     }
+}
+
+fn ensure_anvil_port_available(port: u16) -> Result<()> {
+    if !is_local_port_in_use(port)? {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        port,
+        "anvil port already in use; attempting automatic recovery"
+    );
+    let reclaimed = reclaim_anvil_listener_on_port(port);
+    if reclaimed && !is_local_port_in_use(port)? {
+        return Ok(());
+    }
+
+    if !is_local_port_in_use(port)? {
+        return Ok(());
+    }
+
+    bail!(
+        "anvil port {} is already in use and could not be reclaimed automatically. \
+         Stop the process using that port (or change Code > Anvil port) and retry.",
+        port
+    );
+}
+
+fn is_local_port_in_use(port: u16) -> Result<bool> {
+    match TcpListener::bind((DEFAULT_ANVIL_HOST, port)) {
+        Ok(listener) => {
+            drop(listener);
+            Ok(false)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => Ok(true),
+        Err(err) => Err(anyhow!("failed to probe anvil port {}: {}", port, err)),
+    }
+}
+
+fn reclaim_anvil_listener_on_port(port: u16) -> bool {
+    let listeners = match get_processes_by_port(port) {
+        Ok(processes) => processes,
+        Err(err) => {
+            tracing::warn!(port, error = %err, "failed to inspect listeners for anvil port");
+            return false;
+        }
+    };
+
+    let mut killed_any = false;
+    for process in listeners {
+        if process.pid == std::process::id() {
+            continue;
+        }
+
+        if !process_looks_like_anvil(&process.name, &process.path) {
+            tracing::warn!(
+                port,
+                pid = process.pid,
+                process_name = %process.name,
+                process_path = %process.path,
+                "port is occupied by non-anvil process; refusing to kill"
+            );
+            continue;
+        }
+
+        if terminate_pid(process.pid) {
+            killed_any = true;
+        }
+    }
+    killed_any
+}
+
+fn process_looks_like_anvil(name: &str, path: &str) -> bool {
+    text_looks_like_anvil(name)
+        || Path::new(path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(text_looks_like_anvil)
+        || text_looks_like_anvil(path)
+}
+
+fn terminate_pid(pid: u32) -> bool {
+    let target = Pid::from_u32(pid);
+    if !pid_is_running(target) {
+        return true;
+    }
+
+    if send_signal_to_pid(target, Signal::Term) && wait_for_pid_exit(target, SHUTDOWN_GRACE_PERIOD)
+    {
+        tracing::info!(pid, "terminated stale anvil listener");
+        return true;
+    }
+
+    if send_signal_to_pid(target, Signal::Kill) && wait_for_pid_exit(target, SHUTDOWN_GRACE_PERIOD)
+    {
+        tracing::info!(pid, "force-killed stale anvil listener");
+        return true;
+    }
+
+    false
+}
+
+fn send_signal_to_pid(pid: Pid, signal: Signal) -> bool {
+    let system = System::new_all();
+    if let Some(process) = system.process(pid) {
+        if process.kill_with(signal).unwrap_or(false) {
+            return true;
+        }
+        return process.kill();
+    }
+    true
+}
+
+fn wait_for_pid_exit(pid: Pid, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if !pid_is_running(pid) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    !pid_is_running(pid)
+}
+
+fn pid_is_running(pid: Pid) -> bool {
+    let system = System::new_all();
+    system.process(pid).is_some()
+}
+
+fn text_looks_like_anvil(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("anvil")
 }
 
 fn stop_child_process_tree(child: &mut Child, uses_process_group: bool) -> Result<()> {
@@ -651,57 +819,32 @@ fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool> {
     }
 }
 
-fn terminate_child_tree(child: &mut Child, uses_process_group: bool) -> Result<()> {
-    #[cfg(unix)]
+fn terminate_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<()> {
+    let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Term);
+    if child
+        .try_wait()
+        .context("failed to query anvil process")?
+        .is_some()
     {
-        if uses_process_group && signal_unix_process_group(child.id(), "TERM")? {
-            return Ok(());
-        }
+        return Ok(());
     }
-    #[cfg(windows)]
-    {
-        let _ = taskkill_pid(child.id(), false);
-    }
-    child.kill().context("failed to terminate anvil process")?;
+    child
+        .kill()
+        .context("failed to terminate anvil process")?;
     Ok(())
 }
 
-fn force_kill_child_tree(child: &mut Child, uses_process_group: bool) -> Result<()> {
-    #[cfg(unix)]
+fn force_kill_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<()> {
+    let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Kill);
+    if child
+        .try_wait()
+        .context("failed to query anvil process")?
+        .is_some()
     {
-        if uses_process_group && signal_unix_process_group(child.id(), "KILL")? {
-            return Ok(());
-        }
+        return Ok(());
     }
-    #[cfg(windows)]
-    {
-        let _ = taskkill_pid(child.id(), true);
-    }
-    child.kill().context("failed to force-kill anvil process")?;
+    child
+        .kill()
+        .context("failed to force-kill anvil process")?;
     Ok(())
-}
-
-#[cfg(unix)]
-fn signal_unix_process_group(pid: u32, signal: &str) -> Result<bool> {
-    let target = format!("-{pid}");
-    let status = Command::new("kill")
-        .arg(format!("-{signal}"))
-        .arg("--")
-        .arg(target)
-        .status()
-        .with_context(|| format!("failed to send SIG{signal} to process group {pid}"))?;
-    Ok(status.success())
-}
-
-#[cfg(windows)]
-fn taskkill_pid(pid: u32, force: bool) -> Result<bool> {
-    let mut cmd = Command::new("taskkill");
-    cmd.arg("/PID").arg(pid.to_string()).arg("/T");
-    if force {
-        cmd.arg("/F");
-    }
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run taskkill for pid {pid}"))?;
-    Ok(status.success())
 }

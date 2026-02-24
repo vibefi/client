@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use sysinfo::{Pid, Signal, System};
 
 use crate::state::{AppState, RunningCodeDevServer, UserEvent};
 
@@ -559,16 +560,14 @@ fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool> {
     }
 }
 
-fn terminate_child_tree(child: &mut Child, uses_process_group: bool) -> Result<()> {
-    #[cfg(unix)]
+fn terminate_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<()> {
+    let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Term);
+    if child
+        .try_wait()
+        .context("failed to query dev server process")?
+        .is_some()
     {
-        if uses_process_group && signal_unix_process_group(child.id(), "TERM")? {
-            return Ok(());
-        }
-    }
-    #[cfg(windows)]
-    {
-        let _ = taskkill_pid(child.id(), false);
+        return Ok(());
     }
     child
         .kill()
@@ -576,16 +575,14 @@ fn terminate_child_tree(child: &mut Child, uses_process_group: bool) -> Result<(
     Ok(())
 }
 
-fn force_kill_child_tree(child: &mut Child, uses_process_group: bool) -> Result<()> {
-    #[cfg(unix)]
+fn force_kill_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<()> {
+    let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Kill);
+    if child
+        .try_wait()
+        .context("failed to query dev server process")?
+        .is_some()
     {
-        if uses_process_group && signal_unix_process_group(child.id(), "KILL")? {
-            return Ok(());
-        }
-    }
-    #[cfg(windows)]
-    {
-        let _ = taskkill_pid(child.id(), true);
+        return Ok(());
     }
     child
         .kill()
@@ -593,27 +590,13 @@ fn force_kill_child_tree(child: &mut Child, uses_process_group: bool) -> Result<
     Ok(())
 }
 
-#[cfg(unix)]
-fn signal_unix_process_group(pid: u32, signal: &str) -> Result<bool> {
-    let target = format!("-{pid}");
-    let status = Command::new("kill")
-        .arg(format!("-{signal}"))
-        .arg("--")
-        .arg(target)
-        .status()
-        .with_context(|| format!("failed to send SIG{signal} to process group {pid}"))?;
-    Ok(status.success())
-}
-
-#[cfg(windows)]
-fn taskkill_pid(pid: u32, force: bool) -> Result<bool> {
-    let mut cmd = Command::new("taskkill");
-    cmd.arg("/PID").arg(pid.to_string()).arg("/T");
-    if force {
-        cmd.arg("/F");
+fn send_signal_to_pid(pid: Pid, signal: Signal) -> bool {
+    let system = System::new_all();
+    if let Some(process) = system.process(pid) {
+        if process.kill_with(signal).unwrap_or(false) {
+            return true;
+        }
+        return process.kill();
     }
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run taskkill for pid {pid}"))?;
-    Ok(status.success())
+    true
 }

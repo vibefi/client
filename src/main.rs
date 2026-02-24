@@ -718,15 +718,11 @@ fn main() -> Result<()> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
+                shutdown_code_processes(&state, "close-requested");
                 *control_flow = ControlFlow::Exit;
             }
             Event::LoopDestroyed => {
-                if let Err(err) = code::dev_server::stop_dev_server_for_shutdown(&state) {
-                    tracing::warn!(error = %err, "failed to stop Code dev server during shutdown");
-                }
-                if let Err(err) = code::anvil::stop_anvil_for_shutdown(&state) {
-                    tracing::warn!(error = %err, "failed to stop Code anvil during shutdown");
-                }
+                shutdown_code_processes(&state, "loop-destroyed");
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(size),
@@ -741,6 +737,15 @@ fn main() -> Result<()> {
             _ => {}
         }
     })
+}
+
+fn shutdown_code_processes(state: &AppState, phase: &str) {
+    if let Err(err) = code::dev_server::stop_dev_server_for_shutdown(state) {
+        tracing::warn!(phase, error = %err, "failed to stop Code dev server during shutdown");
+    }
+    if let Err(err) = code::anvil::stop_anvil_for_shutdown(state) {
+        tracing::warn!(phase, error = %err, "failed to stop Code anvil during shutdown");
+    }
 }
 
 #[cfg(target_os = "linux")]

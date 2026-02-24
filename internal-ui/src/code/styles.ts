@@ -187,11 +187,11 @@ export const localStyles = `
   }
   .sidebar-tabs {
     display: flex;
-    gap: 4px;
+    gap: 3px;
     background: #0a1427;
     border: 1px solid var(--ide-border);
     border-radius: 10px;
-    padding: 4px;
+    padding: 3px;
     overflow-x: auto;
     flex-shrink: 0;
   }
@@ -200,12 +200,14 @@ export const localStyles = `
     background: transparent;
     color: var(--ide-text-dim);
     border-radius: 8px;
-    height: 30px;
+    height: 28px;
     font-size: 11px;
     flex: 1 1 0;
     min-width: 0;
     white-space: nowrap;
-    padding: 0 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 6px;
   }
   .sidebar-tab.active {
     background: var(--ide-accent-soft);
@@ -898,7 +900,14 @@ export const localStyles = `
       justify-content: flex-start;
     }
     .sidebar-tabs {
+      gap: 2px;
+      padding: 2px;
       overflow-x: auto;
+    }
+    .sidebar-tab {
+      height: 26px;
+      font-size: 10px;
+      padding: 0 5px;
     }
     .file-open-row {
       flex-direction: column;

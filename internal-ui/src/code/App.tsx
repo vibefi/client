@@ -516,7 +516,6 @@ export default function App() {
             ? value.message.trim()
             : "Anvil failed";
         console_.append([`[system] anvil error: ${message}`]);
-        setError(`Anvil error: ${message}`);
         return;
       }
 
@@ -673,23 +672,17 @@ export default function App() {
 
   async function handleStartAnvil() {
     if (!project.activeProjectPath) return;
-    const result = await anvil.start(project.activeProjectPath);
-    if (result.error) setError(result.error);
-    if (result.status) setStatus(result.status);
+    await anvil.start(project.activeProjectPath);
     void anvil.loadStatus({ silent: true });
   }
 
   async function handleStopAnvil() {
-    const result = await anvil.stop();
-    if (result.error) setError(result.error);
-    if (result.status) setStatus(result.status);
+    await anvil.stop();
     void anvil.loadStatus({ silent: true });
   }
 
   async function handleSaveAnvilConfig() {
-    const result = await anvil.saveConfig(anvil.config);
-    if (result.error) setError(result.error);
-    if (result.status) setStatus(result.status);
+    await anvil.saveConfig(anvil.config);
     void anvil.loadStatus({ silent: true });
   }
 
@@ -1237,7 +1230,7 @@ export default function App() {
         <>
           <div className="section-head">
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span className="sidebar-section-label">Dev Server</span>
+              <span className="sidebar-section-label">Server</span>
               <span className={`ds-dot ${running ? "ds-dot-on" : "ds-dot-off"}`} title={running ? "Running" : "Stopped"} />
             </div>
             <div className="tree-toolbar">
@@ -1492,7 +1485,7 @@ export default function App() {
                   className={`sidebar-tab ${activeSidebarPanel === "dev-server" ? "active" : ""}`}
                   onClick={() => setActiveSidebarPanel("dev-server")}
                 >
-                  Dev Server
+                  Server
                 </button>
                 <button
                   className={`sidebar-tab ${activeSidebarPanel === "anvil" ? "active" : ""}`}
