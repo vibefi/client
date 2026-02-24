@@ -442,7 +442,7 @@ pub fn handle_studio_bundle_resolved(
                     if state.automation {
                         crate::automation::emit_webview_created(
                             &studio_webview_id,
-                            "Studio",
+                            &format!("{:?}", AppWebViewKind::Studio),
                             "Studio",
                         );
                     }

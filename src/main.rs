@@ -1,5 +1,7 @@
 #[cfg(all(feature = "automation", not(debug_assertions)))]
-compile_error!("The 'automation' feature is only allowed in debug builds. Do not ship release binaries with automation enabled.");
+compile_error!(
+    "The 'automation' feature is only allowed in debug builds. Do not ship release binaries with automation enabled."
+);
 
 #[cfg(feature = "automation")]
 mod automation;
@@ -342,8 +344,7 @@ fn main() -> Result<()> {
 
                     #[cfg(target_os = "linux")]
                     {
-                        let (tb, app) =
-                            setup_linux_containers(&window_handle, state.automation);
+                        let (tb, app) = setup_linux_containers(&window_handle, state.automation);
                         gtk_tab_bar_container = Some(tb);
                         gtk_app_container = Some(app);
                     }
@@ -662,7 +663,8 @@ fn install_or_update_macos_automation_banner(window: &tao::window::Window, autom
         let _: () = msg_send![label, setBordered: false];
         let _: () = msg_send![label, setDrawsBackground: true];
         let _: () = msg_send![label, setAlignment: NS_TEXT_ALIGNMENT_CENTER];
-        let _: () = msg_send![label, setAutoresizingMask: NS_VIEW_WIDTH_SIZABLE | NS_VIEW_MIN_Y_MARGIN];
+        let _: () =
+            msg_send![label, setAutoresizingMask: NS_VIEW_WIDTH_SIZABLE | NS_VIEW_MIN_Y_MARGIN];
         let _: () = msg_send![label, setLineBreakMode: NS_LINE_BREAK_BY_WORD_WRAPPING];
         let _: () = msg_send![label, setUsesSingleLineMode: false];
         let _: () = msg_send![label, setAllowsEditingTextAttributes: false];

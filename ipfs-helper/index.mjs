@@ -68,7 +68,7 @@ async function getHelia() {
     heliaPromise = (async () => {
       const helia = await createHeliaHTTP({
         blockBrokers: [
-          trustlessGateway(),
+          trustlessGateway({ allowLocal: true }),
         ],
         routers: [
           ...routers.map((r) => delegatedHTTPRouting(r)),
