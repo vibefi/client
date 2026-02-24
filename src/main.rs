@@ -337,6 +337,7 @@ fn main() -> Result<()> {
                             tracing::warn!("window missing while resolving studio bundle");
                             return;
                         };
+                        let studio_webview_id = manager.next_app_id();
                         let host = WebViewHost {
                             window: window_ref,
                             #[cfg(target_os = "linux")]
@@ -352,7 +353,7 @@ fn main() -> Result<()> {
                         let bounds = manager.app_rect(size.width, size.height);
                         match build_app_webview(
                             &host,
-                            &placeholder_id,
+                            &studio_webview_id,
                             Some(dist_dir.clone()),
                             EmbeddedContent::Default,
                             &state,
@@ -376,7 +377,8 @@ fn main() -> Result<()> {
                                         events::user_event::load_app_capabilities_from_dist(
                                             &dist_dir,
                                         );
-                                    caps.insert(placeholder_id.clone(), studio_caps);
+                                    caps.remove(&placeholder_id);
+                                    caps.insert(studio_webview_id.clone(), studio_caps);
                                 } else {
                                     tracing::warn!(
                                         "failed to acquire app_capabilities lock for studio tab"
@@ -385,13 +387,20 @@ fn main() -> Result<()> {
 
                                 manager.apps[index] = AppWebViewEntry {
                                     webview: studio_webview,
-                                    id: placeholder_id,
+                                    id: studio_webview_id.clone(),
                                     label: "Studio".to_string(),
                                     kind: AppWebViewKind::Studio,
                                     source_dir: None,
                                     selectable: true,
                                     loading: false,
                                 };
+                                if state.automation {
+                                    automation::emit_webview_created(
+                                        &studio_webview_id,
+                                        "Studio",
+                                        "Studio",
+                                    );
+                                }
                                 manager.update_tab_bar();
                             }
                             Err(err) => {
