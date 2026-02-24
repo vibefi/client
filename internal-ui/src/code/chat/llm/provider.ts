@@ -11,6 +11,8 @@ export type ChatMessage = {
 
 export type ChatProvider = "claude" | "openai";
 
+export type ReasoningEffort = "low" | "medium" | "high";
+
 export type SendChatParams = {
   provider: ChatProvider;
   model: string;
@@ -19,6 +21,7 @@ export type SendChatParams = {
   messages: ChatMessage[];
   signal?: AbortSignal;
   maxToolRounds?: number;
+  reasoningEffort?: ReasoningEffort;
   onDelta: (text: string) => void;
   onStatus?: (status: string) => void;
   onToolCall?: (toolCall: ToolCall) => Promise<ToolExecutionResult>;

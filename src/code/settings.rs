@@ -17,41 +17,6 @@ const fn default_anvil_chain_id() -> u64 {
     1
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodeApiKeys {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claude: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai: Option<String>,
-}
-
-impl CodeApiKeys {
-    pub fn normalize(value: Option<String>) -> Option<String> {
-        value
-            .and_then(|value| {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodeLlmConfig {
-    pub provider: String,
-    pub model: String,
-}
-
-impl Default for CodeLlmConfig {
-    fn default() -> Self {
-        Self {
-            provider: "claude".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeAnvilConfig {
@@ -98,10 +63,6 @@ impl CodeAnvilConfig {
 #[serde(rename_all = "camelCase")]
 pub struct CodeSettings {
     #[serde(default)]
-    pub api_keys: CodeApiKeys,
-    #[serde(default)]
-    pub llm_config: CodeLlmConfig,
-    #[serde(default)]
     pub anvil: CodeAnvilConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_project_path: Option<String>,
@@ -110,8 +71,6 @@ pub struct CodeSettings {
 impl Default for CodeSettings {
     fn default() -> Self {
         Self {
-            api_keys: CodeApiKeys::default(),
-            llm_config: CodeLlmConfig::default(),
             anvil: CodeAnvilConfig::default(),
             last_project_path: None,
         }

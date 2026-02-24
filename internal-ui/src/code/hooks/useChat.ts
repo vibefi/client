@@ -303,6 +303,7 @@ export function useChat(
         provider,
         model,
         apiKey,
+        reasoningEffort: settings.reasoningEffort,
         systemPrompt: buildContextPrompt(),
         messages: mapToLlmMessages(nextMessages),
         signal: controller.signal,

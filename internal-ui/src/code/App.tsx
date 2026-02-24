@@ -148,7 +148,7 @@ export default function App() {
 
   // ── Domain hooks ────────────────────────────────────────────────────────
   const console_ = useConsole();
-  const settings = useSettings(client);
+  const settings = useSettings();
   const project = useProject(client);
   const editor = useEditor(client, project.activeProjectPath, console_);
   const anvil = useAnvil(client, console_);
@@ -1735,6 +1735,22 @@ export default function App() {
                                       {modelId}
                                     </option>
                                   ))}
+                                </select>
+                              </div>
+                              <div className="field">
+                                <label>Reasoning Effort</label>
+                                <select
+                                  value={settings.reasoningEffort}
+                                  onChange={(e) =>
+                                    settings.setReasoningEffort(
+                                      e.target.value as "low" | "medium" | "high"
+                                    )
+                                  }
+                                  disabled={settings.loading || settings.saving}
+                                >
+                                  <option value="low">low</option>
+                                  <option value="medium">medium</option>
+                                  <option value="high">high</option>
                                 </select>
                               </div>
                             </div>

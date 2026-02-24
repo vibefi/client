@@ -44,6 +44,11 @@ export async function streamOpenAiChat(params: SendChatParams): Promise<SendChat
     stopWhen: stepCountIs(maxToolRounds),
     abortSignal: params.signal,
     timeout: STREAM_TIMEOUT_MS,
+    providerOptions: {
+      openai: {
+        reasoningEffort: params.reasoningEffort ?? "low",
+      },
+    },
   });
 
   let lastStatus = "";

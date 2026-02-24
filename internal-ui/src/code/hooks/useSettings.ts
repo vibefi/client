@@ -1,31 +1,41 @@
 import { useState } from "react";
 import type React from "react";
-import type { ChatProvider } from "../chat/llm/provider";
-import type { IpcClient } from "../../ipc/client";
-import { PROVIDER_IDS } from "../../ipc/contracts";
-import { asErrorMessage, asOptionalString, isRecord } from "../utils";
+import type { ChatProvider, ReasoningEffort } from "../chat/llm/provider";
 import { defaultModelForProvider, normalizeChatProvider, normalizeModelForProvider } from "../utils";
+
+const STORAGE_KEY = "vibefi-code-llm-settings";
+
+interface StoredSettings {
+  claudeApiKey?: string;
+  openaiApiKey?: string;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+}
 
 export interface SettingsHook {
   claudeApiKey: string;
   openaiApiKey: string;
   provider: ChatProvider;
   model: string;
+  reasoningEffort: ReasoningEffort;
   loading: boolean;
   saving: boolean;
   setClaudeApiKey: (key: string) => void;
   setOpenaiApiKey: (key: string) => void;
   handleProviderSelect: (event: React.ChangeEvent<HTMLSelectElement>) => void;
   setModel: (model: string) => void;
+  setReasoningEffort: (value: ReasoningEffort) => void;
   load: (options?: { silent?: boolean }) => Promise<void>;
   save: () => Promise<{ error?: string }>;
 }
 
-export function useSettings(client: IpcClient): SettingsHook {
+export function useSettings(): SettingsHook {
   const [claudeApiKey, setClaudeApiKey] = useState("");
   const [openaiApiKey, setOpenaiApiKey] = useState("");
   const [provider, setProvider] = useState<ChatProvider>("claude");
   const [model, setModel] = useState(defaultModelForProvider("claude"));
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("low");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -38,20 +48,18 @@ export function useSettings(client: IpcClient): SettingsHook {
   async function load(options: { silent?: boolean } = {}): Promise<void> {
     setLoading(true);
     try {
-      const [apiKeysResult, llmConfigResult] = await Promise.all([
-        client.request(PROVIDER_IDS.code, "code_getApiKeys", [{}]),
-        client.request(PROVIDER_IDS.code, "code_getLlmConfig", [{}]),
-      ]);
-
-      if (isRecord(apiKeysResult)) {
-        setClaudeApiKey(asOptionalString(apiKeysResult.claude) ?? "");
-        setOpenaiApiKey(asOptionalString(apiKeysResult.openai) ?? "");
-      }
-
-      if (isRecord(llmConfigResult)) {
-        const nextProvider = normalizeChatProvider(asOptionalString(llmConfigResult.provider));
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const stored: StoredSettings = JSON.parse(raw);
+        setClaudeApiKey(stored.claudeApiKey ?? "");
+        setOpenaiApiKey(stored.openaiApiKey ?? "");
+        const nextProvider = normalizeChatProvider(stored.provider);
         setProvider(nextProvider);
-        setModel(normalizeModelForProvider(nextProvider, asOptionalString(llmConfigResult.model)));
+        setModel(normalizeModelForProvider(nextProvider, stored.model));
+        const effort = stored.reasoningEffort;
+        if (effort === "low" || effort === "medium" || effort === "high") {
+          setReasoningEffort(effort);
+        }
       }
     } catch (error) {
       if (!options.silent) {
@@ -65,15 +73,17 @@ export function useSettings(client: IpcClient): SettingsHook {
   async function save(): Promise<{ error?: string }> {
     setSaving(true);
     try {
-      await client.request(PROVIDER_IDS.code, "code_setApiKeys", [
-        { claude: claudeApiKey, openai: openaiApiKey },
-      ]);
-      await client.request(PROVIDER_IDS.code, "code_setLlmConfig", [
-        { provider, model: normalizeModelForProvider(provider, model) },
-      ]);
+      const stored: StoredSettings = {
+        claudeApiKey,
+        openaiApiKey,
+        provider,
+        model: normalizeModelForProvider(provider, model),
+        reasoningEffort,
+      };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
       return {};
     } catch (error) {
-      return { error: `Failed to save code settings: ${asErrorMessage(error)}` };
+      return { error: `Failed to save code settings: ${error instanceof Error ? error.message : String(error)}` };
     } finally {
       setSaving(false);
     }
@@ -84,12 +94,14 @@ export function useSettings(client: IpcClient): SettingsHook {
     openaiApiKey,
     provider,
     model,
+    reasoningEffort,
     loading,
     saving,
     setClaudeApiKey,
     setOpenaiApiKey,
     handleProviderSelect,
     setModel,
+    setReasoningEffort,
     load,
     save,
   };

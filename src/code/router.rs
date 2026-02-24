@@ -94,22 +94,6 @@ struct StartAnvilParams {
     project_path: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SetApiKeysParams {
-    #[serde(default)]
-    claude: Option<String>,
-    #[serde(default)]
-    openai: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SetLlmConfigParams {
-    provider: String,
-    model: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ForkDappParams {
@@ -313,49 +297,6 @@ pub fn handle_code_ipc(
             code_settings.anvil = params.normalized();
             settings::save_settings(&workspace_root, &code_settings)?;
             Ok(Some(serde_json::to_value(code_settings.anvil)?))
-        }
-        "code_getApiKeys" => {
-            let workspace_root = resolve_workspace_root(state)?;
-            let code_settings = settings::load_settings(&workspace_root);
-            Ok(Some(json!({
-                "claude": code_settings.api_keys.claude,
-                "openai": code_settings.api_keys.openai,
-            })))
-        }
-        "code_setApiKeys" => {
-            let workspace_root = resolve_workspace_root(state)?;
-            let params: SetApiKeysParams = parse_params_or_default(req)?;
-            let mut code_settings = settings::load_settings(&workspace_root);
-            code_settings.api_keys.claude = settings::CodeApiKeys::normalize(params.claude);
-            code_settings.api_keys.openai = settings::CodeApiKeys::normalize(params.openai);
-            settings::save_settings(&workspace_root, &code_settings)?;
-            Ok(Some(json!({ "ok": true })))
-        }
-        "code_getLlmConfig" => {
-            let workspace_root = resolve_workspace_root(state)?;
-            let code_settings = settings::load_settings(&workspace_root);
-            Ok(Some(json!({
-                "provider": code_settings.llm_config.provider,
-                "model": code_settings.llm_config.model,
-            })))
-        }
-        "code_setLlmConfig" => {
-            let workspace_root = resolve_workspace_root(state)?;
-            let params: SetLlmConfigParams = parse_params(req)?;
-            let provider = params.provider.trim();
-            let model = params.model.trim();
-            if provider.is_empty() {
-                bail!("provider must not be empty");
-            }
-            if model.is_empty() {
-                bail!("model must not be empty");
-            }
-
-            let mut code_settings = settings::load_settings(&workspace_root);
-            code_settings.llm_config.provider = provider.to_string();
-            code_settings.llm_config.model = model.to_string();
-            settings::save_settings(&workspace_root, &code_settings)?;
-            Ok(Some(json!({ "ok": true })))
         }
         "code_forkDapp" => {
             let params: ForkDappParams = parse_params(req)?;
