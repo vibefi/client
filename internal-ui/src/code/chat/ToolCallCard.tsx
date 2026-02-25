@@ -1,9 +1,10 @@
 import React, { useState } from "react";
+import type { ToolName } from "./llm/tools";
 
 export type ToolCallCardData = {
   id: string;
-  name: "read_file" | "write_file" | "delete_file";
-  path: string;
+  name: ToolName;
+  path?: string;
   content?: string;
   ok: boolean;
   output: string;
@@ -25,7 +26,7 @@ export function ToolCallCard({ call }: ToolCallCardProps) {
       >
         <span>{expanded ? "[-]" : "[+]"}</span>
         <span>
-          [{call.name}: {call.path}]
+          [{call.name}{call.path ? `: ${call.path}` : ""}]
         </span>
       </button>
       <div className="tool-call-output">{call.output}</div>

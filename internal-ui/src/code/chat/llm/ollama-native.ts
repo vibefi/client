@@ -11,58 +11,21 @@ import type {
   Tool,
   ToolCall as OllamaToolCall,
 } from "ollama/browser";
-import { parseToolCallInput, type ToolCall, type ToolExecutionResult } from "./tools";
+import { CLAUDE_TOOL_SCHEMAS, parseToolCallInput, type ToolCall, type ToolExecutionResult } from "./tools";
 import type { SendChatParams, SendChatResult } from "./provider";
 import { asErrorMessage } from "../../utils";
 
 const DEFAULT_MAX_TOOL_ROUNDS = 64;
 const DEFAULT_HEARTBEAT_MS = 10_000;
 
-const OLLAMA_TOOLS: Tool[] = [
-  {
-    type: "function",
-    function: {
-      name: "read_file",
-      description: "Read a file from the project before editing it.",
-      parameters: {
-        type: "object",
-        required: ["path"],
-        properties: {
-          path: { type: "string", description: "Relative file path to read, e.g. src/app.css" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "write_file",
-      description: "Create or overwrite a file in the project. Path is relative to project root.",
-      parameters: {
-        type: "object",
-        required: ["path", "content"],
-        properties: {
-          path: { type: "string", description: "Relative file path, e.g. src/components/Table.tsx" },
-          content: { type: "string", description: "Full file content" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "delete_file",
-      description: "Delete a file from the project.",
-      parameters: {
-        type: "object",
-        required: ["path"],
-        properties: {
-          path: { type: "string", description: "Relative file path to delete" },
-        },
-      },
-    },
-  },
-];
+const OLLAMA_TOOLS: Tool[] = CLAUDE_TOOL_SCHEMAS.map(schema => ({
+  type: "function",
+  function: {
+    name: schema.name,
+    description: schema.description,
+    parameters: schema.input_schema as any,
+  }
+}));
 
 function buildMessages(params: SendChatParams): Message[] {
   const msgs: Message[] = [];

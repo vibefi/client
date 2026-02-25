@@ -23,6 +23,14 @@ pub struct FileEntry {
     pub children: Option<Vec<FileEntry>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub file: String,
+    pub line: usize,
+    pub content: String,
+}
+
 pub fn resolve_project_root(project_path: &str) -> Result<PathBuf> {
     let canonical = PathBuf::from(project_path)
         .canonicalize()
@@ -43,6 +51,45 @@ pub fn read_file(project_root: &Path, relative_path: &str) -> Result<String> {
         bail!("file not found: {}", relative_path);
     }
     fs::read_to_string(&path).with_context(|| format!("failed to read {}", relative_path))
+}
+
+pub fn search(project_root: &Path, query: &str) -> Result<Vec<SearchResult>> {
+    let files = list_files(project_root)?;
+    let mut results = Vec::new();
+
+    fn search_entries(
+        entries: &[FileEntry],
+        project_root: &Path,
+        query: &str,
+        results: &mut Vec<SearchResult>,
+    ) {
+        for entry in entries {
+            if entry.is_dir {
+                if let Some(children) = &entry.children {
+                    search_entries(children, project_root, query, results);
+                }
+            } else {
+                let path = project_root.join(&entry.path);
+                if let Ok(content) = fs::read_to_string(&path) {
+                    for (i, line) in content.lines().enumerate() {
+                        if line.contains(query) {
+                            results.push(SearchResult {
+                                file: entry.path.clone(),
+                                line: i + 1,
+                                content: line.trim().to_string(),
+                            });
+                            if results.len() >= 100 {
+                                return; // Hard cap at 100 results across all files to prevent explosion
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    search_entries(&files, project_root, query, &mut results);
+    Ok(results)
 }
 
 pub fn write_file(project_root: &Path, relative_path: &str, content: &str) -> Result<WriteFileKind> {

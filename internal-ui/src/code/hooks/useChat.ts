@@ -14,6 +14,9 @@ import {
   chatMessageId,
   flattenFilePaths,
   isDeleteFileInput,
+  isEditFileInput,
+  isGrepSearchInput,
+  isReadFileSectionInput,
   isReadFileInput,
   isFileTab,
   isWriteFileInput,
@@ -241,7 +244,8 @@ export function useChat(
       meta: { cached?: boolean; readChars?: number; writeChars?: number } = {}
     ) => {
       runMetrics.toolCalls += 1;
-      const normalizedPath = normalizeToolPath(toolCall.input.path);
+      const pathValue = "path" in toolCall.input ? toolCall.input.path : "";
+      const normalizedPath = pathValue ? normalizeToolPath(pathValue) : "";
       if (normalizedPath) runMetrics.touchedPaths.add(normalizedPath);
       if (!result.ok) runMetrics.toolFailures += 1;
 
@@ -265,7 +269,7 @@ export function useChat(
       const parts = [
         `tool=${toolCall.name}`,
         `ok=${result.ok ? "1" : "0"}`,
-        `path=${toolCall.input.path}`,
+        `path=${"path" in toolCall.input ? toolCall.input.path : ""}`,
       ];
       if (typeof meta.readChars === "number") {
         parts.push(`chars=${Math.max(0, Math.trunc(meta.readChars))}`);
@@ -343,22 +347,22 @@ export function useChat(
               previous.map((message) =>
                 message.id === assistantMessageId
                   ? {
-                      ...message,
-                      toolCalls: [
-                        ...(message.toolCalls ?? []),
-                        {
-                          id: toolCall.id,
-                          name: toolCall.name,
-                          path: toolCall.input.path,
-                          content: isWriteFileInput(toolCall.input)
-                            ? toolCall.input.content
-                            : undefined,
-                          ok: false,
-                          output: failed.output,
-                        },
-                      ],
-                      changeCount: toolChanges.length,
-                    }
+                    ...message,
+                    toolCalls: [
+                      ...(message.toolCalls ?? []),
+                      {
+                        id: toolCall.id,
+                        name: toolCall.name,
+                        path: "path" in toolCall.input ? toolCall.input.path : undefined,
+                        content: isWriteFileInput(toolCall.input)
+                          ? toolCall.input.content
+                          : undefined,
+                        ok: false,
+                        output: failed.output,
+                      },
+                    ],
+                    changeCount: toolChanges.length,
+                  }
                   : message
               )
             );
@@ -366,8 +370,8 @@ export function useChat(
             return failed;
           }
 
-          const targetPath = toolCall.input.path;
-          const normalizedTargetPath = normalizeToolPath(targetPath);
+          const targetPath = "path" in toolCall.input ? toolCall.input.path : "";
+          const normalizedTargetPath = targetPath ? normalizeToolPath(targetPath) : "";
           try {
             if (toolCall.name === "read_file" && isReadFileInput(toolCall.input)) {
               const cached = readFileCache.get(normalizedTargetPath);
@@ -383,23 +387,23 @@ export function useChat(
                   previous.map((message) =>
                     message.id === assistantMessageId
                       ? {
-                          ...message,
-                          toolCalls: [
-                            ...(message.toolCalls ?? []),
-                            {
-                              id: toolCall.id,
-                              name: toolCall.name,
-                              path: targetPath,
-                              content:
-                                cached.length > 600
-                                  ? `${cached.slice(0, 600)}\n\n... [cached preview truncated]`
-                                  : cached,
-                              ok: true,
-                              output: `Read ${targetPath} from cache (${cached.length} chars)`,
-                            },
-                          ],
-                          changeCount: toolChanges.length,
-                        }
+                        ...message,
+                        toolCalls: [
+                          ...(message.toolCalls ?? []),
+                          {
+                            id: toolCall.id,
+                            name: toolCall.name,
+                            path: targetPath,
+                            content:
+                              cached.length > 600
+                                ? `${cached.slice(0, 600)}\n\n... [cached preview truncated]`
+                                : cached,
+                            ok: true,
+                            output: `Read ${targetPath} from cache (${cached.length} chars)`,
+                          },
+                        ],
+                        changeCount: toolChanges.length,
+                      }
                       : message
                   )
                 );
@@ -431,20 +435,20 @@ export function useChat(
                 previous.map((message) =>
                   message.id === assistantMessageId
                     ? {
-                        ...message,
-                        toolCalls: [
-                          ...(message.toolCalls ?? []),
-                          {
-                            id: toolCall.id,
-                            name: toolCall.name,
-                            path: targetPath,
-                            content: preview,
-                            ok: true,
-                            output: `Read ${targetPath} (${content.length} chars)`,
-                          },
-                        ],
-                        changeCount: toolChanges.length,
-                      }
+                      ...message,
+                      toolCalls: [
+                        ...(message.toolCalls ?? []),
+                        {
+                          id: toolCall.id,
+                          name: toolCall.name,
+                          path: targetPath,
+                          content: preview,
+                          ok: true,
+                          output: `Read ${targetPath} (${content.length} chars)`,
+                        },
+                      ],
+                      changeCount: toolChanges.length,
+                    }
                     : message
                 )
               );
@@ -468,20 +472,20 @@ export function useChat(
                   previous.map((message) =>
                     message.id === assistantMessageId
                       ? {
-                          ...message,
-                          toolCalls: [
-                            ...(message.toolCalls ?? []),
-                            {
-                              id: toolCall.id,
-                              name: toolCall.name,
-                              path: targetPath,
-                              content,
-                              ok: false,
-                              output: failed.output,
-                            },
-                          ],
-                          changeCount: toolChanges.length,
-                        }
+                        ...message,
+                        toolCalls: [
+                          ...(message.toolCalls ?? []),
+                          {
+                            id: toolCall.id,
+                            name: toolCall.name,
+                            path: targetPath,
+                            content,
+                            ok: false,
+                            output: failed.output,
+                          },
+                        ],
+                        changeCount: toolChanges.length,
+                      }
                       : message
                   )
                 );
@@ -508,20 +512,20 @@ export function useChat(
                 previous.map((message) =>
                   message.id === assistantMessageId
                     ? {
-                        ...message,
-                        toolCalls: [
-                          ...(message.toolCalls ?? []),
-                          {
-                            id: toolCall.id,
-                            name: toolCall.name,
-                            path: targetPath,
-                            content,
-                            ok: true,
-                            output: success.output,
-                          },
-                        ],
-                        changeCount: toolChanges.length,
-                      }
+                      ...message,
+                      toolCalls: [
+                        ...(message.toolCalls ?? []),
+                        {
+                          id: toolCall.id,
+                          name: toolCall.name,
+                          path: targetPath,
+                          content,
+                          ok: true,
+                          output: success.output,
+                        },
+                      ],
+                      changeCount: toolChanges.length,
+                    }
                     : message
                 )
               );
@@ -549,23 +553,240 @@ export function useChat(
                 previous.map((message) =>
                   message.id === assistantMessageId
                     ? {
-                        ...message,
-                        toolCalls: [
-                          ...(message.toolCalls ?? []),
-                          {
-                            id: toolCall.id,
-                            name: toolCall.name,
-                            path: targetPath,
-                            ok: true,
-                            output: success.output,
-                          },
-                        ],
-                        changeCount: toolChanges.length,
-                      }
+                      ...message,
+                      toolCalls: [
+                        ...(message.toolCalls ?? []),
+                        {
+                          id: toolCall.id,
+                          name: toolCall.name,
+                          path: targetPath,
+                          ok: true,
+                          output: success.output,
+                        },
+                      ],
+                      changeCount: toolChanges.length,
+                    }
                     : message
                 )
               );
               recordToolTelemetry(toolCall, success);
+              return success;
+            }
+
+            if (toolCall.name === "edit_file" && isEditFileInput(toolCall.input)) {
+              const { targetContent, replacementContent } = toolCall.input;
+              const before = await editor.readFileSnapshot(projectPath, targetPath);
+
+              if (before === null && !inspectedFiles.has(normalizedTargetPath)) {
+                const failed: ToolExecutionResult = {
+                  toolCallId: toolCall.id,
+                  name: toolCall.name,
+                  ok: false,
+                  output: `Refusing to edit uninspected file "${targetPath}". Call read_file first.`,
+                };
+                setMessages((previous) =>
+                  previous.map((message) =>
+                    message.id === assistantMessageId
+                      ? {
+                        ...message,
+                        toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, path: targetPath, ok: false, output: failed.output }],
+                        changeCount: toolChanges.length,
+                      }
+                      : message
+                  )
+                );
+                recordToolTelemetry(toolCall, failed, { writeChars: replacementContent.length });
+                return failed;
+              }
+
+              const safeBefore = before ?? "";
+              const firstIndex = safeBefore.indexOf(targetContent);
+
+              if (firstIndex === -1) {
+                const failed: ToolExecutionResult = {
+                  toolCallId: toolCall.id,
+                  name: toolCall.name,
+                  ok: false,
+                  output: "Error: targetContent not found in file. It must exactly match the existing code, including whitespace/indentation.",
+                };
+                setMessages((previous) =>
+                  previous.map((message) =>
+                    message.id === assistantMessageId
+                      ? {
+                        ...message,
+                        toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, path: targetPath, ok: false, output: failed.output }],
+                        changeCount: toolChanges.length,
+                      }
+                      : message
+                  )
+                );
+                recordToolTelemetry(toolCall, failed);
+                return failed;
+              }
+
+              const lastIndex = safeBefore.lastIndexOf(targetContent);
+              if (firstIndex !== lastIndex) {
+                const failed: ToolExecutionResult = {
+                  toolCallId: toolCall.id,
+                  name: toolCall.name,
+                  ok: false,
+                  output: "Error: targetContent matches multiple locations. Provide a larger block of code to ensure a unique match.",
+                };
+                setMessages((previous) =>
+                  previous.map((message) =>
+                    message.id === assistantMessageId
+                      ? {
+                        ...message,
+                        toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, path: targetPath, ok: false, output: failed.output }],
+                        changeCount: toolChanges.length,
+                      }
+                      : message
+                  )
+                );
+                recordToolTelemetry(toolCall, failed);
+                return failed;
+              }
+
+              const afterContent = safeBefore.slice(0, firstIndex) + replacementContent + safeBefore.slice(firstIndex + targetContent.length);
+
+              await client.request(PROVIDER_IDS.code, "code_writeFile", [
+                { projectPath, filePath: targetPath, content: afterContent },
+              ]);
+              inspectedFiles.add(normalizedTargetPath);
+              project.ensureDirExpanded(targetPath);
+              editor.replaceOpenFileTabContent(targetPath, afterContent);
+              recordToolChange(targetPath, safeBefore, afterContent);
+
+              const success: ToolExecutionResult = {
+                toolCallId: toolCall.id,
+                name: toolCall.name,
+                ok: true,
+                output: `Edited ${targetPath}`,
+              };
+              setMessages((previous) =>
+                previous.map((message) =>
+                  message.id === assistantMessageId
+                    ? {
+                      ...message,
+                      toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, path: targetPath, content: replacementContent, ok: true, output: success.output }],
+                      changeCount: toolChanges.length,
+                    }
+                    : message
+                )
+              );
+              recordToolTelemetry(toolCall, success, { writeChars: afterContent.length });
+              return success;
+            }
+
+            if (toolCall.name === "grep_search" && isGrepSearchInput(toolCall.input)) {
+              const query = toolCall.input.query;
+              if (query.trim().length < 3) {
+                const failed: ToolExecutionResult = {
+                  toolCallId: toolCall.id,
+                  name: toolCall.name,
+                  ok: false,
+                  output: "Search query must be at least 3 characters long.",
+                };
+                setMessages((previous) =>
+                  previous.map((message) =>
+                    message.id === assistantMessageId
+                      ? {
+                        ...message,
+                        toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, ok: false, output: failed.output }],
+                      }
+                      : message
+                  )
+                );
+                recordToolTelemetry(toolCall, failed);
+                return failed;
+              }
+
+              const result = await client.request(PROVIDER_IDS.code, "code_search", [
+                { projectPath, query },
+              ]);
+
+              const resultsArray = typeof result === "object" && result !== null && "results" in result && Array.isArray((result as any).results) ? (result as any).results : [];
+              const formatted = resultsArray.map((r: any) => `${r.file}:${r.line}: ${r.content}`).join("\n");
+              const output = formatted.length > 0 ? `Found ${resultsArray.length} results:\n${formatted}` : "No results found.";
+
+              const success: ToolExecutionResult = {
+                toolCallId: toolCall.id,
+                name: toolCall.name,
+                ok: true,
+                output: output.length > 4000 ? `${output.slice(0, 4000)}\n\n...(truncated)` : output,
+              };
+
+              setMessages((previous) =>
+                previous.map((message) =>
+                  message.id === assistantMessageId
+                    ? {
+                      ...message,
+                      toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, ok: true, output: `Found ${resultsArray.length} matches` }],
+                    }
+                    : message
+                )
+              );
+              recordToolTelemetry(toolCall, success);
+              return success;
+            }
+
+            if (toolCall.name === "read_file_section" && isReadFileSectionInput(toolCall.input)) {
+              const { startLine, endLine } = toolCall.input;
+
+              let cached = readFileCache.get(normalizedTargetPath);
+              let fullContent = cached;
+              if (typeof fullContent !== "string") {
+                const result = await client.request(PROVIDER_IDS.code, "code_readFile", [
+                  { projectPath, filePath: targetPath },
+                ]);
+                fullContent = parseReadFileResult(result);
+                readFileCache.set(normalizedTargetPath, fullContent);
+                inspectedFiles.add(normalizedTargetPath);
+              }
+
+              const lines = fullContent.split("\n");
+              const clampedStart = Math.max(1, startLine);
+              const clampedEnd = Math.min(lines.length, endLine);
+
+              if (clampedStart > clampedEnd || clampedStart > lines.length) {
+                const failed: ToolExecutionResult = {
+                  toolCallId: toolCall.id,
+                  name: toolCall.name,
+                  ok: false,
+                  output: `Invalid line range ${startLine}-${endLine} for file with ${lines.length} lines.`,
+                };
+                setMessages((previous) =>
+                  previous.map((message) =>
+                    message.id === assistantMessageId
+                      ? {
+                        ...message,
+                        toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, path: targetPath, ok: false, output: failed.output }],
+                      }
+                      : message
+                  )
+                );
+                recordToolTelemetry(toolCall, failed);
+                return failed;
+              }
+
+              const section = lines.slice(clampedStart - 1, clampedEnd).join("\n");
+              const success: ToolExecutionResult = {
+                toolCallId: toolCall.id,
+                name: toolCall.name,
+                ok: true,
+                output: section,
+              };
+              setMessages((previous) =>
+                previous.map((message) =>
+                  message.id === assistantMessageId
+                    ? {
+                      ...message,
+                      toolCalls: [...(message.toolCalls ?? []), { id: toolCall.id, name: toolCall.name, path: targetPath, content: section, ok: true, output: `Read ${targetPath} lines ${clampedStart}-${clampedEnd}` }],
+                    }
+                    : message
+                )
+              );
+              recordToolTelemetry(toolCall, success, { readChars: section.length });
               return success;
             }
 
@@ -581,22 +802,22 @@ export function useChat(
               previous.map((message) =>
                 message.id === assistantMessageId
                   ? {
-                      ...message,
-                      toolCalls: [
-                        ...(message.toolCalls ?? []),
-                        {
-                          id: toolCall.id,
-                          name: toolCall.name,
-                          path: targetPath,
-                          content: isWriteFileInput(toolCall.input)
-                            ? toolCall.input.content
-                            : undefined,
-                          ok: false,
-                          output: failed.output,
-                        },
-                      ],
-                      changeCount: toolChanges.length,
-                    }
+                    ...message,
+                    toolCalls: [
+                      ...(message.toolCalls ?? []),
+                      {
+                        id: toolCall.id,
+                        name: toolCall.name,
+                        path: targetPath,
+                        content: isWriteFileInput(toolCall.input)
+                          ? toolCall.input.content
+                          : undefined,
+                        ok: false,
+                        output: failed.output,
+                      },
+                    ],
+                    changeCount: toolChanges.length,
+                  }
                   : message
               )
             );
@@ -645,9 +866,9 @@ export function useChat(
       }
       const chunkCounts = result.telemetry?.chunkCounts
         ? Object.entries(result.telemetry.chunkCounts)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([type, count]) => `${type}:${count}`)
-            .join(",")
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([type, count]) => `${type}:${count}`)
+          .join(",")
         : "";
       if (chunkCounts) {
         usageParts.push(`chunks=${chunkCounts}`);

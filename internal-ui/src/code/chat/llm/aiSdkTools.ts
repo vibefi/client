@@ -3,6 +3,9 @@ import type { SendChatParams } from "./provider";
 import {
   parseToolCallInput,
   type DeleteFileToolInput,
+  type EditFileToolInput,
+  type GrepSearchToolInput,
+  type ReadFileSectionToolInput,
   type ReadFileToolInput,
   type ToolCall,
   type ToolExecutionResult,
@@ -40,13 +43,35 @@ const WRITE_FILE_INPUT_SCHEMA = jsonSchema<WriteFileToolInput>({
 const DELETE_FILE_INPUT_SCHEMA = jsonSchema<DeleteFileToolInput>({
   type: "object",
   properties: {
-    path: {
-      type: "string",
-      description: "Relative file path to delete",
-      minLength: 1,
-    },
+    path: { type: "string", description: "Relative file path to delete", minLength: 1 },
   },
   required: ["path"],
+});
+
+const EDIT_FILE_INPUT_SCHEMA = jsonSchema<EditFileToolInput>({
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    targetContent: { type: "string" },
+    replacementContent: { type: "string" },
+  },
+  required: ["path", "targetContent", "replacementContent"],
+});
+
+const GREP_SEARCH_INPUT_SCHEMA = jsonSchema<GrepSearchToolInput>({
+  type: "object",
+  properties: { query: { type: "string" } },
+  required: ["query"],
+});
+
+const READ_FILE_SECTION_INPUT_SCHEMA = jsonSchema<ReadFileSectionToolInput>({
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    startLine: { type: "number" },
+    endLine: { type: "number" },
+  },
+  required: ["path", "startLine", "endLine"],
 });
 
 function ensureToolHandler(params: SendChatParams): NonNullable<SendChatParams["onToolCall"]> {
@@ -115,19 +140,35 @@ export function buildFileTools(params: SendChatParams, toolResults: ToolExecutio
       inputSchema: DELETE_FILE_INPUT_SCHEMA,
       execute: async (input, { toolCallId }) => {
         const parsedInput = parseToolCallInput("delete_file", input);
-        if (!parsedInput || "content" in parsedInput) {
-          throw new Error("Invalid delete_file tool input.");
-        }
-
-        return executeToolCall(
-          params,
-          {
-            id: toolCallId,
-            name: "delete_file",
-            input: parsedInput,
-          },
-          toolResults,
-        );
+        if (!parsedInput) throw new Error("Invalid delete_file tool input.");
+        return executeToolCall(params, { id: toolCallId, name: "delete_file", input: parsedInput }, toolResults);
+      },
+    }),
+    edit_file: tool({
+      description: "Edit a file by finding exactly targetContent and replacing it with replacementContent.",
+      inputSchema: EDIT_FILE_INPUT_SCHEMA,
+      execute: async (input, { toolCallId }) => {
+        const parsedInput = parseToolCallInput("edit_file", input);
+        if (!parsedInput) throw new Error("Invalid edit_file tool input.");
+        return executeToolCall(params, { id: toolCallId, name: "edit_file", input: parsedInput }, toolResults);
+      },
+    }),
+    grep_search: tool({
+      description: "Search all files in the project for a query.",
+      inputSchema: GREP_SEARCH_INPUT_SCHEMA,
+      execute: async (input, { toolCallId }) => {
+        const parsedInput = parseToolCallInput("grep_search", input);
+        if (!parsedInput) throw new Error("Invalid grep_search tool input.");
+        return executeToolCall(params, { id: toolCallId, name: "grep_search", input: parsedInput }, toolResults);
+      },
+    }),
+    read_file_section: tool({
+      description: "Read a specific line range of a file.",
+      inputSchema: READ_FILE_SECTION_INPUT_SCHEMA,
+      execute: async (input, { toolCallId }) => {
+        const parsedInput = parseToolCallInput("read_file_section", input);
+        if (!parsedInput) throw new Error("Invalid read_file_section tool input.");
+        return executeToolCall(params, { id: toolCallId, name: "read_file_section", input: parsedInput }, toolResults);
       },
     }),
   } as const;

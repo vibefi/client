@@ -26,6 +26,13 @@ struct ReadFileParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SearchParams {
+    project_path: String,
+    query: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WriteFileParams {
     project_path: String,
     file_path: String,
@@ -123,6 +130,13 @@ pub fn handle_code_ipc(
             let content = filesystem::read_file(&project_root, &params.file_path)?;
             set_active_project(state, project_root);
             Ok(Some(json!({ "content": content })))
+        }
+        "code_search" => {
+            let params: SearchParams = parse_params(req)?;
+            let project_root = filesystem::resolve_project_root(&params.project_path)?;
+            let results = filesystem::search(&project_root, &params.query)?;
+            set_active_project(state, project_root);
+            Ok(Some(json!({ "results": results })))
         }
         "code_writeFile" => {
             let params: WriteFileParams = parse_params(req)?;

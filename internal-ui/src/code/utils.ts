@@ -6,6 +6,9 @@ import { json } from "@codemirror/lang-json";
 import type { ChatProvider } from "./chat/llm/provider";
 import type {
   DeleteFileToolInput,
+  EditFileToolInput,
+  GrepSearchToolInput,
+  ReadFileSectionToolInput,
   ReadFileToolInput,
   ToolCall,
   WriteFileToolInput,
@@ -290,7 +293,19 @@ export function isReadFileInput(input: ToolCall["input"]): input is ReadFileTool
 }
 
 export function isDeleteFileInput(input: ToolCall["input"]): input is DeleteFileToolInput {
-  return !("content" in input);
+  return !("content" in input) && !("targetContent" in input) && !("query" in input) && !("startLine" in input);
+}
+
+export function isEditFileInput(input: ToolCall["input"]): input is EditFileToolInput {
+  return "targetContent" in input;
+}
+
+export function isGrepSearchInput(input: ToolCall["input"]): input is GrepSearchToolInput {
+  return "query" in input;
+}
+
+export function isReadFileSectionInput(input: ToolCall["input"]): input is ReadFileSectionToolInput {
+  return "startLine" in input;
 }
 
 export function parseConsolePathMatch(line: string): ConsolePathMatch | null {
