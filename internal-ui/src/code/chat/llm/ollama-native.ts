@@ -91,34 +91,36 @@ export async function streamOllamaChat(params: SendChatParams): Promise<SendChat
 
   const messages = buildMessages(params);
 
-  try {
-    for (let round = 0; round < maxToolRounds; round++) {
-      activeRound = round + 1;
-      activeRoundStartedAtMs = Date.now() - t0;
-      activeRoundChunkCount = 0;
-      activeRoundFirstChunkAtMs = undefined;
+  for (let round = 0; round < maxToolRounds; round++) {
+    activeRound = round + 1;
+    activeRoundStartedAtMs = Date.now() - t0;
+    activeRoundChunkCount = 0;
+    activeRoundFirstChunkAtMs = undefined;
 
-      if (params.signal?.aborted) {
-        aborted = true;
-        abortReason = "signal aborted";
-        break;
-      }
+    if (params.signal?.aborted) {
+      aborted = true;
+      abortReason = "signal aborted";
+      break;
+    }
 
-      params.onStatus?.(round === 0 ? "Connecting to Ollama..." : "Processing tool results...");
+    params.onStatus?.(round === 0 ? "Connecting to Ollama..." : "Processing tool results...");
 
-      const request: (OllamaChatRequest & { stream: true }) & {
-        stream_options: { heartbeat_ms: number };
-      } = {
-        model: params.model,
-        messages,
-        tools: OLLAMA_TOOLS,
-        stream: true,
-        stream_options: { heartbeat_ms: DEFAULT_HEARTBEAT_MS },
-      };
+    const request: (OllamaChatRequest & { stream: true }) & {
+      stream_options: { heartbeat_ms: number };
+    } = {
+      model: params.model,
+      messages,
+      tools: OLLAMA_TOOLS,
+      stream: true,
+      stream_options: { heartbeat_ms: DEFAULT_HEARTBEAT_MS },
+    };
+
+    let assistantContent = "";
+    let assistantToolCalls: OllamaToolCall[] | undefined;
+    let roundError: unknown = null;
+
+    try {
       const stream = await client.chat(request);
-
-      let assistantContent = "";
-      let assistantToolCalls: OllamaToolCall[] | undefined;
 
       for await (const chunk of stream) {
         const nowMs = Date.now();
@@ -150,43 +152,62 @@ export async function streamOllamaChat(params: SendChatParams): Promise<SendChat
           finishReason = chunk.done_reason || "stop";
         }
       }
+    } catch (err) {
+      if (params.signal?.aborted) {
+        aborted = true;
+        abortReason = "signal aborted";
+      } else {
+        roundError = err;
+      }
+    }
 
-      stepCount++;
+    stepCount++;
 
-      if (aborted) break;
+    if (aborted) break;
 
-      // If model made tool calls, execute them and loop
-      if (assistantToolCalls?.length) {
-        // Add assistant message with tool calls to history
+    if (roundError) {
+      const baseError = asErrorMessage(roundError);
+      const errorIncludesXml = baseError.toLowerCase().includes("xml");
+
+      if (assistantContent.trim().length > 0 && errorIncludesXml) {
+        // Recoverable error: prompt the model to fix its XML
         messages.push({
           role: "assistant",
           content: assistantContent,
-          tool_calls: assistantToolCalls,
         });
-
-        const toolMsgs = await executeToolCalls(assistantToolCalls, params, toolResults);
-        messages.push(...toolMsgs);
-        continue;
+        messages.push({
+          role: "user",
+          content: "Error: The previous response resulted in a malformed tool call or invalid XML that the server could not parse. Please try again, being careful to match the tool schema exactly.",
+        });
+        continue; // Try again in the next round
+      } else {
+        // Unrecoverable
+        const errorAtMs = Date.now() - t0;
+        const sinceLastChunkMs = typeof lastChunkAtMs === "number" ? Math.max(0, Date.now() - lastChunkAtMs) : -1;
+        const lastChunkMsVal = typeof lastChunkAtMs === "number" ? lastChunkAtMs - t0 : -1;
+        const activeRoundAgeMs = typeof activeRoundStartedAtMs === "number" ? Math.max(0, errorAtMs - activeRoundStartedAtMs) : -1;
+        errorMessage = `${baseError} [ollama_stream_debug chunks=${chunkCount} nonEmptyContentChunks=${nonEmptyContentChunkCount} firstChunkMs=${firstChunkAtMs ?? -1} lastChunkMs=${lastChunkMsVal} errorAtMs=${errorAtMs} sinceLastChunkMs=${sinceLastChunkMs} activeRound=${activeRound} activeRoundStartMs=${activeRoundStartedAtMs ?? -1} activeRoundAgeMs=${activeRoundAgeMs} activeRoundChunks=${activeRoundChunkCount} activeRoundFirstChunkMs=${activeRoundFirstChunkAtMs ?? -1}]`;
+        break;
       }
+    }
 
-      // No tool calls — we're done
-      finishReason = finishReason ?? "stop";
-      break;
+    // If model made tool calls, execute them and loop
+    if (assistantToolCalls?.length) {
+      // Add assistant message with tool calls to history
+      messages.push({
+        role: "assistant",
+        content: assistantContent,
+        tool_calls: assistantToolCalls,
+      });
+
+      const toolMsgs = await executeToolCalls(assistantToolCalls, params, toolResults);
+      messages.push(...toolMsgs);
+      continue;
     }
-  } catch (err) {
-    if (params.signal?.aborted) {
-      aborted = true;
-      abortReason = "signal aborted";
-    } else {
-      const baseError = asErrorMessage(err);
-      const errorAtMs = Date.now() - t0;
-      const sinceLastChunkMs =
-        typeof lastChunkAtMs === "number" ? Math.max(0, Date.now() - lastChunkAtMs) : -1;
-      const lastChunkMs = typeof lastChunkAtMs === "number" ? lastChunkAtMs - t0 : -1;
-      const activeRoundAgeMs =
-        typeof activeRoundStartedAtMs === "number" ? Math.max(0, errorAtMs - activeRoundStartedAtMs) : -1;
-      errorMessage = `${baseError} [ollama_stream_debug chunks=${chunkCount} nonEmptyContentChunks=${nonEmptyContentChunkCount} firstChunkMs=${firstChunkAtMs ?? -1} lastChunkMs=${lastChunkMs} errorAtMs=${errorAtMs} sinceLastChunkMs=${sinceLastChunkMs} activeRound=${activeRound} activeRoundStartMs=${activeRoundStartedAtMs ?? -1} activeRoundAgeMs=${activeRoundAgeMs} activeRoundChunks=${activeRoundChunkCount} activeRoundFirstChunkMs=${activeRoundFirstChunkAtMs ?? -1}]`;
-    }
+
+    // No tool calls — we're done
+    finishReason = finishReason ?? "stop";
+    break;
   }
 
   const durationMs = Date.now() - t0;

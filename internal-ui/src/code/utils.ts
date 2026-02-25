@@ -41,6 +41,40 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
 }
 
+export function findExactOrFuzzyMatch(content: string, target: string): { start: number; end: number; matches: number } {
+  const exactIdx = content.indexOf(target);
+  if (exactIdx !== -1) {
+    const lastIdx = content.lastIndexOf(target);
+    if (exactIdx === lastIdx) {
+      return { start: exactIdx, end: exactIdx + target.length, matches: 1 };
+    }
+    return { start: -1, end: -1, matches: 2 };
+  }
+
+  const trimmedTarget = target.trim();
+  if (!trimmedTarget) return { start: -1, end: -1, matches: 0 };
+
+  const escapedTarget = trimmedTarget.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regexStr = escapedTarget.replace(/\s+/g, "\\s+");
+
+  try {
+    const regex = new RegExp(regexStr, "g");
+    let match;
+    const matches = [];
+    while ((match = regex.exec(content)) !== null) {
+      matches.push(match);
+    }
+
+    if (matches.length === 1) {
+      const m = matches[0];
+      return { start: m.index, end: m.index + m[0].length, matches: 1 };
+    }
+    return { start: -1, end: -1, matches: matches.length };
+  } catch {
+    return { start: -1, end: -1, matches: 0 };
+  }
+}
+
 function fallbackProjectName(path: string): string {
   const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts[parts.length - 1] || path;

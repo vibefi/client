@@ -13,6 +13,7 @@ import {
   asErrorMessage,
   chatMessageId,
   flattenFilePaths,
+  findExactOrFuzzyMatch,
   isDeleteFileInput,
   isEditFileInput,
   isGrepSearchInput,
@@ -600,14 +601,14 @@ export function useChat(
               }
 
               const safeBefore = before ?? "";
-              const firstIndex = safeBefore.indexOf(targetContent);
+              const matchResult = findExactOrFuzzyMatch(safeBefore, targetContent);
 
-              if (firstIndex === -1) {
+              if (matchResult.matches === 0) {
                 const failed: ToolExecutionResult = {
                   toolCallId: toolCall.id,
                   name: toolCall.name,
                   ok: false,
-                  output: "Error: targetContent not found in file. It must exactly match the existing code, including whitespace/indentation.",
+                  output: "Error: targetContent not found in file. It must exactly match the existing code, or differ only by whitespace.",
                 };
                 setMessages((previous) =>
                   previous.map((message) =>
@@ -624,8 +625,7 @@ export function useChat(
                 return failed;
               }
 
-              const lastIndex = safeBefore.lastIndexOf(targetContent);
-              if (firstIndex !== lastIndex) {
+              if (matchResult.matches > 1) {
                 const failed: ToolExecutionResult = {
                   toolCallId: toolCall.id,
                   name: toolCall.name,
@@ -647,7 +647,7 @@ export function useChat(
                 return failed;
               }
 
-              const afterContent = safeBefore.slice(0, firstIndex) + replacementContent + safeBefore.slice(firstIndex + targetContent.length);
+              const afterContent = safeBefore.slice(0, matchResult.start) + replacementContent + safeBefore.slice(matchResult.end);
 
               await client.request(PROVIDER_IDS.code, "code_writeFile", [
                 { projectPath, filePath: targetPath, content: afterContent },
