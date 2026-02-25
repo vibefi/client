@@ -131,13 +131,27 @@ export function useChat(
     if (!text || streaming || settings.loading || settings.saving) return;
 
     const provider = settings.provider;
-    const apiKey = (provider === "openai" ? settings.openaiApiKey : settings.claudeApiKey).trim();
+    let apiKey: string;
+    let baseURL: string | undefined;
+    if (provider === "openrouter") {
+      apiKey = settings.openrouterApiKey.trim();
+      baseURL = "https://openrouter.ai/api/v1";
+    } else if (provider === "ollama") {
+      apiKey = "ollama";
+      baseURL = `http://localhost:${settings.ollamaPort ?? 11434}/v1`;
+    } else if (provider === "openai") {
+      apiKey = settings.openaiApiKey.trim();
+    } else {
+      apiKey = settings.claudeApiKey.trim();
+    }
     if (!apiKey) {
-      setError(
-        provider === "openai"
-          ? "OpenAI API key is required to send chat messages."
-          : "Claude API key is required to send chat messages."
-      );
+      const keyLabels: Record<string, string> = {
+        claude: "Claude API key",
+        openai: "OpenAI API key",
+        openrouter: "OpenRouter API key",
+        ollama: "Ollama",
+      };
+      setError(`${keyLabels[provider] ?? "API key"} is required to send chat messages.`);
       return;
     }
 
@@ -303,6 +317,7 @@ export function useChat(
         provider,
         model,
         apiKey,
+        baseURL,
         reasoningEffort: settings.reasoningEffort,
         systemPrompt: buildContextPrompt(),
         messages: mapToLlmMessages(nextMessages),

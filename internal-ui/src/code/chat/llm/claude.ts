@@ -5,7 +5,7 @@ import type { SendChatParams, SendChatResult } from "./provider";
 import type { ToolExecutionResult } from "./tools";
 import { asErrorMessage } from "../../utils";
 
-const STREAM_TIMEOUT_MS = 240_000;
+const STREAM_TIMEOUT_MS = 900_000;
 const DEFAULT_MAX_TOOL_ROUNDS = 64;
 
 function extractToolPath(input: unknown): string | null {

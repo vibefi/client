@@ -5,7 +5,7 @@ import type { SendChatParams, SendChatResult } from "./provider";
 import type { ToolExecutionResult } from "./tools";
 import { asErrorMessage } from "../../utils";
 
-const STREAM_TIMEOUT_MS = 240_000;
+const STREAM_TIMEOUT_MS = 900_000;
 const DEFAULT_MAX_TOOL_ROUNDS = 64;
 
 function extractToolPath(input: unknown): string | null {
@@ -29,12 +29,17 @@ export async function streamOpenAiChat(params: SendChatParams): Promise<SendChat
   let errorMessage: string | undefined;
   let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
 
+  const isCustomBase = Boolean(params.baseURL);
+
   const openai = createOpenAI({
     apiKey: params.apiKey,
+    ...(params.baseURL ? { baseURL: params.baseURL } : {}),
   });
 
   const result = streamText({
-    model: openai.responses(params.model),
+    // OpenRouter / LM Studio use the standard chat completions endpoint,
+    // not OpenAI's responses API, so use openai.chat() when baseURL is set.
+    model: isCustomBase ? openai.chat(params.model) : openai.responses(params.model),
     system: params.systemPrompt?.trim() ? params.systemPrompt : undefined,
     messages: params.messages.map((message) => ({
       role: message.role,
@@ -44,11 +49,16 @@ export async function streamOpenAiChat(params: SendChatParams): Promise<SendChat
     stopWhen: stepCountIs(maxToolRounds),
     abortSignal: params.signal,
     timeout: STREAM_TIMEOUT_MS,
-    providerOptions: {
-      openai: {
-        reasoningEffort: params.reasoningEffort ?? "low",
-      },
-    },
+    // reasoningEffort is only supported by native OpenAI
+    ...(isCustomBase
+      ? {}
+      : {
+          providerOptions: {
+            openai: {
+              reasoningEffort: params.reasoningEffort ?? "low",
+            },
+          },
+        }),
   });
 
   let lastStatus = "";
@@ -58,7 +68,8 @@ export async function streamOpenAiChat(params: SendChatParams): Promise<SendChat
     params.onStatus?.(status);
   };
 
-  emitStatus("Connecting to OpenAI...");
+  const providerLabel = params.provider === "openrouter" ? "OpenRouter" : "OpenAI";
+  emitStatus(`Connecting to ${providerLabel}...`);
   for await (const chunk of result.fullStream) {
     chunkCounts[chunk.type] = (chunkCounts[chunk.type] ?? 0) + 1;
 

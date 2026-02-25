@@ -168,7 +168,12 @@ export default function App() {
     () => modelOptionsForProvider(settings.provider),
     [settings.provider]
   );
-  const hasAnyApiKey = Boolean(settings.claudeApiKey.trim() || settings.openaiApiKey.trim());
+  const hasAnyApiKey = Boolean(
+    settings.claudeApiKey.trim() ||
+    settings.openaiApiKey.trim() ||
+    settings.openrouterApiKey.trim() ||
+    settings.provider === "ollama"
+  );
   const customModelValue = useMemo(() => {
     const trimmed = settings.model.trim();
     if (!trimmed) return null;
@@ -183,6 +188,12 @@ export default function App() {
   }, [settings.model, settings.provider]);
 
   // ── Effects ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (settingsOpen && settings.provider === "ollama" && settings.ollamaModels.length === 0 && !settings.ollamaModelsLoading) {
+      void settings.fetchOllamaModels();
+    }
+  }, [settingsOpen, settings.provider]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
@@ -900,7 +911,12 @@ export default function App() {
       return;
     }
     setStatus("Saved Code LLM settings");
-    if (settings.claudeApiKey.trim() || settings.openaiApiKey.trim()) {
+    if (
+      settings.claudeApiKey.trim() ||
+      settings.openaiApiKey.trim() ||
+      settings.openrouterApiKey.trim() ||
+      settings.provider === "ollama"
+    ) {
       setSettingsOpen(false);
     }
   }
@@ -1029,8 +1045,8 @@ export default function App() {
         <div className="chat-welcome-eyebrow">Welcome to VibeFi Code</div>
         <h3>Connect an LLM provider to start vibe-coding</h3>
         <p>
-          Add a Claude or OpenAI API key, choose a model, then send prompts to inspect or edit the
-          current project.
+          Add an API key (Claude, OpenAI, or OpenRouter), choose a model, then send prompts to
+          inspect or edit the current project. Ollama works locally with no key.
         </p>
         <ol className="chat-welcome-steps">
           <li>Open LLM Settings</li>
@@ -1048,7 +1064,7 @@ export default function App() {
               disabled={
                 settings.loading ||
                 settings.saving ||
-                (!settings.claudeApiKey.trim() && !settings.openaiApiKey.trim())
+                (!settings.claudeApiKey.trim() && !settings.openaiApiKey.trim() && !settings.openrouterApiKey.trim() && settings.provider !== "ollama")
               }
             >
               {settings.saving ? "Saving..." : "Save & Continue"}
@@ -1688,81 +1704,158 @@ export default function App() {
 
                         {settingsOpen ? (
                           <div className="chat-settings-panel">
-                            <div className="chat-settings-grid">
-                              <div className="field">
-                                <label>Claude API Key</label>
-                                <input
-                                  type="password"
-                                  value={settings.claudeApiKey}
-                                  onChange={(e) => settings.setClaudeApiKey(e.target.value)}
-                                  placeholder="sk-ant-..."
-                                  disabled={settings.loading || settings.saving}
-                                />
-                              </div>
-                              <div className="field">
-                                <label>OpenAI API Key</label>
-                                <input
-                                  type="password"
-                                  value={settings.openaiApiKey}
-                                  onChange={(e) => settings.setOpenaiApiKey(e.target.value)}
-                                  placeholder="sk-..."
-                                  disabled={settings.loading || settings.saving}
-                                />
-                              </div>
+                            <div className="chat-settings-grid" style={{ gridTemplateColumns: "1fr" }}>
                               <div className="field">
                                 <label>Provider</label>
                                 <select
                                   value={settings.provider}
-                                  onChange={settings.handleProviderSelect}
+                                  onChange={(e) => {
+                                    settings.handleProviderSelect(e);
+                                    if (e.target.value === "ollama") {
+                                      void settings.fetchOllamaModels();
+                                    }
+                                  }}
                                   disabled={settings.loading || settings.saving}
                                 >
                                   <option value="claude">claude</option>
                                   <option value="openai">openai</option>
+                                  <option value="openrouter">openrouter</option>
+                                  <option value="ollama">ollama</option>
                                 </select>
                               </div>
+
+                              {/* API key / port — provider-specific */}
+                              {settings.provider === "claude" ? (
+                                <div className="field">
+                                  <label>Claude API Key</label>
+                                  <input
+                                    type="password"
+                                    value={settings.claudeApiKey}
+                                    onChange={(e) => settings.setClaudeApiKey(e.target.value)}
+                                    placeholder="sk-ant-..."
+                                    disabled={settings.loading || settings.saving}
+                                  />
+                                </div>
+                              ) : settings.provider === "openai" ? (
+                                <div className="field">
+                                  <label>OpenAI API Key</label>
+                                  <input
+                                    type="password"
+                                    value={settings.openaiApiKey}
+                                    onChange={(e) => settings.setOpenaiApiKey(e.target.value)}
+                                    placeholder="sk-..."
+                                    disabled={settings.loading || settings.saving}
+                                  />
+                                </div>
+                              ) : settings.provider === "openrouter" ? (
+                                <div className="field">
+                                  <label>OpenRouter API Key</label>
+                                  <input
+                                    type="password"
+                                    value={settings.openrouterApiKey}
+                                    onChange={(e) => settings.setOpenrouterApiKey(e.target.value)}
+                                    placeholder="sk-or-..."
+                                    disabled={settings.loading || settings.saving}
+                                  />
+                                </div>
+                              ) : (
+                                <div className="field">
+                                  <label>Ollama Port</label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={65535}
+                                    value={settings.ollamaPort}
+                                    onChange={(e) =>
+                                      settings.setOllamaPort(
+                                        Math.max(1, Math.min(65535, Number(e.target.value) || 11434))
+                                      )
+                                    }
+                                    disabled={settings.loading || settings.saving}
+                                  />
+                                </div>
+                              )}
+
+                              {/* Model — dropdown for claude/openai, text input for openrouter, fetched dropdown for ollama */}
                               <div className="field">
                                 <label>Model</label>
-                                <select
-                                  value={selectedModelValue}
-                                  onChange={(e) => settings.setModel(e.target.value)}
-                                  disabled={settings.loading || settings.saving}
-                                >
-                                  {customModelValue ? (
-                                    <option value={customModelValue}>{customModelValue} (custom)</option>
-                                  ) : null}
-                                  {providerModelOptions.map((modelId) => (
-                                    <option key={modelId} value={modelId}>
-                                      {modelId}
-                                    </option>
-                                  ))}
-                                </select>
+                                {settings.provider === "openrouter" ? (
+                                  <input
+                                    type="text"
+                                    value={settings.model}
+                                    onChange={(e) => settings.setModel(e.target.value)}
+                                    placeholder="e.g. anthropic/claude-sonnet-4-5, openai/gpt-4o"
+                                    disabled={settings.loading || settings.saving}
+                                  />
+                                ) : settings.provider === "ollama" ? (
+                                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                                    <select
+                                      value={selectedModelValue}
+                                      onChange={(e) => settings.setModel(e.target.value)}
+                                      disabled={settings.loading || settings.saving || settings.ollamaModelsLoading}
+                                      style={{ flex: 1 }}
+                                    >
+                                      {settings.ollamaModels.length === 0 && !settings.ollamaModelsLoading ? (
+                                        <option value={selectedModelValue}>{selectedModelValue || "(no models)"}</option>
+                                      ) : null}
+                                      {settings.ollamaModels.map((m) => (
+                                        <option key={m} value={m}>{m}</option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      className="secondary"
+                                      onClick={() => void settings.fetchOllamaModels()}
+                                      disabled={settings.ollamaModelsLoading}
+                                      title="Refresh models from Ollama"
+                                      style={{ fontSize: "11px", padding: "0 6px", height: "28px", flexShrink: 0 }}
+                                    >
+                                      {settings.ollamaModelsLoading ? "..." : "↻"}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <select
+                                    value={selectedModelValue}
+                                    onChange={(e) => settings.setModel(e.target.value)}
+                                    disabled={settings.loading || settings.saving}
+                                  >
+                                    {customModelValue ? (
+                                      <option value={customModelValue}>{customModelValue} (custom)</option>
+                                    ) : null}
+                                    {providerModelOptions.map((modelId) => (
+                                      <option key={modelId} value={modelId}>
+                                        {modelId}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                {settings.provider === "ollama" && settings.ollamaModelsError ? (
+                                  <span style={{ fontSize: "10px", color: "var(--ide-danger)", marginTop: "2px" }}>
+                                    {settings.ollamaModelsError}
+                                  </span>
+                                ) : null}
                               </div>
-                              <div className="field">
-                                <label>Reasoning Effort</label>
-                                <select
-                                  value={settings.reasoningEffort}
-                                  onChange={(e) =>
-                                    settings.setReasoningEffort(
-                                      e.target.value as "low" | "medium" | "high"
-                                    )
-                                  }
-                                  disabled={settings.loading || settings.saving}
-                                >
-                                  <option value="low">low</option>
-                                  <option value="medium">medium</option>
-                                  <option value="high">high</option>
-                                </select>
-                              </div>
+
+                              {/* Reasoning effort — only for claude/openai */}
+                              {(settings.provider === "claude" || settings.provider === "openai") ? (
+                                <div className="field">
+                                  <label>Reasoning Effort</label>
+                                  <select
+                                    value={settings.reasoningEffort}
+                                    onChange={(e) =>
+                                      settings.setReasoningEffort(
+                                        e.target.value as "low" | "medium" | "high"
+                                      )
+                                    }
+                                    disabled={settings.loading || settings.saving}
+                                  >
+                                    <option value="low">low</option>
+                                    <option value="medium">medium</option>
+                                    <option value="high">high</option>
+                                  </select>
+                                </div>
+                              ) : null}
                             </div>
                             <div className="actions" style={{ marginTop: "8px" }}>
-                              <button
-                                className="secondary"
-                                onClick={() => settings.load().catch((err) => setError(asErrorMessage(err)))}
-                                disabled={settings.loading || settings.saving}
-                                style={{ fontSize: "11px" }}
-                              >
-                                {settings.loading ? "Loading..." : "Reload"}
-                              </button>
                               <button
                                 className="primary"
                                 onClick={() => void handleSaveSettings()}
@@ -1771,20 +1864,6 @@ export default function App() {
                               >
                                 {settings.saving ? "Saving..." : "Save"}
                               </button>
-                              {!hasAnyApiKey ? (
-                                <button
-                                  className="secondary"
-                                  onClick={() => void handleSaveSettingsAndContinue()}
-                                  disabled={
-                                    settings.loading ||
-                                    settings.saving ||
-                                    (!settings.claudeApiKey.trim() && !settings.openaiApiKey.trim())
-                                  }
-                                  style={{ fontSize: "11px" }}
-                                >
-                                  {settings.saving ? "Saving..." : "Save & Continue"}
-                                </button>
-                              ) : null}
                             </div>
                           </div>
                         ) : !hasAnyApiKey ? (

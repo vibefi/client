@@ -179,14 +179,22 @@ export function normalizeChatProvider(value: string | null | undefined): ChatPro
   if (normalized === "openai" || normalized === "chatgpt" || normalized === "gpt") {
     return "openai";
   }
+  if (normalized === "openrouter") {
+    return "openrouter";
+  }
+  if (normalized === "ollama" || normalized === "local") {
+    return "ollama";
+  }
   return "claude";
 }
 
 const OPENAI_MODEL_OPTIONS = ["gpt-5.2-codex"];
 const CLAUDE_MODEL_OPTIONS = ["claude-sonnet-4-6", "claude-opus-4-6"];
-
 export function modelOptionsForProvider(provider: ChatProvider): readonly string[] {
-  return provider === "openai" ? OPENAI_MODEL_OPTIONS : CLAUDE_MODEL_OPTIONS;
+  if (provider === "openai") return OPENAI_MODEL_OPTIONS;
+  if (provider === "openrouter") return [];
+  if (provider === "ollama") return [];
+  return CLAUDE_MODEL_OPTIONS;
 }
 
 export function defaultModelForProvider(provider: ChatProvider): string {
@@ -197,6 +205,11 @@ export function normalizeModelForProvider(provider: ChatProvider, model: string 
   const trimmed = (model ?? "").trim();
   if (!trimmed) {
     return defaultModelForProvider(provider);
+  }
+
+  // OpenRouter and Ollama accept arbitrary model strings
+  if (provider === "openrouter" || provider === "ollama") {
+    return trimmed;
   }
 
   const lowered = trimmed.toLowerCase();

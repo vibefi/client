@@ -94,7 +94,7 @@ fn normalized_app_path(uri: &wry::http::Uri) -> String {
 }
 
 const STANDARD_CSP: &str = "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default";
-const CODE_CSP: &str = "default-src 'self' app:; script-src 'self' 'unsafe-inline' app:; style-src 'self' 'unsafe-inline' app:; connect-src https://api.anthropic.com https://api.openai.com; frame-src http://localhost:*; img-src 'self' data: app: http://localhost:*; font-src 'self' app: data:; object-src 'none'; base-uri 'none'; form-action 'none';";
+const CODE_CSP: &str = "default-src 'self' app:; script-src 'self' 'unsafe-inline' app:; style-src 'self' 'unsafe-inline' app:; connect-src https://api.anthropic.com https://api.openai.com http://localhost:*; frame-src http://localhost:*; img-src 'self' data: app: http://localhost:*; font-src 'self' app: data:; object-src 'none'; base-uri 'none'; form-action 'none';";
 
 fn csp_for_kind(kind: AppWebViewKind) -> &'static str {
     if kind == AppWebViewKind::Code {

@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const ALLOWED_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "css", "json", "html", "webp"];
+const ALLOWED_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "css", "json", "html", "webp", "md"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteFileKind {

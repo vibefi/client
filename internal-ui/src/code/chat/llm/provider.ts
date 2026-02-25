@@ -1,4 +1,5 @@
 import { streamClaudeChat } from "./claude";
+import { streamOllamaChat } from "./ollama-native";
 import { streamOpenAiChat } from "./openai";
 import type { ToolCall, ToolExecutionResult } from "./tools";
 
@@ -9,7 +10,7 @@ export type ChatMessage = {
   content: string;
 };
 
-export type ChatProvider = "claude" | "openai";
+export type ChatProvider = "claude" | "openai" | "openrouter" | "ollama";
 
 export type ReasoningEffort = "low" | "medium" | "high";
 
@@ -17,6 +18,7 @@ export type SendChatParams = {
   provider: ChatProvider;
   model: string;
   apiKey: string;
+  baseURL?: string;
   systemPrompt?: string;
   messages: ChatMessage[];
   signal?: AbortSignal;
@@ -57,5 +59,10 @@ export async function sendChatStream(params: SendChatParams): Promise<SendChatRe
     return streamClaudeChat(params);
   }
 
+  if (params.provider === "ollama") {
+    return streamOllamaChat(params);
+  }
+
+  // openai and openrouter use the OpenAI-compatible adapter
   return streamOpenAiChat(params);
 }
