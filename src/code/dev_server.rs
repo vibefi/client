@@ -35,12 +35,10 @@ pub fn start_dev_server(
             if existing.project_root == project_root {
                 return Ok(status_json(Some(&existing), true));
             }
-            bail!(
-                "a code dev server is already running for {}; stop it before starting another",
-                existing.project_root.display()
-            );
+            stop_dev_server(state)?;
+        } else {
+            clear_dev_server_if_matches(state, existing.id);
         }
-        clear_dev_server_if_matches(state, existing.id);
     }
 
     ensure_dependencies(&project_root, state, webview_id)?;
@@ -560,8 +558,23 @@ fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool> {
     }
 }
 
-fn terminate_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<()> {
-    let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Term);
+fn terminate_child_tree(child: &mut Child, uses_process_group: bool) -> Result<()> {
+    #[cfg(unix)]
+    if uses_process_group {
+        let pid = child.id() as i32;
+        unsafe {
+            libc::kill(-pid, libc::SIGTERM);
+        }
+    } else {
+        let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Term);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _uses_process_group = uses_process_group;
+        let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Term);
+    }
+
     if child
         .try_wait()
         .context("failed to query dev server process")?
@@ -575,8 +588,23 @@ fn terminate_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<
     Ok(())
 }
 
-fn force_kill_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<()> {
-    let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Kill);
+fn force_kill_child_tree(child: &mut Child, uses_process_group: bool) -> Result<()> {
+    #[cfg(unix)]
+    if uses_process_group {
+        let pid = child.id() as i32;
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    } else {
+        let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Kill);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _uses_process_group = uses_process_group;
+        let _ = send_signal_to_pid(Pid::from_u32(child.id()), Signal::Kill);
+    }
+
     if child
         .try_wait()
         .context("failed to query dev server process")?

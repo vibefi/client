@@ -5183,6 +5183,7 @@ dependencies = [
  "dirs",
  "gtk",
  "hex",
+ "libc",
  "listeners",
  "mime_guess",
  "objc2",

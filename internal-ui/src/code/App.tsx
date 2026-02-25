@@ -602,6 +602,9 @@ export default function App() {
     setError(null);
     if (!options.restore) setStatus(null);
     try {
+      if (devServer.status.running) {
+        await devServer.stop();
+      }
       const opened = await project.doOpenProject(pathOverride);
       editor.applyOpenedProject();
       project.setOpenFilePathInput("src/App.tsx");
@@ -1539,13 +1542,13 @@ export default function App() {
                   : undefined
               }
             >
-                {workspaceMode === "llm-code-preview" ? (
-                  <div className="editor-shell">
-                    <div className="editor-tabs-shell">
-                      {tabsCanScrollLeft && (
-                        <button className="tab-scroll-btn" onClick={scrollTabsLeft} title="Scroll tabs left">‹</button>
-                      )}
-                      <div className="editor-tabs" ref={editorTabsRef} onScroll={onTabsScroll}>
+              {workspaceMode === "llm-code-preview" ? (
+                <div className="editor-shell">
+                  <div className="editor-tabs-shell">
+                    {tabsCanScrollLeft && (
+                      <button className="tab-scroll-btn" onClick={scrollTabsLeft} title="Scroll tabs left">‹</button>
+                    )}
+                    <div className="editor-tabs" ref={editorTabsRef} onScroll={onTabsScroll}>
                       {editor.openTabs.map((tab) => {
                         const active = tab.id === editor.activeTabId;
                         const dirty = isFileTab(tab) ? isFileTabDirty(tab) : false;
@@ -1590,467 +1593,467 @@ export default function App() {
                           </div>
                         );
                       })}
-                      </div>
-                      {tabsCanScrollRight && (
-                        <button className="tab-scroll-btn" onClick={scrollTabsRight} title="Scroll tabs right">›</button>
-                      )}
                     </div>
+                    {tabsCanScrollRight && (
+                      <button className="tab-scroll-btn" onClick={scrollTabsRight} title="Scroll tabs right">›</button>
+                    )}
+                  </div>
 
-                    {editor.activeFileTab ? (
-                      <>
-                        <div className="editor-toolbar">
-                          <div className="editor-path" title={editor.activeFileTab.path}>
-                            {editor.activeFileTab.path}
-                          </div>
-                          <div className="actions" style={{ marginTop: 0 }}>
-                            <div className="editor-status">
-                              {editor.activeFileTab.isSaving
-                                ? "Saving..."
-                                : isFileTabDirty(editor.activeFileTab)
-                                  ? "Unsaved changes"
-                                  : "Saved"}
-                            </div>
-                            <button
-                              className="primary"
-                              onClick={() => void handleSaveActiveTab()}
-                              disabled={
-                                !project.activeProjectPath ||
-                                editor.activeFileTab.isLoading ||
-                                editor.activeFileTab.isSaving ||
-                                !isFileTabDirty(editor.activeFileTab)
-                              }
-                            >
-                              Save
-                            </button>
-                          </div>
+                  {editor.activeFileTab ? (
+                    <>
+                      <div className="editor-toolbar">
+                        <div className="editor-path" title={editor.activeFileTab.path}>
+                          {editor.activeFileTab.path}
                         </div>
-                        {editor.activeFileTab.isLoading ? (
-                          <div className="editor-placeholder">Loading file...</div>
-                        ) : (
-                          <CodeEditor
-                            filePath={editor.activeFileTab.path}
-                            value={editor.activeFileTab.content}
-                            onChange={editor.handleActiveEditorChange}
-                            onBlur={() => editor.scheduleAutoSave(editor.activeFileTab!.id)}
-                            jumpToLine={
-                              editor.pendingLineJump?.tabId === editor.activeFileTab.id
-                                ? editor.pendingLineJump.line
-                                : undefined
-                            }
-                            jumpNonce={
-                              editor.pendingLineJump?.tabId === editor.activeFileTab.id
-                                ? editor.pendingLineJump.nonce
-                                : undefined
-                            }
-                            onJumpHandled={() => {
-                              editor.setPendingLineJump((current) =>
-                                current?.tabId === editor.activeFileTab!.id ? null : current
-                              );
-                            }}
-                            readOnly={editor.activeFileTab.isSaving}
-                          />
-                        )}
-                      </>
-                    ) : editor.activeDiffTab ? (
-                      <>
-                        <div className="editor-toolbar">
-                          <div className="editor-path">Last LLM Diff</div>
+                        <div className="actions" style={{ marginTop: 0 }}>
                           <div className="editor-status">
-                            {editor.lastChangeSet.length} file change{editor.lastChangeSet.length === 1 ? "" : "s"}
+                            {editor.activeFileTab.isSaving
+                              ? "Saving..."
+                              : isFileTabDirty(editor.activeFileTab)
+                                ? "Unsaved changes"
+                                : "Saved"}
                           </div>
+                          <button
+                            className="primary"
+                            onClick={() => void handleSaveActiveTab()}
+                            disabled={
+                              !project.activeProjectPath ||
+                              editor.activeFileTab.isLoading ||
+                              editor.activeFileTab.isSaving ||
+                              !isFileTabDirty(editor.activeFileTab)
+                            }
+                          >
+                            Save
+                          </button>
                         </div>
-                        <DiffViewer diffText={editor.activeDiffTab.diffText} />
-                      </>
-                    ) : editor.activeChatTab ? (
-                      <>
-                        <div className="editor-toolbar">
-                          <div className="editor-path">LLM Chat</div>
-                          <div className="actions" style={{ marginTop: 0 }}>
-                            <span className="chat-meta">
-                              {chat.streaming
-                                ? chat.streamStatus ?? "Streaming..."
-                                : `${chat.messages.length} msg${chat.messages.length === 1 ? "" : "s"}`}
-                            </span>
-                            <button
-                              className="secondary"
-                              onClick={() => chat.clear()}
-                              disabled={chat.messages.length === 0 && !chat.streaming}
-                              style={{ fontSize: "11px" }}
-                            >
-                              Clear
-                            </button>
-                            {chat.streaming ? (
-                              <button className="secondary" onClick={() => chat.abort()} style={{ fontSize: "11px" }}>
-                                Stop
-                              </button>
-                            ) : null}
-                            <button
-                              className="secondary"
-                              onClick={() => setChatPaneCollapsed((v) => !v)}
-                              style={{ fontSize: "11px" }}
-                              title={chatPaneCollapsed ? "Expand composer" : "Collapse composer"}
-                            >
-                              {chatPaneCollapsed ? "Expand" : "Collapse"}
-                            </button>
-                            <button
-                              className={`chat-gear-btn ${settingsOpen ? "active" : ""}`}
-                              onClick={() => setSettingsOpen((v) => !v)}
-                              title="LLM Settings"
-                            >
-                              ⚙
-                            </button>
-                          </div>
+                      </div>
+                      {editor.activeFileTab.isLoading ? (
+                        <div className="editor-placeholder">Loading file...</div>
+                      ) : (
+                        <CodeEditor
+                          filePath={editor.activeFileTab.path}
+                          value={editor.activeFileTab.content}
+                          onChange={editor.handleActiveEditorChange}
+                          onBlur={() => editor.scheduleAutoSave(editor.activeFileTab!.id)}
+                          jumpToLine={
+                            editor.pendingLineJump?.tabId === editor.activeFileTab.id
+                              ? editor.pendingLineJump.line
+                              : undefined
+                          }
+                          jumpNonce={
+                            editor.pendingLineJump?.tabId === editor.activeFileTab.id
+                              ? editor.pendingLineJump.nonce
+                              : undefined
+                          }
+                          onJumpHandled={() => {
+                            editor.setPendingLineJump((current) =>
+                              current?.tabId === editor.activeFileTab!.id ? null : current
+                            );
+                          }}
+                          readOnly={editor.activeFileTab.isSaving}
+                        />
+                      )}
+                    </>
+                  ) : editor.activeDiffTab ? (
+                    <>
+                      <div className="editor-toolbar">
+                        <div className="editor-path">Last LLM Diff</div>
+                        <div className="editor-status">
+                          {editor.lastChangeSet.length} file change{editor.lastChangeSet.length === 1 ? "" : "s"}
                         </div>
-
-                        {settingsOpen ? (
-                          <div className="chat-settings-panel">
-                            <div className="chat-settings-grid" style={{ gridTemplateColumns: "1fr" }}>
-                              <div className="field">
-                                <label>Provider</label>
-                                <select
-                                  value={settings.provider}
-                                  onChange={(e) => {
-                                    settings.handleProviderSelect(e);
-                                    if (e.target.value === "ollama") {
-                                      void settings.fetchOllamaModels();
-                                    }
-                                  }}
-                                  disabled={settings.loading || settings.saving}
-                                >
-                                  <option value="claude">claude</option>
-                                  <option value="openai">openai</option>
-                                  <option value="openrouter">openrouter</option>
-                                  <option value="ollama">ollama</option>
-                                </select>
-                              </div>
-
-                              {/* API key / port — provider-specific */}
-                              {settings.provider === "claude" ? (
-                                <div className="field">
-                                  <label>Claude API Key</label>
-                                  <input
-                                    type="password"
-                                    value={settings.claudeApiKey}
-                                    onChange={(e) => settings.setClaudeApiKey(e.target.value)}
-                                    placeholder="sk-ant-..."
-                                    disabled={settings.loading || settings.saving}
-                                  />
-                                </div>
-                              ) : settings.provider === "openai" ? (
-                                <div className="field">
-                                  <label>OpenAI API Key</label>
-                                  <input
-                                    type="password"
-                                    value={settings.openaiApiKey}
-                                    onChange={(e) => settings.setOpenaiApiKey(e.target.value)}
-                                    placeholder="sk-..."
-                                    disabled={settings.loading || settings.saving}
-                                  />
-                                </div>
-                              ) : settings.provider === "openrouter" ? (
-                                <div className="field">
-                                  <label>OpenRouter API Key</label>
-                                  <input
-                                    type="password"
-                                    value={settings.openrouterApiKey}
-                                    onChange={(e) => settings.setOpenrouterApiKey(e.target.value)}
-                                    placeholder="sk-or-..."
-                                    disabled={settings.loading || settings.saving}
-                                  />
-                                </div>
-                              ) : (
-                                <div className="field">
-                                  <label>Ollama Port</label>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={65535}
-                                    value={settings.ollamaPort}
-                                    onChange={(e) =>
-                                      settings.setOllamaPort(
-                                        Math.max(1, Math.min(65535, Number(e.target.value) || 11434))
-                                      )
-                                    }
-                                    disabled={settings.loading || settings.saving}
-                                  />
-                                </div>
-                              )}
-
-                              {/* Model — dropdown for claude/openai, text input for openrouter, fetched dropdown for ollama */}
-                              <div className="field">
-                                <label>Model</label>
-                                {settings.provider === "openrouter" ? (
-                                  <input
-                                    type="text"
-                                    value={settings.model}
-                                    onChange={(e) => settings.setModel(e.target.value)}
-                                    placeholder="e.g. anthropic/claude-sonnet-4-5, openai/gpt-4o"
-                                    disabled={settings.loading || settings.saving}
-                                  />
-                                ) : settings.provider === "ollama" ? (
-                                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                    <select
-                                      value={selectedModelValue}
-                                      onChange={(e) => settings.setModel(e.target.value)}
-                                      disabled={settings.loading || settings.saving || settings.ollamaModelsLoading}
-                                      style={{ flex: 1 }}
-                                    >
-                                      {settings.ollamaModels.length === 0 && !settings.ollamaModelsLoading ? (
-                                        <option value={selectedModelValue}>{selectedModelValue || "(no models)"}</option>
-                                      ) : null}
-                                      {settings.ollamaModels.map((m) => (
-                                        <option key={m} value={m}>{m}</option>
-                                      ))}
-                                    </select>
-                                    <button
-                                      className="secondary"
-                                      onClick={() => void settings.fetchOllamaModels()}
-                                      disabled={settings.ollamaModelsLoading}
-                                      title="Refresh models from Ollama"
-                                      style={{ fontSize: "11px", padding: "0 6px", height: "28px", flexShrink: 0 }}
-                                    >
-                                      {settings.ollamaModelsLoading ? "..." : "↻"}
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <select
-                                    value={selectedModelValue}
-                                    onChange={(e) => settings.setModel(e.target.value)}
-                                    disabled={settings.loading || settings.saving}
-                                  >
-                                    {customModelValue ? (
-                                      <option value={customModelValue}>{customModelValue} (custom)</option>
-                                    ) : null}
-                                    {providerModelOptions.map((modelId) => (
-                                      <option key={modelId} value={modelId}>
-                                        {modelId}
-                                      </option>
-                                    ))}
-                                  </select>
-                                )}
-                                {settings.provider === "ollama" && settings.ollamaModelsError ? (
-                                  <span style={{ fontSize: "10px", color: "var(--ide-danger)", marginTop: "2px" }}>
-                                    {settings.ollamaModelsError}
-                                  </span>
-                                ) : null}
-                              </div>
-
-                              {/* Reasoning effort — only for claude/openai */}
-                              {(settings.provider === "claude" || settings.provider === "openai") ? (
-                                <div className="field">
-                                  <label>Reasoning Effort</label>
-                                  <select
-                                    value={settings.reasoningEffort}
-                                    onChange={(e) =>
-                                      settings.setReasoningEffort(
-                                        e.target.value as "low" | "medium" | "high"
-                                      )
-                                    }
-                                    disabled={settings.loading || settings.saving}
-                                  >
-                                    <option value="low">low</option>
-                                    <option value="medium">medium</option>
-                                    <option value="high">high</option>
-                                  </select>
-                                </div>
-                              ) : null}
-                            </div>
-                            <div className="actions" style={{ marginTop: "8px" }}>
-                              <button
-                                className="primary"
-                                onClick={() => void handleSaveSettings()}
-                                disabled={settings.loading || settings.saving}
-                                style={{ fontSize: "11px" }}
-                              >
-                                {settings.saving ? "Saving..." : "Save"}
-                              </button>
-                            </div>
-                          </div>
-                        ) : !hasAnyApiKey ? (
-                          <div className="chat-settings-panel chat-settings-welcome-strip">
-                            <span>No API key configured.</span>
-                            <button
-                              className="secondary"
-                              onClick={() => setSettingsOpen(true)}
-                              style={{ fontSize: "11px" }}
-                            >
-                              Open Settings
-                            </button>
-                          </div>
-                        ) : null}
-
-                        <div className="chat-shell" ref={chatShellRef}>
-                          <div className="chat-history" ref={chat.chatHistoryRef}>
-                            {!hasAnyApiKey && chat.messages.length === 0 ? (
-                              renderChatWelcome()
-                            ) : chat.messages.length === 0 ? (
-                              <div className="chat-placeholder">Send a prompt to start chat.</div>
-                            ) : (
-                              chat.messages.map((message) => (
-                                <div className={`chat-message ${message.role}`} key={message.id}>
-                                  <ChatMessageContent message={message} />
-                                  {message.role === "assistant" && (message.toolCalls?.length ?? 0) > 0 ? (
-                                    <div className="tool-calls">
-                                      {message.toolCalls?.map((toolCall) => (
-                                        <ToolCallCard key={toolCall.id} call={toolCall} />
-                                      ))}
-                                    </div>
-                                  ) : null}
-                                  {message.role === "assistant" && (message.changeCount ?? 0) > 0 ? (
-                                    <div className="chat-change-summary">
-                                      [Applied {message.changeCount} file change{message.changeCount === 1 ? "" : "s"}]
-                                      {message.canViewDiff ? (
-                                        <button className="secondary" onClick={() => editor.openLatestDiff()}>
-                                          View Diff
-                                        </button>
-                                      ) : null}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ))
-                            )}
-                          </div>
-
-                          <div
-                            className={`chat-pane-splitter ${chatPaneCollapsed ? "collapsed" : ""}`}
-                            role="separator"
-                            aria-label="Resize chat composer"
-                            aria-orientation="horizontal"
-                            onMouseDown={beginChatPaneResize}
-                            title="Drag to resize composer"
-                          />
-
-                          {chatPaneCollapsed ? (
-                            <div className="chat-pane-collapsed">
-                              <button
-                                className="secondary"
-                                onClick={() => setChatPaneCollapsed(false)}
-                                style={{ fontSize: "11px" }}
-                              >
-                                Expand composer
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="chat-bottom-panel" style={{ height: `${chatPaneHeight}px` }}>
-                              {chat.streaming ? (
-                                <div className="chat-stream-status">
-                                  <span className="chat-stream-dot" />
-                                  <span>{chat.streamStatus ?? "Working..."}</span>
-                                </div>
-                              ) : null}
-
-                              {chat.error ? (
-                                <div className="status err">
-                                  {chat.error}
-                                  {!chat.streaming && chat.lastPrompt ? (
-                                    <button
-                                      className="secondary"
-                                      style={{ marginLeft: "8px" }}
-                                      onClick={() => void chat.send({ textOverride: chat.lastPrompt })}
-                                      disabled={!hasAnyApiKey}
-                                    >
-                                      Retry
-                                    </button>
-                                  ) : null}
-                                </div>
-                              ) : null}
-
-                              <div className="chat-input-row">
-                                <textarea
-                                  value={chat.input}
-                                  placeholder={
-                                    hasAnyApiKey
-                                      ? "Type a message... (Enter to send, Shift+Enter for newline)"
-                                      : "Add an API key in LLM Settings to enable chat"
-                                  }
-                                  onChange={(e) => chat.setInput(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" && !e.shiftKey && hasAnyApiKey) {
-                                      e.preventDefault();
-                                      void chat.send();
-                                    }
-                                  }}
-                                  disabled={chat.streaming || settings.loading || settings.saving || !hasAnyApiKey}
-                                />
-                                <button
-                                  className="primary"
-                                  onClick={() => void chat.send()}
-                                  disabled={
-                                    !hasAnyApiKey ||
-                                    chat.streaming ||
-                                    settings.loading ||
-                                    settings.saving ||
-                                    chat.input.trim().length === 0
-                                  }
-                                >
-                                  {chat.streaming ? "Sending..." : "Send"}
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="editor-toolbar">
-                          <div className="editor-path">Console</div>
+                      </div>
+                      <DiffViewer diffText={editor.activeDiffTab.diffText} />
+                    </>
+                  ) : editor.activeChatTab ? (
+                    <>
+                      <div className="editor-toolbar">
+                        <div className="editor-path">LLM Chat</div>
+                        <div className="actions" style={{ marginTop: 0 }}>
+                          <span className="chat-meta">
+                            {chat.streaming
+                              ? chat.streamStatus ?? "Streaming..."
+                              : `${chat.messages.length} msg${chat.messages.length === 1 ? "" : "s"}`}
+                          </span>
                           <button
                             className="secondary"
-                            onClick={() => console_.clear()}
-                            disabled={console_.lines.length === 0}
+                            onClick={() => chat.clear()}
+                            disabled={chat.messages.length === 0 && !chat.streaming}
+                            style={{ fontSize: "11px" }}
                           >
                             Clear
                           </button>
+                          {chat.streaming ? (
+                            <button className="secondary" onClick={() => chat.abort()} style={{ fontSize: "11px" }}>
+                              Stop
+                            </button>
+                          ) : null}
+                          <button
+                            className="secondary"
+                            onClick={() => setChatPaneCollapsed((v) => !v)}
+                            style={{ fontSize: "11px" }}
+                            title={chatPaneCollapsed ? "Expand composer" : "Collapse composer"}
+                          >
+                            {chatPaneCollapsed ? "Expand" : "Collapse"}
+                          </button>
+                          <button
+                            className={`chat-gear-btn ${settingsOpen ? "active" : ""}`}
+                            onClick={() => setSettingsOpen((v) => !v)}
+                            title="LLM Settings"
+                          >
+                            ⚙
+                          </button>
                         </div>
-                        <pre className="console-pre">
-                          {renderConsoleOutput("Waiting for code dev-server output...")}
-                        </pre>
-                      </>
-                    )}
-                  </div>
-                ) : null}
+                      </div>
 
-                {workspaceMode === "llm-code-preview" ? (
-                  <div
-                    className="pane-splitter pane-splitter-vertical pane-splitter-main"
-                    role="separator"
-                    aria-label="Resize preview"
-                    aria-orientation="vertical"
-                    onMouseDown={beginPreviewResize}
-                    title="Drag to resize preview"
-                  />
-                ) : null}
+                      {settingsOpen ? (
+                        <div className="chat-settings-panel">
+                          <div className="chat-settings-grid" style={{ gridTemplateColumns: "1fr" }}>
+                            <div className="field">
+                              <label>Provider</label>
+                              <select
+                                value={settings.provider}
+                                onChange={(e) => {
+                                  settings.handleProviderSelect(e);
+                                  if (e.target.value === "ollama") {
+                                    void settings.fetchOllamaModels();
+                                  }
+                                }}
+                                disabled={settings.loading || settings.saving}
+                              >
+                                <option value="claude">claude</option>
+                                <option value="openai">openai</option>
+                                <option value="openrouter">openrouter</option>
+                                <option value="ollama">ollama</option>
+                              </select>
+                            </div>
 
-                {/* Preview panel */}
-                <div className="preview-panel">
-                  <div className="preview-toolbar">
-                    <span>Live Preview</span>
-                    <span>
-                      {awaitingPreviewReady
-                        ? "Starting..."
-                        : devServer.status.running && devServer.status.port !== null
-                        ? `localhost:${devServer.status.port}`
-                        : "Dev server stopped"}
-                    </span>
-                  </div>
-                  {previewUrl ? (
-                    <div className="preview-frame-wrap">
-                      <iframe
-                        key={previewFrameKey}
-                        ref={previewFrameRef}
-                        className="preview-frame"
-                        src={previewUrl}
-                        title="Live project preview"
-                      />
-                    </div>
+                            {/* API key / port — provider-specific */}
+                            {settings.provider === "claude" ? (
+                              <div className="field">
+                                <label>Claude API Key</label>
+                                <input
+                                  type="password"
+                                  value={settings.claudeApiKey}
+                                  onChange={(e) => settings.setClaudeApiKey(e.target.value)}
+                                  placeholder="sk-ant-..."
+                                  disabled={settings.loading || settings.saving}
+                                />
+                              </div>
+                            ) : settings.provider === "openai" ? (
+                              <div className="field">
+                                <label>OpenAI API Key</label>
+                                <input
+                                  type="password"
+                                  value={settings.openaiApiKey}
+                                  onChange={(e) => settings.setOpenaiApiKey(e.target.value)}
+                                  placeholder="sk-..."
+                                  disabled={settings.loading || settings.saving}
+                                />
+                              </div>
+                            ) : settings.provider === "openrouter" ? (
+                              <div className="field">
+                                <label>OpenRouter API Key</label>
+                                <input
+                                  type="password"
+                                  value={settings.openrouterApiKey}
+                                  onChange={(e) => settings.setOpenrouterApiKey(e.target.value)}
+                                  placeholder="sk-or-..."
+                                  disabled={settings.loading || settings.saving}
+                                />
+                              </div>
+                            ) : (
+                              <div className="field">
+                                <label>Ollama Port</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={65535}
+                                  value={settings.ollamaPort}
+                                  onChange={(e) =>
+                                    settings.setOllamaPort(
+                                      Math.max(1, Math.min(65535, Number(e.target.value) || 11434))
+                                    )
+                                  }
+                                  disabled={settings.loading || settings.saving}
+                                />
+                              </div>
+                            )}
+
+                            {/* Model — dropdown for claude/openai, text input for openrouter, fetched dropdown for ollama */}
+                            <div className="field">
+                              <label>Model</label>
+                              {settings.provider === "openrouter" ? (
+                                <input
+                                  type="text"
+                                  value={settings.model}
+                                  onChange={(e) => settings.setModel(e.target.value)}
+                                  placeholder="e.g. anthropic/claude-sonnet-4-5, openai/gpt-4o"
+                                  disabled={settings.loading || settings.saving}
+                                />
+                              ) : settings.provider === "ollama" ? (
+                                <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                                  <select
+                                    value={selectedModelValue}
+                                    onChange={(e) => settings.setModel(e.target.value)}
+                                    disabled={settings.loading || settings.saving || settings.ollamaModelsLoading}
+                                    style={{ flex: 1 }}
+                                  >
+                                    {settings.ollamaModels.length === 0 && !settings.ollamaModelsLoading ? (
+                                      <option value={selectedModelValue}>{selectedModelValue || "(no models)"}</option>
+                                    ) : null}
+                                    {settings.ollamaModels.map((m) => (
+                                      <option key={m} value={m}>{m}</option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    className="secondary"
+                                    onClick={() => void settings.fetchOllamaModels()}
+                                    disabled={settings.ollamaModelsLoading}
+                                    title="Refresh models from Ollama"
+                                    style={{ fontSize: "11px", padding: "0 6px", height: "28px", flexShrink: 0 }}
+                                  >
+                                    {settings.ollamaModelsLoading ? "..." : "↻"}
+                                  </button>
+                                </div>
+                              ) : (
+                                <select
+                                  value={selectedModelValue}
+                                  onChange={(e) => settings.setModel(e.target.value)}
+                                  disabled={settings.loading || settings.saving}
+                                >
+                                  {customModelValue ? (
+                                    <option value={customModelValue}>{customModelValue} (custom)</option>
+                                  ) : null}
+                                  {providerModelOptions.map((modelId) => (
+                                    <option key={modelId} value={modelId}>
+                                      {modelId}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                              {settings.provider === "ollama" && settings.ollamaModelsError ? (
+                                <span style={{ fontSize: "10px", color: "var(--ide-danger)", marginTop: "2px" }}>
+                                  {settings.ollamaModelsError}
+                                </span>
+                              ) : null}
+                            </div>
+
+                            {/* Reasoning effort — only for claude/openai */}
+                            {(settings.provider === "claude" || settings.provider === "openai") ? (
+                              <div className="field">
+                                <label>Reasoning Effort</label>
+                                <select
+                                  value={settings.reasoningEffort}
+                                  onChange={(e) =>
+                                    settings.setReasoningEffort(
+                                      e.target.value as "low" | "medium" | "high"
+                                    )
+                                  }
+                                  disabled={settings.loading || settings.saving}
+                                >
+                                  <option value="low">low</option>
+                                  <option value="medium">medium</option>
+                                  <option value="high">high</option>
+                                </select>
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="actions" style={{ marginTop: "8px" }}>
+                            <button
+                              className="primary"
+                              onClick={() => void handleSaveSettings()}
+                              disabled={settings.loading || settings.saving}
+                              style={{ fontSize: "11px" }}
+                            >
+                              {settings.saving ? "Saving..." : "Save"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : !hasAnyApiKey ? (
+                        <div className="chat-settings-panel chat-settings-welcome-strip">
+                          <span>No API key configured.</span>
+                          <button
+                            className="secondary"
+                            onClick={() => setSettingsOpen(true)}
+                            style={{ fontSize: "11px" }}
+                          >
+                            Open Settings
+                          </button>
+                        </div>
+                      ) : null}
+
+                      <div className="chat-shell" ref={chatShellRef}>
+                        <div className="chat-history" ref={chat.chatHistoryRef}>
+                          {!hasAnyApiKey && chat.messages.length === 0 ? (
+                            renderChatWelcome()
+                          ) : chat.messages.length === 0 ? (
+                            <div className="chat-placeholder">Send a prompt to start chat.</div>
+                          ) : (
+                            chat.messages.map((message) => (
+                              <div className={`chat-message ${message.role}`} key={message.id}>
+                                <ChatMessageContent message={message} />
+                                {message.role === "assistant" && (message.toolCalls?.length ?? 0) > 0 ? (
+                                  <div className="tool-calls">
+                                    {message.toolCalls?.map((toolCall) => (
+                                      <ToolCallCard key={toolCall.id} call={toolCall} />
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {message.role === "assistant" && (message.changeCount ?? 0) > 0 ? (
+                                  <div className="chat-change-summary">
+                                    [Applied {message.changeCount} file change{message.changeCount === 1 ? "" : "s"}]
+                                    {message.canViewDiff ? (
+                                      <button className="secondary" onClick={() => editor.openLatestDiff()}>
+                                        View Diff
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ))
+                          )}
+                        </div>
+
+                        <div
+                          className={`chat-pane-splitter ${chatPaneCollapsed ? "collapsed" : ""}`}
+                          role="separator"
+                          aria-label="Resize chat composer"
+                          aria-orientation="horizontal"
+                          onMouseDown={beginChatPaneResize}
+                          title="Drag to resize composer"
+                        />
+
+                        {chatPaneCollapsed ? (
+                          <div className="chat-pane-collapsed">
+                            <button
+                              className="secondary"
+                              onClick={() => setChatPaneCollapsed(false)}
+                              style={{ fontSize: "11px" }}
+                            >
+                              Expand composer
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="chat-bottom-panel" style={{ height: `${chatPaneHeight}px` }}>
+                            {chat.streaming ? (
+                              <div className="chat-stream-status">
+                                <span className="chat-stream-dot" />
+                                <span>{chat.streamStatus ?? "Working..."}</span>
+                              </div>
+                            ) : null}
+
+                            {chat.error ? (
+                              <div className="status err">
+                                {chat.error}
+                                {!chat.streaming && chat.lastPrompt ? (
+                                  <button
+                                    className="secondary"
+                                    style={{ marginLeft: "8px" }}
+                                    onClick={() => void chat.send({ textOverride: chat.lastPrompt })}
+                                    disabled={!hasAnyApiKey}
+                                  >
+                                    Retry
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            <div className="chat-input-row">
+                              <textarea
+                                value={chat.input}
+                                placeholder={
+                                  hasAnyApiKey
+                                    ? "Type a message... (Enter to send, Shift+Enter for newline)"
+                                    : "Add an API key in LLM Settings to enable chat"
+                                }
+                                onChange={(e) => chat.setInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !e.shiftKey && hasAnyApiKey) {
+                                    e.preventDefault();
+                                    void chat.send();
+                                  }
+                                }}
+                                disabled={chat.streaming || settings.loading || settings.saving || !hasAnyApiKey}
+                              />
+                              <button
+                                className="primary"
+                                onClick={() => void chat.send()}
+                                disabled={
+                                  !hasAnyApiKey ||
+                                  chat.streaming ||
+                                  settings.loading ||
+                                  settings.saving ||
+                                  chat.input.trim().length === 0
+                                }
+                              >
+                                {chat.streaming ? "Sending..." : "Send"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
                   ) : (
-                    <div className="preview-fallback">
-                      {awaitingPreviewReady || (devServer.status.running && devServer.status.port !== null)
-                        ? "Starting dev server. Preview will load when ready."
-                        : "Dev server is stopped. Start the server to show a live preview."}
-                    </div>
+                    <>
+                      <div className="editor-toolbar">
+                        <div className="editor-path">Console</div>
+                        <button
+                          className="secondary"
+                          onClick={() => console_.clear()}
+                          disabled={console_.lines.length === 0}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      <pre className="console-pre">
+                        {renderConsoleOutput("Waiting for code dev-server output...")}
+                      </pre>
+                    </>
                   )}
                 </div>
+              ) : null}
+
+              {workspaceMode === "llm-code-preview" ? (
+                <div
+                  className="pane-splitter pane-splitter-vertical pane-splitter-main"
+                  role="separator"
+                  aria-label="Resize preview"
+                  aria-orientation="vertical"
+                  onMouseDown={beginPreviewResize}
+                  title="Drag to resize preview"
+                />
+              ) : null}
+
+              {/* Preview panel */}
+              <div className="preview-panel">
+                <div className="preview-toolbar">
+                  <span>Live Preview</span>
+                  <span>
+                    {awaitingPreviewReady
+                      ? "Starting..."
+                      : devServer.status.running && devServer.status.port !== null
+                        ? `localhost:${devServer.status.port}`
+                        : "Dev server stopped"}
+                  </span>
+                </div>
+                {previewUrl ? (
+                  <div className="preview-frame-wrap">
+                    <iframe
+                      key={previewFrameKey}
+                      ref={previewFrameRef}
+                      className="preview-frame"
+                      src={previewUrl}
+                      title="Live project preview"
+                    />
+                  </div>
+                ) : (
+                  <div className="preview-fallback">
+                    {awaitingPreviewReady || (devServer.status.running && devServer.status.port !== null)
+                      ? "Starting dev server. Preview will load when ready."
+                      : "Dev server is stopped. Start the server to show a live preview."}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
