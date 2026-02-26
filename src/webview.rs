@@ -299,7 +299,7 @@ pub fn build_app_webview(
                 .wallet
                 .lock()
                 .expect("poisoned wallet lock while emitting initial account state");
-            if ws.authorized {
+            if ws.authorized && state.get_wallet_backend().is_some() {
                 if let Some(addr) = addr {
                     emit_accounts_changed(&webview, vec![addr]);
                 }

@@ -14,7 +14,7 @@ use sysinfo::{Pid, Signal, System};
 
 use crate::code::settings as code_settings;
 use crate::rpc_manager::{RpcEndpoint, RpcEndpointManager, DEFAULT_MAX_CONCURRENT_RPC};
-use crate::state::{AppState, RunningCodeAnvil, UserEvent, WalletBackend};
+use crate::state::{AppState, RunningCodeAnvil, UserEvent};
 
 const DEFAULT_ANVIL_HOST: &str = "127.0.0.1";
 const DEFAULT_ANVIL_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -248,13 +248,6 @@ fn apply_runtime_for_anvil(state: &AppState, port: u16, chain_id: u64) -> Result
         *s = Some(signer.clone());
     }
     {
-        let mut wb = state
-            .wallet_backend
-            .lock()
-            .map_err(|_| anyhow!("poisoned lock: wallet_backend"))?;
-        *wb = Some(WalletBackend::Local);
-    }
-    {
         let mut wc = state
             .walletconnect
             .lock()
@@ -309,9 +302,6 @@ fn apply_runtime_for_anvil(state: &AppState, port: u16, chain_id: u64) -> Result
 fn restore_runtime_after_anvil(state: &AppState) {
     if let Ok(mut signer) = state.signer.lock() {
         *signer = None;
-    }
-    if let Ok(mut wb) = state.wallet_backend.lock() {
-        *wb = None;
     }
     if let Ok(mut wc) = state.walletconnect.lock() {
         *wc = None;

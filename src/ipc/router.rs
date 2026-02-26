@@ -121,15 +121,14 @@ pub fn handle_ipc(
         return Ok(());
     }
 
-    let backend = state.get_wallet_backend();
-
     let is_connect_request = matches!(
         req.method.as_str(),
         "eth_requestAccounts" | "wallet_requestPermissions"
     );
 
-    // Code preview connect should only ever use the local Anvil wallet, never the selector.
-    if is_code_surface && is_connect_request && backend != Some(WalletBackend::Local) {
+    // Code preview is isolated from the global wallet backend and always routes
+    // through the local provider path when a local signer is available.
+    if is_code_surface && is_connect_request && state.local_signer().is_none() {
         return respond_option_result(
             webview,
             req.id,
@@ -138,6 +137,15 @@ pub fn handle_ipc(
             )),
         );
     }
+    if is_code_surface {
+        return respond_option_result(
+            webview,
+            req.id,
+            local::handle_local_ipc(webview, state, webview_id, &req),
+        );
+    }
+
+    let backend = state.get_wallet_backend();
 
     // If no wallet backend is chosen yet and the dapp calls eth_requestAccounts,
     // open the wallet selector tab and park the request (non-Code surfaces only).
