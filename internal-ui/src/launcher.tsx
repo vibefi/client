@@ -198,7 +198,7 @@ function App() {
     });
     addLog(`Launching ${selectedItem.name || ""} ${selectedItem.version || ""} (${selectedItem.rootCid})`);
     try {
-      await vibefiRequest("vibefi_launchDapp", [selectedItem.rootCid, selectedItem.name || selectedItem.rootCid]);
+      await vibefiRequest("vibefi_launchDapp", [selectedItem.rootCid, selectedItem.name || selectedItem.rootCid, selectedItem.dappId || ""]);
       addLog("Launch request sent.");
     } catch (err) {
       addLog(`Error: ${asErrorMessage(err)}`);

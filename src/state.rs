@@ -70,6 +70,9 @@ pub enum UserEvent {
     },
     CloseWalletSelector,
     TabAction(TabAction),
+    ProposalDraft {
+        draft: serde_json::Value,
+    },
     AutomationCommand {
         id: String,
         cmd_type: String,
@@ -84,6 +87,7 @@ pub enum TabAction {
         name: String,
         dist_dir: PathBuf,
         source_dir: Option<PathBuf>,
+        dapp_id: Option<String>,
     },
 }
 

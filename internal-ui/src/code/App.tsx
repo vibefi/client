@@ -34,6 +34,7 @@ import { useConsole } from "./hooks/useConsole";
 import { useSettings } from "./hooks/useSettings";
 import { useAnvil } from "./hooks/useAnvil";
 import { useDevServer } from "./hooks/useDevServer";
+import { usePublish } from "./hooks/usePublish";
 import { useProject } from "./hooks/useProject";
 import { useEditor } from "./hooks/useEditor";
 import { useChat } from "./hooks/useChat";
@@ -153,6 +154,7 @@ export default function App() {
   const editor = useEditor(client, project.activeProjectPath, console_);
   const anvil = useAnvil(client, console_);
   const devServer = useDevServer(client, console_);
+  const publish = usePublish(client, console_);
   const chat = useChat(client, settings, project, editor, console_);
 
   // ── Quick-open filtered list ────────────────────────────────────────────
@@ -219,6 +221,7 @@ export default function App() {
         anvil.loadStatus({ silent: true }),
         devServer.loadStatus({ silent: true }),
         settings.load({ silent: true }),
+        publish.loadIpfsConfig({ silent: true }),
       ]);
       if (projectsResult.error) setError(projectsResult.error);
       await handleOpenProject(undefined, { silentIfNoRememberedProject: true, restore: true });
@@ -546,6 +549,37 @@ export default function App() {
         return;
       }
 
+      if (payload.event === "codePublishProgress") {
+        const value = payload.value;
+        if (!isRecord(value)) return;
+        publish.setProgress({
+          stage: typeof value.stage === "string" ? value.stage : "",
+          percent: typeof value.percent === "number" ? value.percent : 0,
+          message: typeof value.message === "string" ? value.message : "",
+        });
+        return;
+      }
+
+      if (payload.event === "codePublishComplete") {
+        const value = payload.value;
+        const rootCid = isRecord(value) && typeof value.rootCid === "string" ? value.rootCid : null;
+        publish.setProgress(null);
+        if (rootCid) {
+          publish.setLastRootCid(rootCid);
+          setStatus(`Published to IPFS: ${rootCid}`);
+        }
+        return;
+      }
+
+      if (payload.event === "codePublishError") {
+        const value = payload.value;
+        const message = isRecord(value) && typeof value.message === "string" ? value.message : "Publish failed";
+        publish.setProgress(null);
+        publish.setLastError(message);
+        setError(message);
+        return;
+      }
+
       if (
         payload.event === "accountsChanged" ||
         payload.event === "chainChanged" ||
@@ -698,6 +732,21 @@ export default function App() {
   async function handleSaveAnvilConfig() {
     await anvil.saveConfig(anvil.config);
     void anvil.loadStatus({ silent: true });
+  }
+
+  async function handleSaveIpfsConfig() {
+    const result = await publish.saveIpfsConfig(publish.ipfsConfig);
+    if (result.error) setError(result.error);
+    if (result.status) setStatus(result.status);
+  }
+
+  async function handleProposeUpgrade() {
+    if (!project.activeProjectPath) return;
+    setError(null);
+    setStatus(null);
+    const result = await publish.proposeUpgrade(project.activeProjectPath);
+    if (result.error) setError(result.error);
+    if (result.status) setStatus(result.status);
   }
 
   async function handleSaveActiveTab() {
@@ -1438,6 +1487,118 @@ export default function App() {
       );
     }
 
+    if (activeSidebarPanel === "publish") {
+      const busy = publish.publishing || publish.savingConfig;
+      return (
+        <>
+          <div className="section-head">
+            <span className="sidebar-section-label">Publish</span>
+          </div>
+          <div className="sidebar-scroll">
+            {/* Publish progress */}
+            {publish.publishing && publish.progress ? (
+              <div style={{ marginBottom: "12px" }}>
+                <div className="project-path" style={{ marginBottom: "4px" }}>
+                  {publish.progress.message || publish.progress.stage}
+                </div>
+                <div style={{
+                  height: "4px",
+                  background: "var(--bg-secondary, #1e1e2e)",
+                  borderRadius: "2px",
+                  overflow: "hidden",
+                }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${Math.min(100, Math.max(0, publish.progress.percent))}%`,
+                    background: "var(--accent, #4fd1c5)",
+                    borderRadius: "2px",
+                    transition: "width 0.3s ease",
+                  }} />
+                </div>
+              </div>
+            ) : publish.publishing ? (
+              <div className="project-path" style={{ marginBottom: "12px" }}>
+                Starting publish pipeline...
+              </div>
+            ) : null}
+
+            {/* Last result */}
+            {publish.lastRootCid && !publish.publishing ? (
+              <div className="project-path" style={{ marginBottom: "12px", color: "#4ade80" }}>
+                Last published: {publish.lastRootCid}
+              </div>
+            ) : null}
+            {publish.lastError && !publish.publishing ? (
+              <div className="project-path" style={{ marginBottom: "12px", color: "#f87171" }}>
+                Error: {publish.lastError}
+              </div>
+            ) : null}
+
+            {/* Propose Upgrade button */}
+            <div className="proj-input-row" style={{ marginBottom: "16px" }}>
+              <button
+                className="primary"
+                style={{ width: "100%" }}
+                onClick={() => void handleProposeUpgrade()}
+                disabled={!project.activeProjectPath || busy}
+              >
+                {publish.publishing ? "Publishing..." : "Propose Upgrade"}
+              </button>
+            </div>
+
+            {/* IPFS pin config */}
+            <div className="proj-action-block">
+              <label className="project-path" style={{ display: "block", marginBottom: "4px", fontWeight: 600 }}>
+                IPFS Pin Service
+              </label>
+              <label className="project-path" style={{ display: "block", marginBottom: "4px" }}>
+                Endpoint URL
+              </label>
+              <div className="proj-input-row">
+                <input
+                  value={publish.ipfsConfig.endpoint}
+                  placeholder="http://127.0.0.1:5001"
+                  onChange={(e) => publish.setIpfsConfig({ ...publish.ipfsConfig, endpoint: e.target.value })}
+                  disabled={busy}
+                />
+              </div>
+              <label className="project-path" style={{ display: "block", marginBottom: "4px", marginTop: "8px" }}>
+                API Key (for remote services)
+              </label>
+              <div className="proj-input-row">
+                <input
+                  type="password"
+                  value={publish.ipfsConfig.apiKey ?? ""}
+                  placeholder="Optional — for 4everland, Pinata, etc."
+                  onChange={(e) => publish.setIpfsConfig({
+                    ...publish.ipfsConfig,
+                    apiKey: e.target.value.trim() || null,
+                  })}
+                  disabled={busy}
+                />
+              </div>
+              <div className="proj-input-row" style={{ marginTop: "8px" }}>
+                <button
+                  className="primary"
+                  onClick={() => void handleSaveIpfsConfig()}
+                  disabled={busy}
+                >
+                  {publish.savingConfig ? "..." : "Save Config"}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => publish.loadIpfsConfig().then((r) => { if (r.error) setError(r.error); })}
+                  disabled={busy}
+                >
+                  Reload
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      );
+    }
+
     // console panel
     return (
       <>
@@ -1465,6 +1626,14 @@ export default function App() {
               <h1 className="page-title">VibeFi Code</h1>
             </div>
             <div className="ide-topbar-actions">
+              <button
+                className="primary"
+                onClick={() => void handleProposeUpgrade()}
+                disabled={!project.activeProjectPath || publish.publishing}
+                title="Validate, package, upload to IPFS, and open upgrade proposal in Studio"
+              >
+                {publish.publishing ? "Publishing..." : "Propose Upgrade"}
+              </button>
               <div className="mode-toggle">
                 <button
                   className={workspaceMode === "llm-preview" ? "active" : ""}
@@ -1511,6 +1680,12 @@ export default function App() {
                   onClick={() => setActiveSidebarPanel("anvil")}
                 >
                   Anvil
+                </button>
+                <button
+                  className={`sidebar-tab ${activeSidebarPanel === "publish" ? "active" : ""}`}
+                  onClick={() => setActiveSidebarPanel("publish")}
+                >
+                  Publish
                 </button>
                 {workspaceMode === "llm-preview" ? (
                   <button

@@ -66,6 +66,7 @@ pub struct AppWebViewEntry {
     pub label: String,
     pub kind: AppWebViewKind,
     pub source_dir: Option<PathBuf>,
+    pub dapp_id: Option<String>,
     pub selectable: bool,
     pub loading: bool,
 }
@@ -248,6 +249,7 @@ impl WebViewManager {
                     "clickable": e.selectable,
                     "loading": e.loading,
                     "forkable": has_code_tab && e.kind == AppWebViewKind::Standard && e.source_dir.is_some(),
+                    "dappId": e.dapp_id,
                 })
             })
             .collect();

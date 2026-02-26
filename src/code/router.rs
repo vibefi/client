@@ -8,7 +8,7 @@ use crate::ipc_contract::IpcRequest;
 use crate::state::{AppState, UserEvent};
 use crate::webview_manager::{AppWebViewKind, WebViewManager};
 
-use super::{anvil, dev_server, filesystem, project, settings, validator};
+use super::{anvil, dev_server, filesystem, project, publish, settings, validator};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +107,13 @@ struct ForkDappParams {
     webview_id: String,
     #[serde(default)]
     name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposeUpgradeParams {
+    #[serde(default, alias = "path")]
+    project_path: Option<String>,
 }
 
 pub fn handle_code_ipc(
@@ -312,6 +319,19 @@ pub fn handle_code_ipc(
             settings::save_settings(&workspace_root, &code_settings)?;
             Ok(Some(serde_json::to_value(code_settings.anvil)?))
         }
+        "code_getIpfsPinConfig" => {
+            let workspace_root = resolve_workspace_root(state)?;
+            let code_settings = settings::load_settings(&workspace_root);
+            Ok(Some(serde_json::to_value(code_settings.ipfs_pin)?))
+        }
+        "code_setIpfsPinConfig" => {
+            let workspace_root = resolve_workspace_root(state)?;
+            let params: settings::IpfsPinConfig = parse_params(req)?;
+            let mut code_settings = settings::load_settings(&workspace_root);
+            code_settings.ipfs_pin = params.normalized();
+            settings::save_settings(&workspace_root, &code_settings)?;
+            Ok(Some(serde_json::to_value(code_settings.ipfs_pin)?))
+        }
         "code_forkDapp" => {
             let params: ForkDappParams = parse_params(req)?;
             let target_webview_id = params.webview_id.trim();
@@ -332,11 +352,18 @@ pub fn handle_code_ipc(
                 .source_dir
                 .as_ref()
                 .ok_or_else(|| anyhow!("Source not available for this dapp"))?;
+            let source_dapp_id = source_entry.dapp_id.clone();
+            let source_label = source_entry.label.clone();
             let workspace_root = resolve_workspace_root(state)?;
+            let fork_origin = source_dapp_id.map(|id| project::ForkOrigin {
+                dapp_id: id,
+                name: source_label,
+            });
             let forked_project = project::fork_project_from_source(
                 &workspace_root,
                 source_dir,
                 params.name.as_deref().or(Some(source_entry.label.as_str())),
+                fork_origin,
             )?;
             if let Err(error) = project::ensure_preview_console_bridge(&forked_project) {
                 tracing::warn!(
@@ -359,6 +386,77 @@ pub fn handle_code_ipc(
             });
 
             Ok(Some(json!({ "projectPath": forked_project_path })))
+        }
+        "code_proposeUpgrade" => {
+            let params: ProposeUpgradeParams = parse_params_or_default(req)?;
+            let project_root = resolve_dev_server_project_root(state, params.project_path)?;
+            let workspace_root = resolve_workspace_root(state)?;
+            let ipfs_pin = settings::load_settings(&workspace_root).ipfs_pin;
+
+            let state_clone = state.clone();
+            let webview_id = webview_id.to_string();
+            let ipc_id = req.id;
+
+            std::thread::spawn(move || {
+                let result = (|| -> Result<serde_json::Value> {
+                    let mut emit = |stage: &str, percent: u8, message: &str| {
+                        let _ = state_clone.proxy.send_event(UserEvent::ProviderEvent {
+                            webview_id: webview_id.clone(),
+                            event: "codePublishProgress".to_string(),
+                            value: json!({
+                                "stage": stage,
+                                "percent": percent,
+                                "message": message,
+                            }),
+                        });
+                    };
+
+                    let result =
+                        publish::package_and_upload(&project_root, &ipfs_pin, &mut emit)?;
+
+                    // Send draft to Studio via ProposalDraft event
+                    let draft = json!({
+                        "dappId": result.dapp_id,
+                        "rootCid": result.root_cid,
+                        "name": result.name,
+                        "version": result.version,
+                        "description": result.description,
+                    });
+                    let _ = state_clone
+                        .proxy
+                        .send_event(UserEvent::ProposalDraft { draft: draft.clone() });
+
+                    // Also notify Code webview of completion
+                    let _ = state_clone.proxy.send_event(UserEvent::ProviderEvent {
+                        webview_id: webview_id.clone(),
+                        event: "codePublishComplete".to_string(),
+                        value: json!({ "rootCid": result.root_cid }),
+                    });
+
+                    Ok(json!({
+                        "rootCid": result.root_cid,
+                        "name": result.name,
+                        "version": result.version,
+                        "description": result.description,
+                        "dappId": result.dapp_id,
+                    }))
+                })()
+                .map_err(|e| {
+                    let message = e.to_string();
+                    let _ = state_clone.proxy.send_event(UserEvent::ProviderEvent {
+                        webview_id: webview_id.clone(),
+                        event: "codePublishError".to_string(),
+                        value: json!({ "message": message }),
+                    });
+                    message
+                });
+                let _ = state_clone.proxy.send_event(UserEvent::RpcResult {
+                    webview_id,
+                    ipc_id,
+                    result,
+                });
+            });
+            Ok(None)
         }
         _ => bail!("unsupported code method: {}", req.method),
     }

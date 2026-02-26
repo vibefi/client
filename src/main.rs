@@ -290,6 +290,25 @@ fn main() -> Result<()> {
             Event::UserEvent(UserEvent::CloseWalletSelector) => {
                 events::user_event::handle_close_wallet_selector(&state, &mut manager);
             }
+            Event::UserEvent(UserEvent::ProposalDraft { draft }) => {
+                // Send draft to Studio webview and switch to Studio tab
+                if let Some(studio_entry) = manager
+                    .apps
+                    .iter()
+                    .find(|e| e.kind == AppWebViewKind::Studio)
+                {
+                    ui_bridge::emit_provider_event(
+                        &studio_entry.webview,
+                        "proposalDraftReceived",
+                        draft,
+                    );
+                    if let Some(idx) = manager.index_of_kind(AppWebViewKind::Studio) {
+                        manager.switch_to(idx);
+                    }
+                } else {
+                    tracing::warn!("ProposalDraft received but Studio tab not found");
+                }
+            }
             Event::UserEvent(UserEvent::AutomationCommand {
                 id,
                 cmd_type,
@@ -393,6 +412,7 @@ fn main() -> Result<()> {
                                     label: "Studio".to_string(),
                                     kind: AppWebViewKind::Studio,
                                     source_dir: None,
+                                    dapp_id: None,
                                     selectable: true,
                                     loading: false,
                                 };
@@ -517,6 +537,7 @@ fn main() -> Result<()> {
                                     label: "App".to_string(),
                                     kind: AppWebViewKind::Standard,
                                     source_dir,
+                                    dapp_id: None,
                                     selectable: true,
                                     loading: false,
                                 });
@@ -555,6 +576,7 @@ fn main() -> Result<()> {
                             label: "Launcher".to_string(),
                             kind: AppWebViewKind::Launcher,
                             source_dir: None,
+                            dapp_id: None,
                             selectable: true,
                             loading: false,
                         });
@@ -590,6 +612,7 @@ fn main() -> Result<()> {
                             label: "Studio".to_string(),
                             kind: AppWebViewKind::Studio,
                             source_dir: None,
+                            dapp_id: None,
                             selectable: false,
                             loading: true,
                         });
@@ -621,6 +644,7 @@ fn main() -> Result<()> {
                             label: "Code".to_string(),
                             kind: AppWebViewKind::Code,
                             source_dir: None,
+                            dapp_id: None,
                             selectable: true,
                             loading: false,
                         });
@@ -682,6 +706,7 @@ fn main() -> Result<()> {
                                     label: "Code".to_string(),
                                     kind: AppWebViewKind::Code,
                                     source_dir: None,
+                                    dapp_id: None,
                                     selectable: true,
                                     loading: false,
                                 });

@@ -17,6 +17,10 @@ const fn default_anvil_chain_id() -> u64 {
     1
 }
 
+fn default_ipfs_pin_endpoint() -> String {
+    "http://127.0.0.1:5001".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeAnvilConfig {
@@ -61,9 +65,45 @@ impl CodeAnvilConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct IpfsPinConfig {
+    #[serde(default = "default_ipfs_pin_endpoint")]
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+impl Default for IpfsPinConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_ipfs_pin_endpoint(),
+            api_key: None,
+        }
+    }
+}
+
+impl IpfsPinConfig {
+    pub fn normalized(mut self) -> Self {
+        self.endpoint = self.endpoint.trim().to_string();
+        if self.endpoint.is_empty() {
+            self.endpoint = default_ipfs_pin_endpoint();
+        }
+        self.api_key = self
+            .api_key
+            .and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodeSettings {
     #[serde(default)]
     pub anvil: CodeAnvilConfig,
+    #[serde(default)]
+    pub ipfs_pin: IpfsPinConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_project_path: Option<String>,
 }
@@ -72,6 +112,7 @@ impl Default for CodeSettings {
     fn default() -> Self {
         Self {
             anvil: CodeAnvilConfig::default(),
+            ipfs_pin: IpfsPinConfig::default(),
             last_project_path: None,
         }
     }

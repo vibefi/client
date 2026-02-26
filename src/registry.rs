@@ -471,11 +471,17 @@ pub fn handle_launcher_ipc(
                 .and_then(|v| v.as_str())
                 .unwrap_or(&root_cid)
                 .to_string();
+            let dapp_id = req
+                .params
+                .get(2)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
             let state_clone = state.clone();
             let webview_id = webview_id.to_string();
             let ipc_id = req.id;
             std::thread::spawn(move || {
-                let result = launch_dapp(&state_clone, &webview_id, &root_cid, &name)
+                let result = launch_dapp(&state_clone, &webview_id, &root_cid, &name, dapp_id)
                     .map(|_| serde_json::Value::Bool(true))
                     .map_err(|e| e.to_string());
                 let _ = state_clone.proxy.send_event(UserEvent::RpcResult {
@@ -494,7 +500,13 @@ pub fn handle_launcher_ipc(
     }
 }
 
-fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -> Result<()> {
+fn launch_dapp(
+    state: &AppState,
+    webview_id: &str,
+    root_cid: &str,
+    name: &str,
+    dapp_id: Option<String>,
+) -> Result<()> {
     let dist_dir = prepare_dapp_dist(state, root_cid, Some(webview_id))?;
     let source_dir = dist_dir
         .parent()
@@ -506,6 +518,7 @@ fn launch_dapp(state: &AppState, webview_id: &str, root_cid: &str, name: &str) -
             name: name.to_string(),
             dist_dir,
             source_dir,
+            dapp_id,
         }));
     Ok(())
 }

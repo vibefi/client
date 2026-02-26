@@ -237,6 +237,7 @@ pub fn handle_open_wallet_selector(
             EmbeddedContent::WalletSelector,
             AppWebViewKind::WalletSelector,
             "Connect Wallet".to_string(),
+            None,
         ) {
             Ok(id) => {
                 if let Some(mut sel) =
@@ -355,6 +356,7 @@ pub fn handle_open_settings(
             EmbeddedContent::Settings,
             AppWebViewKind::Settings,
             "Settings".to_string(),
+            None,
         ) {
             Ok(id) => {
                 if let Some(mut sel) =
@@ -424,6 +426,7 @@ pub fn handle_tab_action(
             name,
             dist_dir,
             source_dir,
+            dapp_id,
         } => {
             if let Some(host) = host {
                 if let Err(e) = open_app_tab(
@@ -436,6 +439,7 @@ pub fn handle_tab_action(
                     EmbeddedContent::Default,
                     AppWebViewKind::Standard,
                     name,
+                    dapp_id,
                 ) {
                     tracing::error!(error = ?e, "failed to open app tab");
                 }
@@ -454,6 +458,7 @@ fn open_app_tab(
     embedded: EmbeddedContent,
     kind: AppWebViewKind,
     label: String,
+    dapp_id: Option<String>,
 ) -> anyhow::Result<String> {
     let size = host.window.inner_size();
     let id = manager.next_app_id();
@@ -493,6 +498,7 @@ fn open_app_tab(
         label,
         kind,
         source_dir: inferred_source_dir,
+        dapp_id,
         selectable: true,
         loading: false,
     });

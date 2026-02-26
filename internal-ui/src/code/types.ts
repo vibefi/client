@@ -92,4 +92,15 @@ export type ChatUiMessage = {
 
 export type WorkspaceMode = "llm-preview" | "llm-code-preview";
 
-export type SidebarPanelId = "projects" | "files" | "dev-server" | "anvil" | "console";
+export type IpfsPinConfig = {
+  endpoint: string;
+  apiKey: string | null;
+};
+
+export type PublishProgress = {
+  stage: string;
+  percent: number;
+  message: string;
+};
+
+export type SidebarPanelId = "projects" | "files" | "dev-server" | "anvil" | "publish" | "console";

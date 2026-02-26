@@ -515,10 +515,17 @@ pub fn resolve_open_project_path(workspace_root: &Path, requested_path: &str) ->
     Ok(project_root)
 }
 
+#[derive(Debug, Clone)]
+pub struct ForkOrigin {
+    pub dapp_id: String,
+    pub name: String,
+}
+
 pub fn fork_project_from_source(
     workspace_root: &Path,
     source_root: &Path,
     preferred_name: Option<&str>,
+    fork_origin: Option<ForkOrigin>,
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(workspace_root).with_context(|| {
         format!(
@@ -546,6 +553,9 @@ pub fn fork_project_from_source(
 
     if let Err(err) = (|| -> Result<()> {
         copy_source_tree(&source_root, &target_root)?;
+        if let Some(origin) = &fork_origin {
+            write_fork_origin(&target_root, origin)?;
+        }
         validate_project_root(&target_root)?;
         Ok(())
     })() {
@@ -559,6 +569,28 @@ pub fn fork_project_from_source(
             target_root.display()
         )
     })
+}
+
+fn write_fork_origin(project_root: &Path, origin: &ForkOrigin) -> Result<()> {
+    let manifest_path = project_root.join("manifest.json");
+    let mut manifest: serde_json::Value = if manifest_path.exists() {
+        let raw = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("read {}", manifest_path.display()))?;
+        serde_json::from_str(&raw)
+            .with_context(|| format!("parse {}", manifest_path.display()))?
+    } else {
+        serde_json::json!({})
+    };
+
+    manifest["forkOf"] = serde_json::json!({
+        "dappId": origin.dapp_id,
+        "name": origin.name,
+    });
+
+    let json = serde_json::to_string_pretty(&manifest).context("serialize manifest")?;
+    std::fs::write(&manifest_path, json)
+        .with_context(|| format!("write {}", manifest_path.display()))?;
+    Ok(())
 }
 
 pub fn validate_project_root(project_root: &Path) -> Result<()> {
