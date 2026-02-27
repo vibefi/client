@@ -21,6 +21,18 @@ fn default_ipfs_pin_endpoint() -> String {
     "http://127.0.0.1:5001".to_string()
 }
 
+fn default_protocol_relay_endpoint() -> String {
+    String::new()
+}
+
+fn default_four_everland_endpoint() -> String {
+    "https://api.4everland.dev".to_string()
+}
+
+fn default_pinata_endpoint() -> String {
+    "https://api.pinata.cloud".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeAnvilConfig {
@@ -47,12 +59,10 @@ impl Default for CodeAnvilConfig {
 
 impl CodeAnvilConfig {
     pub fn normalized(mut self) -> Self {
-        self.fork_url = self
-            .fork_url
-            .and_then(|value| {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            });
+        self.fork_url = self.fork_url.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
         if self.port == 0 {
             self.port = default_anvil_port();
         }
@@ -63,36 +73,183 @@ impl CodeAnvilConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum UploadProvider {
+    ProtocolRelay,
+    FourEverland,
+    Pinata,
+    LocalNode,
+}
+
+impl Default for UploadProvider {
+    fn default() -> Self {
+        Self::ProtocolRelay
+    }
+}
+
+impl UploadProvider {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::ProtocolRelay => "Protocol Relay",
+            Self::FourEverland => "4EVERLAND",
+            Self::Pinata => "Pinata",
+            Self::LocalNode => "Local IPFS Node",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IpfsPinConfig {
-    #[serde(default = "default_ipfs_pin_endpoint")]
+pub struct ProtocolRelayUploadConfig {
+    #[serde(default = "default_protocol_relay_endpoint")]
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 }
 
-impl Default for IpfsPinConfig {
+impl Default for ProtocolRelayUploadConfig {
     fn default() -> Self {
         Self {
-            endpoint: default_ipfs_pin_endpoint(),
+            endpoint: default_protocol_relay_endpoint(),
             api_key: None,
         }
     }
 }
 
-impl IpfsPinConfig {
+impl ProtocolRelayUploadConfig {
+    pub fn normalized(mut self) -> Self {
+        self.endpoint = self.endpoint.trim().to_string();
+        self.api_key = self.api_key.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FourEverlandUploadConfig {
+    #[serde(default = "default_four_everland_endpoint")]
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
+}
+
+impl Default for FourEverlandUploadConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_four_everland_endpoint(),
+            access_token: None,
+        }
+    }
+}
+
+impl FourEverlandUploadConfig {
+    pub fn normalized(mut self) -> Self {
+        self.endpoint = self.endpoint.trim().to_string();
+        if self.endpoint.is_empty() {
+            self.endpoint = default_four_everland_endpoint();
+        }
+        self.access_token = self.access_token.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinataUploadConfig {
+    #[serde(default = "default_pinata_endpoint")]
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+impl Default for PinataUploadConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_pinata_endpoint(),
+            api_key: None,
+        }
+    }
+}
+
+impl PinataUploadConfig {
+    pub fn normalized(mut self) -> Self {
+        self.endpoint = self.endpoint.trim().to_string();
+        if self.endpoint.is_empty() {
+            self.endpoint = default_pinata_endpoint();
+        }
+        self.api_key = self.api_key.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalNodeUploadConfig {
+    #[serde(default = "default_ipfs_pin_endpoint")]
+    pub endpoint: String,
+}
+
+impl Default for LocalNodeUploadConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_ipfs_pin_endpoint(),
+        }
+    }
+}
+
+impl LocalNodeUploadConfig {
     pub fn normalized(mut self) -> Self {
         self.endpoint = self.endpoint.trim().to_string();
         if self.endpoint.is_empty() {
             self.endpoint = default_ipfs_pin_endpoint();
         }
-        self.api_key = self
-            .api_key
-            .and_then(|value| {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadConfig {
+    #[serde(default)]
+    pub provider: UploadProvider,
+    #[serde(default)]
+    pub protocol_relay: ProtocolRelayUploadConfig,
+    #[serde(default)]
+    pub four_everland: FourEverlandUploadConfig,
+    #[serde(default)]
+    pub pinata: PinataUploadConfig,
+    #[serde(default)]
+    pub local_node: LocalNodeUploadConfig,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            provider: UploadProvider::default(),
+            protocol_relay: ProtocolRelayUploadConfig::default(),
+            four_everland: FourEverlandUploadConfig::default(),
+            pinata: PinataUploadConfig::default(),
+            local_node: LocalNodeUploadConfig::default(),
+        }
+    }
+}
+
+impl UploadConfig {
+    pub fn normalized(mut self) -> Self {
+        self.protocol_relay = self.protocol_relay.normalized();
+        self.four_everland = self.four_everland.normalized();
+        self.pinata = self.pinata.normalized();
+        self.local_node = self.local_node.normalized();
         self
     }
 }
@@ -103,7 +260,7 @@ pub struct CodeSettings {
     #[serde(default)]
     pub anvil: CodeAnvilConfig,
     #[serde(default)]
-    pub ipfs_pin: IpfsPinConfig,
+    pub upload: UploadConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_project_path: Option<String>,
 }
@@ -112,7 +269,7 @@ impl Default for CodeSettings {
     fn default() -> Self {
         Self {
             anvil: CodeAnvilConfig::default(),
-            ipfs_pin: IpfsPinConfig::default(),
+            upload: UploadConfig::default(),
             last_project_path: None,
         }
     }
@@ -144,7 +301,10 @@ pub fn load_settings(workspace_root: &Path) -> CodeSettings {
 
 pub fn save_settings(workspace_root: &Path, settings: &CodeSettings) -> Result<()> {
     fs::create_dir_all(workspace_root).with_context(|| {
-        format!("failed to create code workspace root {}", workspace_root.display())
+        format!(
+            "failed to create code workspace root {}",
+            workspace_root.display()
+        )
     })?;
     let path = settings_path(workspace_root);
     let json = serde_json::to_string_pretty(settings).context("serialize code settings")?;

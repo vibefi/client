@@ -237,7 +237,10 @@ impl WebViewManager {
             Some(tb) => tb,
             None => return,
         };
-        let has_code_tab = self.apps.iter().any(|entry| entry.kind == AppWebViewKind::Code);
+        let has_code_tab = self
+            .apps
+            .iter()
+            .any(|entry| entry.kind == AppWebViewKind::Code);
         let tabs: Vec<serde_json::Value> = self
             .apps
             .iter()

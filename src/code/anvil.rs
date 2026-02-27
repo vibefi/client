@@ -1,7 +1,7 @@
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use listeners::get_processes_by_port;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{Pid, Signal, System};
 
 use crate::code::settings as code_settings;
-use crate::rpc_manager::{RpcEndpoint, RpcEndpointManager, DEFAULT_MAX_CONCURRENT_RPC};
+use crate::rpc_manager::{DEFAULT_MAX_CONCURRENT_RPC, RpcEndpoint, RpcEndpointManager};
 use crate::state::{AppState, RunningCodeAnvil, UserEvent};
 
 const DEFAULT_ANVIL_HOST: &str = "127.0.0.1";
@@ -818,9 +818,7 @@ fn terminate_child_tree(child: &mut Child, _uses_process_group: bool) -> Result<
     {
         return Ok(());
     }
-    child
-        .kill()
-        .context("failed to terminate anvil process")?;
+    child.kill().context("failed to terminate anvil process")?;
     Ok(())
 }
 
@@ -833,8 +831,6 @@ fn force_kill_child_tree(child: &mut Child, _uses_process_group: bool) -> Result
     {
         return Ok(());
     }
-    child
-        .kill()
-        .context("failed to force-kill anvil process")?;
+    child.kill().context("failed to force-kill anvil process")?;
     Ok(())
 }

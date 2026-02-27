@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::settings::IpfsPinConfig;
+use super::settings::{UploadConfig, UploadProvider};
 use super::validator;
 use crate::bundle;
 
@@ -121,10 +121,7 @@ fn collect_static_recursive(
             collect_static_recursive(root, &path, depth + 1, files)?;
             continue;
         }
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy();
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy();
         if rel == "manifest.json" {
             continue;
         }
@@ -137,7 +134,11 @@ fn collect_static_recursive(
             bail!(
                 "Static-html layout does not allow file type: {} (extension {})",
                 rel,
-                if ext_ref.is_empty() { "<none>" } else { ext_ref }
+                if ext_ref.is_empty() {
+                    "<none>"
+                } else {
+                    ext_ref
+                }
             );
         }
         files.push(path);
@@ -149,8 +150,7 @@ fn read_project_manifest(project_root: &Path) -> Result<ProjectManifest> {
     let manifest_path = project_root.join("manifest.json");
     let raw = fs::read_to_string(&manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("parse {}", manifest_path.display()))
+    serde_json::from_str(&raw).with_context(|| format!("parse {}", manifest_path.display()))
 }
 
 #[derive(Debug, Serialize)]
@@ -184,11 +184,9 @@ fn build_bundle_manifest(
     file_entries.sort_by(|a, b| a.path.cmp(&b.path));
 
     let layout_constraints = match layout {
-        BundleLayout::Constrained => {
-            constraints.cloned().unwrap_or_else(|| {
-                serde_json::json!({ "type": "default" })
-            })
-        }
+        BundleLayout::Constrained => constraints
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "type": "default" })),
         BundleLayout::StaticHtml => serde_json::json!({ "type": "static-html" }),
     };
 
@@ -237,7 +235,16 @@ fn chrono_now_iso() -> String {
     let month_days: [i64; 12] = [
         31,
         if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut m = 0usize;
     for (i, &md) in month_days.iter().enumerate() {
@@ -292,11 +299,10 @@ fn write_bundle(
     Ok(())
 }
 
-/// Upload a directory to IPFS via the HTTP API `/api/v0/add` endpoint.
-///
-/// Works with both local IPFS nodes and remote pinning services (4everland,
-/// Pinata) that support the same API but require an Authorization header.
-pub fn ipfs_add(out_dir: &Path, config: &IpfsPinConfig) -> Result<String> {
+fn build_upload_form(
+    out_dir: &Path,
+    field_name: &str,
+) -> Result<reqwest::blocking::multipart::Form> {
     let mut form = reqwest::blocking::multipart::Form::new();
 
     let files = bundle::walk_files(out_dir)?;
@@ -316,38 +322,16 @@ pub fn ipfs_add(out_dir: &Path, config: &IpfsPinConfig) -> Result<String> {
         let data = fs::read(file)
             .with_context(|| format!("read file for IPFS upload: {}", file.display()))?;
         let part = reqwest::blocking::multipart::Part::bytes(data).file_name(rel);
-        form = form.part("file", part);
+        form = form.part(field_name.to_string(), part);
     }
+    Ok(form)
+}
 
-    let endpoint = config.endpoint.trim_end_matches('/');
-    let url = format!(
-        "{}/api/v0/add?recursive=true&wrap-with-directory=true&cid-version=1&pin=true",
-        endpoint
-    );
-
-    let client = reqwest::blocking::Client::new();
-    let mut request = client.post(&url).multipart(form);
-    if let Some(api_key) = &config.api_key {
-        request = request.header("Authorization", format!("Bearer {}", api_key));
-    }
-
-    let response = request.send().with_context(|| {
-        format!("IPFS add request to {} failed", endpoint)
-    })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        bail!("IPFS add failed: {} {}", status, body);
-    }
-
-    let body = response.text().context("read IPFS add response body")?;
+fn parse_ipfs_add_cid(body: &str) -> Result<String> {
     let lines: Vec<&str> = body.trim().split('\n').filter(|l| !l.is_empty()).collect();
     if lines.is_empty() {
         bail!("IPFS add returned empty response");
     }
-
-    // The last line is the wrapping directory entry with the root CID
     let last: serde_json::Value =
         serde_json::from_str(lines[lines.len() - 1]).context("parse IPFS add response")?;
     let cid = last
@@ -355,20 +339,135 @@ pub fn ipfs_add(out_dir: &Path, config: &IpfsPinConfig) -> Result<String> {
         .or_else(|| last.get("Cid").and_then(|c| c.get("/")))
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("IPFS add response missing CID"))?;
-
     Ok(cid.to_string())
+}
+
+fn upload_via_ipfs_add(
+    out_dir: &Path,
+    endpoint: &str,
+    bearer_token: Option<&str>,
+    provider_label: &str,
+) -> Result<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        bail!("{provider_label} endpoint is required");
+    }
+    let endpoint = endpoint.trim_end_matches('/');
+    let url = format!(
+        "{}/api/v0/add?recursive=true&wrap-with-directory=true&cid-version=1&pin=true",
+        endpoint
+    );
+
+    let form = build_upload_form(out_dir, "file")?;
+    let client = reqwest::blocking::Client::new();
+    let mut request = client.post(&url).multipart(form);
+    if let Some(token) = bearer_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request = request.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let response = request
+        .send()
+        .with_context(|| format!("{provider_label} IPFS add request to {} failed", endpoint))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        bail!("{provider_label} IPFS add failed: {} {}", status, body);
+    }
+
+    let body = response.text().context("read IPFS add response body")?;
+    parse_ipfs_add_cid(&body)
+}
+
+fn upload_via_pinata(out_dir: &Path, endpoint: &str, api_key: Option<&str>) -> Result<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        bail!("Pinata endpoint is required");
+    }
+    let token = api_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("Pinata API key/token is required"))?;
+    let url = format!("{}/pinning/pinFileToIPFS", endpoint.trim_end_matches('/'));
+    let form = build_upload_form(out_dir, "file")?;
+    let response = reqwest::blocking::Client::new()
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .multipart(form)
+        .send()
+        .with_context(|| format!("Pinata upload request to {} failed", endpoint))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        bail!("Pinata upload failed: {} {}", status, body);
+    }
+    let body = response.text().context("read Pinata response body")?;
+    let value: serde_json::Value =
+        serde_json::from_str(&body).context("parse Pinata response JSON")?;
+    let cid = value
+        .get("IpfsHash")
+        .or_else(|| value.get("cid"))
+        .or_else(|| value.get("Cid").and_then(|inner| inner.get("/")))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Pinata response missing CID"))?;
+    Ok(cid.to_string())
+}
+
+fn upload_bundle(out_dir: &Path, upload_config: &UploadConfig) -> Result<String> {
+    match upload_config.provider {
+        UploadProvider::ProtocolRelay => {
+            if upload_config.protocol_relay.endpoint.trim().is_empty() {
+                bail!(
+                    "Protocol relay is selected but no endpoint is configured. \
+                     Set an endpoint in Publish settings, or choose 4EVERLAND, Pinata, or Local IPFS Node."
+                );
+            }
+            upload_via_ipfs_add(
+                out_dir,
+                &upload_config.protocol_relay.endpoint,
+                upload_config.protocol_relay.api_key.as_deref(),
+                "Protocol relay",
+            )
+        }
+        UploadProvider::FourEverland => {
+            let token = upload_config
+                .four_everland
+                .access_token
+                .as_deref()
+                .ok_or_else(|| anyhow!("4EVERLAND access token is required"))?;
+            upload_via_ipfs_add(
+                out_dir,
+                &upload_config.four_everland.endpoint,
+                Some(token),
+                "4EVERLAND",
+            )
+        }
+        UploadProvider::Pinata => upload_via_pinata(
+            out_dir,
+            &upload_config.pinata.endpoint,
+            upload_config.pinata.api_key.as_deref(),
+        ),
+        UploadProvider::LocalNode => upload_via_ipfs_add(
+            out_dir,
+            &upload_config.local_node.endpoint,
+            None,
+            "Local IPFS node",
+        ),
+    }
 }
 
 /// Full pipeline: validate → package → upload to IPFS → return result.
 pub fn package_and_upload(
     project_root: &Path,
-    ipfs_config: &IpfsPinConfig,
+    upload_config: &UploadConfig,
     progress: &mut dyn FnMut(&str, u8, &str),
 ) -> Result<PackageResult> {
     // 1. Validate
     progress("validate", 5, "Validating project...");
-    let errors = validator::validate_project(project_root)
-        .context("project validation failed")?;
+    let errors = validator::validate_project(project_root).context("project validation failed")?;
     if !validator::is_valid(&errors) {
         let error_messages: Vec<String> = errors
             .iter()
@@ -399,15 +498,8 @@ pub fn package_and_upload(
         .filter(|s| !s.is_empty())
         .unwrap_or("0.0.0")
         .to_string();
-    let description = manifest
-        .description
-        .as_deref()
-        .unwrap_or("")
-        .to_string();
-    let dapp_id = manifest
-        .fork_of
-        .as_ref()
-        .and_then(|f| f.dapp_id.clone());
+    let description = manifest.description.as_deref().unwrap_or("").to_string();
+    let dapp_id = manifest.fork_of.as_ref().and_then(|f| f.dapp_id.clone());
 
     // 3. Detect layout and collect files
     progress("package", 20, "Detecting bundle layout...");
@@ -437,10 +529,14 @@ pub fn package_and_upload(
     progress("package", 40, "Bundle written to temp directory");
 
     // 5. Upload to IPFS
-    progress("upload", 50, "Uploading to IPFS...");
-    let root_cid = ipfs_add(&out_dir, ipfs_config)
-        .context("IPFS upload failed")?;
-    progress("upload", 95, &format!("Uploaded: {}", root_cid));
+    let upload_label = upload_config.provider.label();
+    progress("upload", 50, &format!("Uploading via {}...", upload_label));
+    let root_cid = upload_bundle(&out_dir, upload_config).context("upload failed")?;
+    progress(
+        "upload",
+        95,
+        &format!("Uploaded via {}: {}", upload_label, root_cid),
+    );
 
     // 6. Clean up
     let _ = fs::remove_dir_all(&out_dir);

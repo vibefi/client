@@ -172,15 +172,16 @@ pub fn handle_ipc_event(
                                 "Code tab is not available in this session",
                             );
                         } else {
-                            tracing::warn!("tab-bar webview missing while returning code tab error");
+                            tracing::warn!(
+                                "tab-bar webview missing while returning code tab error"
+                            );
                         }
                         return;
                     };
 
                     let result =
                         crate::code::router::handle_code_ipc(state, manager, &code_entry_id, &req);
-                    let should_switch_to_code =
-                        req.method == "code_forkDapp" && result.is_ok();
+                    let should_switch_to_code = req.method == "code_forkDapp" && result.is_ok();
                     if should_switch_to_code {
                         if let Some(idx) = manager.index_of_kind(AppWebViewKind::Code) {
                             manager.switch_to(idx);

@@ -148,7 +148,8 @@ pub fn handle_code_ipc(
         "code_writeFile" => {
             let params: WriteFileParams = parse_params(req)?;
             let project_root = filesystem::resolve_project_root(&params.project_path)?;
-            let write_kind = filesystem::write_file(&project_root, &params.file_path, &params.content)?;
+            let write_kind =
+                filesystem::write_file(&project_root, &params.file_path, &params.content)?;
             let event_kind = match write_kind {
                 filesystem::WriteFileKind::Create => "create",
                 filesystem::WriteFileKind::Modify => "modify",
@@ -250,7 +251,8 @@ pub fn handle_code_ipc(
             }
             set_active_project(state, project_root.clone());
             persist_last_project_path(state, &project_root);
-            if let Err(error) = anvil::auto_start_anvil_for_project(state, webview_id, project_root.clone())
+            if let Err(error) =
+                anvil::auto_start_anvil_for_project(state, webview_id, project_root.clone())
             {
                 tracing::warn!(
                     error = %error,
@@ -319,18 +321,18 @@ pub fn handle_code_ipc(
             settings::save_settings(&workspace_root, &code_settings)?;
             Ok(Some(serde_json::to_value(code_settings.anvil)?))
         }
-        "code_getIpfsPinConfig" => {
+        "code_getUploadConfig" => {
             let workspace_root = resolve_workspace_root(state)?;
             let code_settings = settings::load_settings(&workspace_root);
-            Ok(Some(serde_json::to_value(code_settings.ipfs_pin)?))
+            Ok(Some(serde_json::to_value(code_settings.upload)?))
         }
-        "code_setIpfsPinConfig" => {
+        "code_setUploadConfig" => {
             let workspace_root = resolve_workspace_root(state)?;
-            let params: settings::IpfsPinConfig = parse_params(req)?;
+            let params: settings::UploadConfig = parse_params(req)?;
             let mut code_settings = settings::load_settings(&workspace_root);
-            code_settings.ipfs_pin = params.normalized();
+            code_settings.upload = params.normalized();
             settings::save_settings(&workspace_root, &code_settings)?;
-            Ok(Some(serde_json::to_value(code_settings.ipfs_pin)?))
+            Ok(Some(serde_json::to_value(code_settings.upload)?))
         }
         "code_forkDapp" => {
             let params: ForkDappParams = parse_params(req)?;
@@ -391,7 +393,7 @@ pub fn handle_code_ipc(
             let params: ProposeUpgradeParams = parse_params_or_default(req)?;
             let project_root = resolve_dev_server_project_root(state, params.project_path)?;
             let workspace_root = resolve_workspace_root(state)?;
-            let ipfs_pin = settings::load_settings(&workspace_root).ipfs_pin;
+            let upload = settings::load_settings(&workspace_root).upload;
 
             let state_clone = state.clone();
             let webview_id = webview_id.to_string();
@@ -411,8 +413,7 @@ pub fn handle_code_ipc(
                         });
                     };
 
-                    let result =
-                        publish::package_and_upload(&project_root, &ipfs_pin, &mut emit)?;
+                    let result = publish::package_and_upload(&project_root, &upload, &mut emit)?;
 
                     // Send draft to Studio via ProposalDraft event
                     let draft = json!({
@@ -422,9 +423,9 @@ pub fn handle_code_ipc(
                         "version": result.version,
                         "description": result.description,
                     });
-                    let _ = state_clone
-                        .proxy
-                        .send_event(UserEvent::ProposalDraft { draft: draft.clone() });
+                    let _ = state_clone.proxy.send_event(UserEvent::ProposalDraft {
+                        draft: draft.clone(),
+                    });
 
                     // Also notify Code webview of completion
                     let _ = state_clone.proxy.send_event(UserEvent::ProviderEvent {

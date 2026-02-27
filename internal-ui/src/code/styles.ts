@@ -185,15 +185,29 @@ export const localStyles = `
     gap: 8px;
     padding: 10px;
   }
-  .sidebar-tabs {
+  .sidebar-tabs-shell {
     display: flex;
-    gap: 3px;
+    align-items: stretch;
     background: #0a1427;
     border: 1px solid var(--ide-border);
     border-radius: 10px;
     padding: 3px;
-    overflow-x: auto;
+    overflow: hidden;
     flex-shrink: 0;
+  }
+  .sidebar-tabs {
+    display: flex;
+    gap: 3px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-shrink: 0;
+    flex: 1;
+    min-width: 0;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .sidebar-tabs::-webkit-scrollbar {
+    display: none;
   }
   .sidebar-tab {
     border: 1px solid transparent;
@@ -202,12 +216,31 @@ export const localStyles = `
     border-radius: 8px;
     height: 28px;
     font-size: 11px;
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 0 0 auto;
+    min-width: fit-content;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     padding: 0 6px;
+  }
+  .sidebar-tab-scroll-btn {
+    flex-shrink: 0;
+    border: 0;
+    background: #0a1427;
+    color: #5a7498;
+    width: 18px;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 300;
+    padding: 0 0 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  .sidebar-tab-scroll-btn:hover {
+    background: #0f1d33;
+    color: #c8d8f0;
   }
   .sidebar-tab.active {
     background: var(--ide-accent-soft);

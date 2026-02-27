@@ -83,7 +83,11 @@ pub(super) fn handle_local_ipc(
                 ws.account = Some(account.clone());
             }
             emit_accounts_changed(webview, vec![account.clone()]);
-            tracing::info!(webview_id, account, "local wallet granted eth_accounts permission");
+            tracing::info!(
+                webview_id,
+                account,
+                "local wallet granted eth_accounts permission"
+            );
             Ok(Some(wallet_permissions_response(Some(account))))
         }
         "wallet_getPermissions" => {

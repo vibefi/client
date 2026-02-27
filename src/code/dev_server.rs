@@ -257,7 +257,15 @@ fn spawn_output_reader<R: std::io::Read + Send + 'static>(
                             "line": line,
                         }),
                     );
-                    maybe_emit_ready(&state, &proxy, &webview_id, port, &project_root, &ready, &line);
+                    maybe_emit_ready(
+                        &state,
+                        &proxy,
+                        &webview_id,
+                        port,
+                        &project_root,
+                        &ready,
+                        &line,
+                    );
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, stream, "failed to read dev server output");

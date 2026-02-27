@@ -137,6 +137,7 @@ export default function App() {
   const previewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const quickOpenInputRef = useRef<HTMLInputElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const sidebarTabsRef = useRef<HTMLDivElement | null>(null);
   const editorTabsRef = useRef<HTMLDivElement | null>(null);
   const resizeDragRef = useRef<
     | { kind: "sidebar"; startX: number; startWidth: number; containerWidth: number }
@@ -146,6 +147,8 @@ export default function App() {
   >(null);
   const [tabsCanScrollLeft, setTabsCanScrollLeft] = useState(false);
   const [tabsCanScrollRight, setTabsCanScrollRight] = useState(false);
+  const [sidebarTabsCanScrollLeft, setSidebarTabsCanScrollLeft] = useState(false);
+  const [sidebarTabsCanScrollRight, setSidebarTabsCanScrollRight] = useState(false);
 
   // ── Domain hooks ────────────────────────────────────────────────────────
   const console_ = useConsole();
@@ -221,7 +224,7 @@ export default function App() {
         anvil.loadStatus({ silent: true }),
         devServer.loadStatus({ silent: true }),
         settings.load({ silent: true }),
-        publish.loadIpfsConfig({ silent: true }),
+        publish.loadUploadConfig({ silent: true }),
       ]);
       if (projectsResult.error) setError(projectsResult.error);
       await handleOpenProject(undefined, { silentIfNoRememberedProject: true, restore: true });
@@ -311,6 +314,16 @@ export default function App() {
     }, 20);
     return () => window.clearTimeout(timer);
   }, [editor.openTabs, workspaceMode]);
+
+  useEffect(() => {
+    const el = sidebarTabsRef.current;
+    if (!el) return;
+    const timer = window.setTimeout(() => {
+      setSidebarTabsCanScrollLeft(el.scrollLeft > 2);
+      setSidebarTabsCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+    }, 20);
+    return () => window.clearTimeout(timer);
+  }, [workspaceMode, sidebarWidth]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -734,8 +747,8 @@ export default function App() {
     void anvil.loadStatus({ silent: true });
   }
 
-  async function handleSaveIpfsConfig() {
-    const result = await publish.saveIpfsConfig(publish.ipfsConfig);
+  async function handleSaveUploadConfig() {
+    const result = await publish.saveUploadConfig(publish.uploadConfig);
     if (result.error) setError(result.error);
     if (result.status) setStatus(result.status);
   }
@@ -847,6 +860,23 @@ export default function App() {
   function scrollTabsRight() {
     editorTabsRef.current?.scrollBy({ left: 150, behavior: "smooth" });
     window.setTimeout(onTabsScroll, 220);
+  }
+
+  function onSidebarTabsScroll() {
+    const el = sidebarTabsRef.current;
+    if (!el) return;
+    setSidebarTabsCanScrollLeft(el.scrollLeft > 2);
+    setSidebarTabsCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+  }
+
+  function scrollSidebarTabsLeft() {
+    sidebarTabsRef.current?.scrollBy({ left: -120, behavior: "smooth" });
+    window.setTimeout(onSidebarTabsScroll, 220);
+  }
+
+  function scrollSidebarTabsRight() {
+    sidebarTabsRef.current?.scrollBy({ left: 120, behavior: "smooth" });
+    window.setTimeout(onSidebarTabsScroll, 220);
   }
 
   function beginSidebarResize(event: React.MouseEvent) {
@@ -1546,48 +1576,220 @@ export default function App() {
               </button>
             </div>
 
-            {/* IPFS pin config */}
+            {/* Upload config */}
             <div className="proj-action-block">
               <label className="project-path" style={{ display: "block", marginBottom: "4px", fontWeight: 600 }}>
-                IPFS Pin Service
+                Upload Provider
               </label>
-              <label className="project-path" style={{ display: "block", marginBottom: "4px" }}>
-                Endpoint URL
-              </label>
-              <div className="proj-input-row">
-                <input
-                  value={publish.ipfsConfig.endpoint}
-                  placeholder="http://127.0.0.1:5001"
-                  onChange={(e) => publish.setIpfsConfig({ ...publish.ipfsConfig, endpoint: e.target.value })}
-                  disabled={busy}
-                />
+              <div className="project-path" style={{ marginBottom: "8px" }}>
+                <label style={{ display: "block", marginBottom: "4px" }}>
+                  <input
+                    type="radio"
+                    checked={publish.uploadConfig.provider === "protocolRelay"}
+                    onChange={() =>
+                      publish.setUploadConfig({ ...publish.uploadConfig, provider: "protocolRelay" })
+                    }
+                    disabled={busy}
+                  />{" "}
+                  Protocol Relay (Default)
+                </label>
+                <label style={{ display: "block", marginBottom: "4px" }}>
+                  <input
+                    type="radio"
+                    checked={publish.uploadConfig.provider === "fourEverland"}
+                    onChange={() =>
+                      publish.setUploadConfig({ ...publish.uploadConfig, provider: "fourEverland" })
+                    }
+                    disabled={busy}
+                  />{" "}
+                  4EVERLAND
+                </label>
+                <label style={{ display: "block", marginBottom: "4px" }}>
+                  <input
+                    type="radio"
+                    checked={publish.uploadConfig.provider === "pinata"}
+                    onChange={() =>
+                      publish.setUploadConfig({ ...publish.uploadConfig, provider: "pinata" })
+                    }
+                    disabled={busy}
+                  />{" "}
+                  Pinata
+                </label>
+                <label style={{ display: "block", marginBottom: "4px" }}>
+                  <input
+                    type="radio"
+                    checked={publish.uploadConfig.provider === "localNode"}
+                    onChange={() =>
+                      publish.setUploadConfig({ ...publish.uploadConfig, provider: "localNode" })
+                    }
+                    disabled={busy}
+                  />{" "}
+                  Local IPFS Node
+                </label>
               </div>
-              <label className="project-path" style={{ display: "block", marginBottom: "4px", marginTop: "8px" }}>
-                API Key (for remote services)
-              </label>
-              <div className="proj-input-row">
-                <input
-                  type="password"
-                  value={publish.ipfsConfig.apiKey ?? ""}
-                  placeholder="Optional — for 4everland, Pinata, etc."
-                  onChange={(e) => publish.setIpfsConfig({
-                    ...publish.ipfsConfig,
-                    apiKey: e.target.value.trim() || null,
-                  })}
-                  disabled={busy}
-                />
-              </div>
+              {publish.uploadConfig.provider === "protocolRelay" ? (
+                <>
+                  <label className="project-path" style={{ display: "block", marginBottom: "4px" }}>
+                    Relay Endpoint
+                  </label>
+                  <div className="proj-input-row">
+                    <input
+                      value={publish.uploadConfig.protocolRelay.endpoint}
+                      placeholder="https://upload.vibefi.xyz"
+                      onChange={(e) =>
+                        publish.setUploadConfig({
+                          ...publish.uploadConfig,
+                          protocolRelay: {
+                            ...publish.uploadConfig.protocolRelay,
+                            endpoint: e.target.value,
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                  <label className="project-path" style={{ display: "block", marginBottom: "4px", marginTop: "8px" }}>
+                    Relay API Key (optional)
+                  </label>
+                  <div className="proj-input-row">
+                    <input
+                      type="password"
+                      value={publish.uploadConfig.protocolRelay.apiKey ?? ""}
+                      placeholder="Optional"
+                      onChange={(e) =>
+                        publish.setUploadConfig({
+                          ...publish.uploadConfig,
+                          protocolRelay: {
+                            ...publish.uploadConfig.protocolRelay,
+                            apiKey: e.target.value.trim() || null,
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                </>
+              ) : null}
+              {publish.uploadConfig.provider === "fourEverland" ? (
+                <>
+                  <label className="project-path" style={{ display: "block", marginBottom: "4px" }}>
+                    4EVERLAND Endpoint
+                  </label>
+                  <div className="proj-input-row">
+                    <input
+                      value={publish.uploadConfig.fourEverland.endpoint}
+                      placeholder="https://api.4everland.dev"
+                      onChange={(e) =>
+                        publish.setUploadConfig({
+                          ...publish.uploadConfig,
+                          fourEverland: {
+                            ...publish.uploadConfig.fourEverland,
+                            endpoint: e.target.value,
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                  <label className="project-path" style={{ display: "block", marginBottom: "4px", marginTop: "8px" }}>
+                    Access Token
+                  </label>
+                  <div className="proj-input-row">
+                    <input
+                      type="password"
+                      value={publish.uploadConfig.fourEverland.accessToken ?? ""}
+                      placeholder="Paste 4EVERLAND access token"
+                      onChange={(e) =>
+                        publish.setUploadConfig({
+                          ...publish.uploadConfig,
+                          fourEverland: {
+                            ...publish.uploadConfig.fourEverland,
+                            accessToken: e.target.value.trim() || null,
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                </>
+              ) : null}
+              {publish.uploadConfig.provider === "pinata" ? (
+                <>
+                  <label className="project-path" style={{ display: "block", marginBottom: "4px" }}>
+                    Pinata Endpoint
+                  </label>
+                  <div className="proj-input-row">
+                    <input
+                      value={publish.uploadConfig.pinata.endpoint}
+                      placeholder="https://api.pinata.cloud"
+                      onChange={(e) =>
+                        publish.setUploadConfig({
+                          ...publish.uploadConfig,
+                          pinata: {
+                            ...publish.uploadConfig.pinata,
+                            endpoint: e.target.value,
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                  <label className="project-path" style={{ display: "block", marginBottom: "4px", marginTop: "8px" }}>
+                    API Key / JWT
+                  </label>
+                  <div className="proj-input-row">
+                    <input
+                      type="password"
+                      value={publish.uploadConfig.pinata.apiKey ?? ""}
+                      placeholder="Paste Pinata API key or JWT"
+                      onChange={(e) =>
+                        publish.setUploadConfig({
+                          ...publish.uploadConfig,
+                          pinata: {
+                            ...publish.uploadConfig.pinata,
+                            apiKey: e.target.value.trim() || null,
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                </>
+              ) : null}
+              {publish.uploadConfig.provider === "localNode" ? (
+                <>
+                  <label className="project-path" style={{ display: "block", marginBottom: "4px" }}>
+                    Local Node Endpoint
+                  </label>
+                  <div className="proj-input-row">
+                    <input
+                      value={publish.uploadConfig.localNode.endpoint}
+                      placeholder="http://127.0.0.1:5001"
+                      onChange={(e) =>
+                        publish.setUploadConfig({
+                          ...publish.uploadConfig,
+                          localNode: {
+                            ...publish.uploadConfig.localNode,
+                            endpoint: e.target.value,
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                </>
+              ) : null}
               <div className="proj-input-row" style={{ marginTop: "8px" }}>
                 <button
                   className="primary"
-                  onClick={() => void handleSaveIpfsConfig()}
+                  onClick={() => void handleSaveUploadConfig()}
                   disabled={busy}
                 >
                   {publish.savingConfig ? "..." : "Save Config"}
                 </button>
                 <button
                   className="secondary"
-                  onClick={() => publish.loadIpfsConfig().then((r) => { if (r.error) setError(r.error); })}
+                  onClick={() => publish.loadUploadConfig().then((r) => { if (r.error) setError(r.error); })}
                   disabled={busy}
                 >
                   Reload
@@ -1656,43 +1858,63 @@ export default function App() {
 
             {/* Sidebar */}
             <aside className="ide-sidebar surface-card" style={{ width: `${sidebarWidth}px` }}>
-              <div className="sidebar-tabs">
-                <button
-                  className={`sidebar-tab ${activeSidebarPanel === "projects" ? "active" : ""}`}
-                  onClick={() => setActiveSidebarPanel("projects")}
-                >
-                  Projects
-                </button>
-                <button
-                  className={`sidebar-tab ${activeSidebarPanel === "files" ? "active" : ""}`}
-                  onClick={() => setActiveSidebarPanel("files")}
-                >
-                  Files
-                </button>
-                <button
-                  className={`sidebar-tab ${activeSidebarPanel === "dev-server" ? "active" : ""}`}
-                  onClick={() => setActiveSidebarPanel("dev-server")}
-                >
-                  Server
-                </button>
-                <button
-                  className={`sidebar-tab ${activeSidebarPanel === "anvil" ? "active" : ""}`}
-                  onClick={() => setActiveSidebarPanel("anvil")}
-                >
-                  Anvil
-                </button>
-                <button
-                  className={`sidebar-tab ${activeSidebarPanel === "publish" ? "active" : ""}`}
-                  onClick={() => setActiveSidebarPanel("publish")}
-                >
-                  Publish
-                </button>
-                {workspaceMode === "llm-preview" ? (
+              <div className="sidebar-tabs-shell">
+                {sidebarTabsCanScrollLeft ? (
                   <button
-                    className={`sidebar-tab ${activeSidebarPanel === "console" ? "active" : ""}`}
-                    onClick={() => setActiveSidebarPanel("console")}
+                    className="sidebar-tab-scroll-btn"
+                    onClick={scrollSidebarTabsLeft}
+                    title="Scroll tabs left"
                   >
-                    Console
+                    ‹
+                  </button>
+                ) : null}
+                <div className="sidebar-tabs" ref={sidebarTabsRef} onScroll={onSidebarTabsScroll}>
+                  <button
+                    className={`sidebar-tab ${activeSidebarPanel === "projects" ? "active" : ""}`}
+                    onClick={() => setActiveSidebarPanel("projects")}
+                  >
+                    Projects
+                  </button>
+                  <button
+                    className={`sidebar-tab ${activeSidebarPanel === "files" ? "active" : ""}`}
+                    onClick={() => setActiveSidebarPanel("files")}
+                  >
+                    Files
+                  </button>
+                  <button
+                    className={`sidebar-tab ${activeSidebarPanel === "dev-server" ? "active" : ""}`}
+                    onClick={() => setActiveSidebarPanel("dev-server")}
+                  >
+                    Server
+                  </button>
+                  <button
+                    className={`sidebar-tab ${activeSidebarPanel === "anvil" ? "active" : ""}`}
+                    onClick={() => setActiveSidebarPanel("anvil")}
+                  >
+                    Anvil
+                  </button>
+                  <button
+                    className={`sidebar-tab ${activeSidebarPanel === "publish" ? "active" : ""}`}
+                    onClick={() => setActiveSidebarPanel("publish")}
+                  >
+                    Publish
+                  </button>
+                  {workspaceMode === "llm-preview" ? (
+                    <button
+                      className={`sidebar-tab ${activeSidebarPanel === "console" ? "active" : ""}`}
+                      onClick={() => setActiveSidebarPanel("console")}
+                    >
+                      Console
+                    </button>
+                  ) : null}
+                </div>
+                {sidebarTabsCanScrollRight ? (
+                  <button
+                    className="sidebar-tab-scroll-btn"
+                    onClick={scrollSidebarTabsRight}
+                    title="Scroll tabs right"
+                  >
+                    ›
                   </button>
                 ) : null}
               </div>

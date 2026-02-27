@@ -272,7 +272,10 @@ fn validate_package_json(project_root: &Path, errors: &mut Vec<ValidationError>)
                 errors.push(ValidationError::error(
                     Some("package.json"),
                     None,
-                    format!("Package `{}` is not in the approved allowlist.", package_name),
+                    format!(
+                        "Package `{}` is not in the approved allowlist.",
+                        package_name
+                    ),
                     "disallowed-package",
                 ));
             }
@@ -466,7 +469,10 @@ fn validate_manifest_json(project_root: &Path, errors: &mut Vec<ValidationError>
             match as_entry {
                 Value::String(value) => {
                     let value = value.trim().to_ascii_lowercase();
-                    if !ALLOWED_IPFS_AS_KINDS.iter().any(|allowed| allowed == &value) {
+                    if !ALLOWED_IPFS_AS_KINDS
+                        .iter()
+                        .any(|allowed| allowed == &value)
+                    {
                         errors.push(ValidationError::error(
                             Some("manifest.json"),
                             None,
@@ -505,7 +511,10 @@ fn validate_manifest_json(project_root: &Path, errors: &mut Vec<ValidationError>
     Ok(())
 }
 
-fn validate_security_patterns(files: &[ProjectFile], errors: &mut Vec<ValidationError>) -> Result<()> {
+fn validate_security_patterns(
+    files: &[ProjectFile],
+    errors: &mut Vec<ValidationError>,
+) -> Result<()> {
     for file in files {
         if !is_script_file(&file.relative_path) {
             continue;

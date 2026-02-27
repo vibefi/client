@@ -576,8 +576,7 @@ fn write_fork_origin(project_root: &Path, origin: &ForkOrigin) -> Result<()> {
     let mut manifest: serde_json::Value = if manifest_path.exists() {
         let raw = std::fs::read_to_string(&manifest_path)
             .with_context(|| format!("read {}", manifest_path.display()))?;
-        serde_json::from_str(&raw)
-            .with_context(|| format!("parse {}", manifest_path.display()))?
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", manifest_path.display()))?
     } else {
         serde_json::json!({})
     };

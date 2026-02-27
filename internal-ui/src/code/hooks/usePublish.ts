@@ -1,25 +1,39 @@
 import { useState } from "react";
 import type { IpcClient } from "../../ipc/client";
 import { PROVIDER_IDS } from "../../ipc/contracts";
-import type { IpfsPinConfig, PublishProgress } from "../types";
+import type { UploadConfig, PublishProgress } from "../types";
 import { asErrorMessage } from "../utils";
 import type { ConsoleHook } from "./useConsole";
 
-const DEFAULT_IPFS_PIN_CONFIG: IpfsPinConfig = {
-  endpoint: "http://127.0.0.1:5001",
-  apiKey: null,
+const DEFAULT_UPLOAD_CONFIG: UploadConfig = {
+  provider: "protocolRelay",
+  protocolRelay: {
+    endpoint: "",
+    apiKey: null,
+  },
+  fourEverland: {
+    endpoint: "https://api.4everland.dev",
+    accessToken: null,
+  },
+  pinata: {
+    endpoint: "https://api.pinata.cloud",
+    apiKey: null,
+  },
+  localNode: {
+    endpoint: "http://127.0.0.1:5001",
+  },
 };
 
 export interface PublishHook {
-  ipfsConfig: IpfsPinConfig;
-  setIpfsConfig: (config: IpfsPinConfig) => void;
+  uploadConfig: UploadConfig;
+  setUploadConfig: (config: UploadConfig) => void;
   publishing: boolean;
   progress: PublishProgress | null;
   lastError: string | null;
   lastRootCid: string | null;
   savingConfig: boolean;
-  loadIpfsConfig: (options?: { silent?: boolean }) => Promise<{ error?: string }>;
-  saveIpfsConfig: (config: IpfsPinConfig) => Promise<{ error?: string; status?: string }>;
+  loadUploadConfig: (options?: { silent?: boolean }) => Promise<{ error?: string }>;
+  saveUploadConfig: (config: UploadConfig) => Promise<{ error?: string; status?: string }>;
   proposeUpgrade: (projectPath: string) => Promise<{ error?: string; status?: string }>;
   setProgress: (p: PublishProgress | null) => void;
   setLastError: (e: string | null) => void;
@@ -27,49 +41,41 @@ export interface PublishHook {
 }
 
 export function usePublish(client: IpcClient, console_: ConsoleHook): PublishHook {
-  const [ipfsConfig, setIpfsConfig] = useState<IpfsPinConfig>(DEFAULT_IPFS_PIN_CONFIG);
+  const [uploadConfig, setUploadConfig] = useState<UploadConfig>(DEFAULT_UPLOAD_CONFIG);
   const [publishing, setPublishing] = useState(false);
   const [progress, setProgress] = useState<PublishProgress | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastRootCid, setLastRootCid] = useState<string | null>(null);
   const [savingConfig, setSavingConfig] = useState(false);
 
-  async function loadIpfsConfig(options: { silent?: boolean } = {}): Promise<{ error?: string }> {
+  async function loadUploadConfig(options: { silent?: boolean } = {}): Promise<{ error?: string }> {
     try {
-      const result = await client.request(PROVIDER_IDS.code, "code_getIpfsPinConfig", [{}]);
+      const result = await client.request(PROVIDER_IDS.code, "code_getUploadConfig", [{}]);
       if (result && typeof result === "object") {
-        const r = result as Record<string, unknown>;
-        setIpfsConfig({
-          endpoint: typeof r.endpoint === "string" ? r.endpoint : DEFAULT_IPFS_PIN_CONFIG.endpoint,
-          apiKey: typeof r.apiKey === "string" ? r.apiKey : null,
-        });
+        setUploadConfig(result as UploadConfig);
       }
       return {};
     } catch (error) {
       if (!options.silent) {
-        return { error: `Failed to load IPFS config: ${asErrorMessage(error)}` };
+        return { error: `Failed to load upload config: ${asErrorMessage(error)}` };
       }
       return {};
     }
   }
 
-  async function saveIpfsConfig(config: IpfsPinConfig): Promise<{ error?: string; status?: string }> {
+  async function saveUploadConfig(config: UploadConfig): Promise<{ error?: string; status?: string }> {
     setSavingConfig(true);
     try {
-      const result = await client.request(PROVIDER_IDS.code, "code_setIpfsPinConfig", [config]);
+      const result = await client.request(PROVIDER_IDS.code, "code_setUploadConfig", [config]);
       if (result && typeof result === "object") {
-        const r = result as Record<string, unknown>;
-        setIpfsConfig({
-          endpoint: typeof r.endpoint === "string" ? r.endpoint : config.endpoint,
-          apiKey: typeof r.apiKey === "string" ? r.apiKey : null,
-        });
+        setUploadConfig(result as UploadConfig);
       }
-      console_.append([`[system] IPFS pin config saved (${config.endpoint})`]);
-      return { status: "IPFS config saved" };
+      console_.append([`[system] upload config saved (${config.provider})`]);
+      return { status: "Upload config saved" };
     } catch (error) {
       const message = asErrorMessage(error);
-      console_.append([`[system] failed to save IPFS config: ${message}`]);
-      return { error: `Failed to save IPFS config: ${message}` };
+      console_.append([`[system] failed to save upload config: ${message}`]);
+      return { error: `Failed to save upload config: ${message}` };
     } finally {
       setSavingConfig(false);
     }
@@ -105,15 +111,15 @@ export function usePublish(client: IpcClient, console_: ConsoleHook): PublishHoo
   }
 
   return {
-    ipfsConfig,
-    setIpfsConfig,
+    uploadConfig,
+    setUploadConfig,
     publishing,
     progress,
     lastError,
     lastRootCid,
     savingConfig,
-    loadIpfsConfig,
-    saveIpfsConfig,
+    loadUploadConfig,
+    saveUploadConfig,
     proposeUpgrade,
     setProgress,
     setLastError,

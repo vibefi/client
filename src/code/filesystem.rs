@@ -92,7 +92,11 @@ pub fn search(project_root: &Path, query: &str) -> Result<Vec<SearchResult>> {
     Ok(results)
 }
 
-pub fn write_file(project_root: &Path, relative_path: &str, content: &str) -> Result<WriteFileKind> {
+pub fn write_file(
+    project_root: &Path,
+    relative_path: &str,
+    content: &str,
+) -> Result<WriteFileKind> {
     let path = validate_relative_path(project_root, relative_path)?;
     validate_write_extension(&path)?;
     let existed = path.is_file();
@@ -129,7 +133,8 @@ pub fn delete_dir(project_root: &Path, relative_path: &str) -> Result<()> {
     if !path.is_dir() {
         bail!("expected directory path, found file: {}", relative_path);
     }
-    fs::remove_dir_all(&path).with_context(|| format!("failed to delete directory {}", relative_path))?;
+    fs::remove_dir_all(&path)
+        .with_context(|| format!("failed to delete directory {}", relative_path))?;
     Ok(())
 }
 

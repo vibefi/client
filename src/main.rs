@@ -343,7 +343,10 @@ fn main() -> Result<()> {
                 placeholder_id,
                 result,
             }) => {
-                let Some(index) = manager.apps.iter().position(|entry| entry.id == placeholder_id)
+                let Some(index) = manager
+                    .apps
+                    .iter()
+                    .position(|entry| entry.id == placeholder_id)
                 else {
                     tracing::warn!(
                         placeholder_id = %placeholder_id,

@@ -92,9 +92,33 @@ export type ChatUiMessage = {
 
 export type WorkspaceMode = "llm-preview" | "llm-code-preview";
 
-export type IpfsPinConfig = {
+export type UploadProvider = "protocolRelay" | "fourEverland" | "pinata" | "localNode";
+
+export type ProtocolRelayUploadConfig = {
   endpoint: string;
   apiKey: string | null;
+};
+
+export type FourEverlandUploadConfig = {
+  endpoint: string;
+  accessToken: string | null;
+};
+
+export type PinataUploadConfig = {
+  endpoint: string;
+  apiKey: string | null;
+};
+
+export type LocalNodeUploadConfig = {
+  endpoint: string;
+};
+
+export type UploadConfig = {
+  provider: UploadProvider;
+  protocolRelay: ProtocolRelayUploadConfig;
+  fourEverland: FourEverlandUploadConfig;
+  pinata: PinataUploadConfig;
+  localNode: LocalNodeUploadConfig;
 };
 
 export type PublishProgress = {
