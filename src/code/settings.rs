@@ -22,7 +22,7 @@ fn default_ipfs_pin_endpoint() -> String {
 }
 
 fn default_protocol_relay_endpoint() -> String {
-    String::new()
+    "https://ipfs.vibefi.dev".to_string()
 }
 
 fn default_four_everland_endpoint() -> String {

@@ -342,6 +342,107 @@ fn parse_ipfs_add_cid(body: &str) -> Result<String> {
     Ok(cid.to_string())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProtocolRelayUploadResponse {
+    root_cid: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProtocolRelayErrorResponse {
+    error: ProtocolRelayErrorDetail,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProtocolRelayErrorDetail {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+fn protocol_relay_upload_url(endpoint: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(endpoint)
+        .with_context(|| format!("invalid protocol relay endpoint URL: {}", endpoint))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("Protocol relay endpoint must use http or https");
+    }
+    if url.path() != "/" && !url.path().is_empty() {
+        bail!(
+            "Protocol relay endpoint must be a base URL without a path (example: https://ipfs.vibefi.dev)"
+        );
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        bail!(
+            "Protocol relay endpoint must be a base URL without query/fragment (example: https://ipfs.vibefi.dev)"
+        );
+    }
+    url.set_path("/v1/uploads");
+    Ok(url)
+}
+
+fn parse_protocol_relay_error(status: reqwest::StatusCode, body: &str) -> String {
+    if let Ok(parsed) = serde_json::from_str::<ProtocolRelayErrorResponse>(body) {
+        let code = parsed
+            .error
+            .code
+            .unwrap_or_else(|| "UNKNOWN_ERROR".to_string());
+        let message = parsed
+            .error
+            .message
+            .unwrap_or_else(|| "relay upload failed".to_string());
+        if let Some(request_id) = parsed.request_id.filter(|v| !v.trim().is_empty()) {
+            return format!(
+                "Protocol relay upload failed ({status}) [{code}]: {message} (requestId: {request_id})"
+            );
+        }
+        return format!("Protocol relay upload failed ({status}) [{code}]: {message}");
+    }
+    let fallback_body = body.trim();
+    if fallback_body.is_empty() {
+        return format!("Protocol relay upload failed ({status})");
+    }
+    format!("Protocol relay upload failed ({status}): {fallback_body}")
+}
+
+fn upload_via_protocol_relay(
+    out_dir: &Path,
+    endpoint: &str,
+    api_key: Option<&str>,
+) -> Result<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        bail!("Protocol relay endpoint is required");
+    }
+    let url = protocol_relay_upload_url(endpoint)?;
+    let form = build_upload_form(out_dir, "file")?;
+    let client = reqwest::blocking::Client::new();
+    let mut request = client.post(url.clone()).multipart(form);
+    if let Some(token) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        request = request.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let response = request
+        .send()
+        .with_context(|| format!("Protocol relay upload request to {} failed", url))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .context("read protocol relay response body")?;
+    if !status.is_success() {
+        bail!("{}", parse_protocol_relay_error(status, &body));
+    }
+    let parsed: ProtocolRelayUploadResponse =
+        serde_json::from_str(&body).context("parse protocol relay response JSON")?;
+    if parsed.root_cid.trim().is_empty() {
+        bail!("Protocol relay response missing rootCid");
+    }
+    Ok(parsed.root_cid)
+}
+
 fn upload_via_ipfs_add(
     out_dir: &Path,
     endpoint: &str,
@@ -425,11 +526,10 @@ fn upload_bundle(out_dir: &Path, upload_config: &UploadConfig) -> Result<String>
                      Set an endpoint in Publish settings, or choose 4EVERLAND, Pinata, or Local IPFS Node."
                 );
             }
-            upload_via_ipfs_add(
+            upload_via_protocol_relay(
                 out_dir,
                 &upload_config.protocol_relay.endpoint,
                 upload_config.protocol_relay.api_key.as_deref(),
-                "Protocol relay",
             )
         }
         UploadProvider::FourEverland => {

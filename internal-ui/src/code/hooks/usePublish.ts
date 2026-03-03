@@ -8,7 +8,7 @@ import type { ConsoleHook } from "./useConsole";
 const DEFAULT_UPLOAD_CONFIG: UploadConfig = {
   provider: "protocolRelay",
   protocolRelay: {
-    endpoint: "",
+    endpoint: "https://ipfs.vibefi.dev",
     apiKey: null,
   },
   fourEverland: {

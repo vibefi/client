@@ -1635,7 +1635,7 @@ export default function App() {
                   <div className="proj-input-row">
                     <input
                       value={publish.uploadConfig.protocolRelay.endpoint}
-                      placeholder="https://upload.vibefi.xyz"
+                      placeholder="https://ipfs.vibefi.dev"
                       onChange={(e) =>
                         publish.setUploadConfig({
                           ...publish.uploadConfig,
