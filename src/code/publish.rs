@@ -342,6 +342,17 @@ fn parse_ipfs_add_cid(body: &str) -> Result<String> {
     Ok(cid.to_string())
 }
 
+fn truncate_for_log(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for ch in value.chars().take(max_chars) {
+        out.push(ch);
+    }
+    if value.chars().count() > max_chars {
+        out.push_str("...(truncated)");
+    }
+    out
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProtocolRelayUploadResponse {
@@ -418,6 +429,16 @@ fn upload_via_protocol_relay(
         bail!("Protocol relay endpoint is required");
     }
     let url = protocol_relay_upload_url(endpoint)?;
+    let has_api_key = api_key
+        .map(str::trim)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false);
+    tracing::debug!(
+        endpoint,
+        url = %url,
+        has_api_key,
+        "starting protocol relay upload"
+    );
     let form = build_upload_form(out_dir, "file")?;
     let client = reqwest::blocking::Client::new();
     let mut request = client.post(url.clone()).multipart(form);
@@ -433,6 +454,12 @@ fn upload_via_protocol_relay(
         .text()
         .context("read protocol relay response body")?;
     if !status.is_success() {
+        tracing::warn!(
+            endpoint,
+            status = %status,
+            body = %truncate_for_log(&body, 800),
+            "protocol relay upload returned non-success status"
+        );
         bail!("{}", parse_protocol_relay_error(status, &body));
     }
     let parsed: ProtocolRelayUploadResponse =
@@ -458,6 +485,17 @@ fn upload_via_ipfs_add(
         "{}/api/v0/add?recursive=true&wrap-with-directory=true&cid-version=1&pin=true",
         endpoint
     );
+    let has_bearer_token = bearer_token
+        .map(str::trim)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false);
+    tracing::debug!(
+        provider_label,
+        endpoint,
+        url,
+        has_bearer_token,
+        "starting ipfs add upload"
+    );
 
     let form = build_upload_form(out_dir, "file")?;
     let client = reqwest::blocking::Client::new();
@@ -476,6 +514,13 @@ fn upload_via_ipfs_add(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().unwrap_or_default();
+        tracing::warn!(
+            provider_label,
+            endpoint,
+            status = %status,
+            body = %truncate_for_log(&body, 800),
+            "ipfs add upload returned non-success status"
+        );
         bail!("{provider_label} IPFS add failed: {} {}", status, body);
     }
 
@@ -493,6 +538,12 @@ fn upload_via_pinata(out_dir: &Path, endpoint: &str, api_key: Option<&str>) -> R
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("Pinata API key/token is required"))?;
     let url = format!("{}/pinning/pinFileToIPFS", endpoint.trim_end_matches('/'));
+    tracing::debug!(
+        endpoint,
+        url,
+        has_api_key = !token.is_empty(),
+        "starting pinata upload"
+    );
     let form = build_upload_form(out_dir, "file")?;
     let response = reqwest::blocking::Client::new()
         .post(&url)
@@ -503,6 +554,12 @@ fn upload_via_pinata(out_dir: &Path, endpoint: &str, api_key: Option<&str>) -> R
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().unwrap_or_default();
+        tracing::warn!(
+            endpoint,
+            status = %status,
+            body = %truncate_for_log(&body, 800),
+            "pinata upload returned non-success status"
+        );
         bail!("Pinata upload failed: {} {}", status, body);
     }
     let body = response.text().context("read Pinata response body")?;
@@ -631,7 +688,8 @@ pub fn package_and_upload(
     // 5. Upload to IPFS
     let upload_label = upload_config.provider.label();
     progress("upload", 50, &format!("Uploading via {}...", upload_label));
-    let root_cid = upload_bundle(&out_dir, upload_config).context("upload failed")?;
+    let root_cid = upload_bundle(&out_dir, upload_config)
+        .with_context(|| format!("upload via {} failed", upload_label))?;
     progress(
         "upload",
         95,

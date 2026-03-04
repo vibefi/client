@@ -40,6 +40,19 @@ export interface PublishHook {
   setLastRootCid: (c: string | null) => void;
 }
 
+function publishTargetSummary(config: UploadConfig): string {
+  if (config.provider === "protocolRelay") {
+    return `protocolRelay endpoint=${config.protocolRelay.endpoint} apiKeySet=${Boolean(config.protocolRelay.apiKey?.trim())}`;
+  }
+  if (config.provider === "fourEverland") {
+    return `4EVERLAND endpoint=${config.fourEverland.endpoint} accessTokenSet=${Boolean(config.fourEverland.accessToken?.trim())}`;
+  }
+  if (config.provider === "pinata") {
+    return `pinata endpoint=${config.pinata.endpoint} apiKeySet=${Boolean(config.pinata.apiKey?.trim())}`;
+  }
+  return `localNode endpoint=${config.localNode.endpoint}`;
+}
+
 export function usePublish(client: IpcClient, console_: ConsoleHook): PublishHook {
   const [uploadConfig, setUploadConfig] = useState<UploadConfig>(DEFAULT_UPLOAD_CONFIG);
   const [publishing, setPublishing] = useState(false);
@@ -90,6 +103,7 @@ export function usePublish(client: IpcClient, console_: ConsoleHook): PublishHoo
     setLastError(null);
     setLastRootCid(null);
     console_.append(["[system] starting propose-upgrade pipeline..."]);
+    console_.append([`[system] publish target: ${publishTargetSummary(uploadConfig)}`]);
     try {
       const result = await client.request(PROVIDER_IDS.code, "code_proposeUpgrade", [{ projectPath }]);
       const r = result && typeof result === "object" ? (result as Record<string, unknown>) : {};

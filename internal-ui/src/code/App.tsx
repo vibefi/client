@@ -42,6 +42,7 @@ import { useChat } from "./hooks/useChat";
 declare global {
   interface Window {
     __VibefiHostDispatch?: (message: unknown) => void;
+    __VibefiIpcClient?: IpcClient;
   }
 }
 
@@ -89,22 +90,25 @@ function renderTreeIcon(entry: FileEntry, expanded = false): React.ReactNode {
   return <FiFile />;
 }
 
-const client = new IpcClient();
-const previousHostDispatch = window.__VibefiHostDispatch;
+const client = window.__VibefiIpcClient ?? new IpcClient();
 
-window.__VibefiHostDispatch = (message: unknown) => {
-  previousHostDispatch?.(message);
-  handleHostDispatch(message, {
-    onRpcResponse: (payload) => {
-      client.resolve(payload.id, payload.result ?? null, payload.error ?? null);
-    },
-    onProviderEvent: (payload) => {
-      window.dispatchEvent(
-        new CustomEvent<ProviderEventPayload>(CODE_PROVIDER_EVENT, { detail: payload })
-      );
-    },
-  });
-};
+if (!window.__VibefiIpcClient) {
+  console.warn("[vibefi:code] preload IPC client missing; falling back to local resolver");
+  const previousHostDispatch = window.__VibefiHostDispatch;
+  window.__VibefiHostDispatch = (message: unknown) => {
+    previousHostDispatch?.(message);
+    handleHostDispatch(message, {
+      onRpcResponse: (payload) => {
+        client.resolve(payload.id, payload.result ?? null, payload.error ?? null);
+      },
+      onProviderEvent: (payload) => {
+        window.dispatchEvent(
+          new CustomEvent<ProviderEventPayload>(CODE_PROVIDER_EVENT, { detail: payload })
+        );
+      },
+    });
+  };
+}
 
 export default function App() {
   // ── UI state (stays in App) ─────────────────────────────────────────────

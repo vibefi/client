@@ -2,6 +2,8 @@ import { IpcClient } from "./ipc/client";
 import { PROVIDER_IDS } from "./ipc/contracts";
 import { handleHostDispatch } from "./ipc/host-dispatch";
 
+const CODE_PROVIDER_EVENT = "vibefi:code-provider-event";
+
 type Eip1193RequestArgs = {
   method: string;
   params?: unknown[];
@@ -15,6 +17,7 @@ declare global {
     __WryEthereumEmit?: (event: string, payload: unknown) => void;
     __WryEthereumResolve?: (id: number, result: unknown, error: unknown) => void;
     __VibefiHostDispatch?: (message: unknown) => void;
+    __VibefiIpcClient?: IpcClient;
   }
 }
 
@@ -42,9 +45,11 @@ declare global {
       removeListener: (event: "progress", handler: IpfsListener) => void;
     };
     updateTabs?: (tabs: unknown[], activeIndex: number) => void;
+    __VibefiIpcClient?: IpcClient;
   };
 
-  const ipc = new IpcClient();
+  const ipc = globalWindow.__VibefiIpcClient ?? new IpcClient();
+  globalWindow.__VibefiIpcClient = ipc;
   const listeners = new Map<string, Set<Listener>>();
   const ipfsListeners = new Map<string, Set<IpfsListener>>();
 
@@ -134,6 +139,9 @@ declare global {
         ipc.resolve(payload.id, payload.result ?? null, payload.error ?? null);
       },
       onProviderEvent: (payload) => {
+        window.dispatchEvent(
+          new CustomEvent(CODE_PROVIDER_EVENT, { detail: payload })
+        );
         if (payload.event === "vibefiIpfsProgress") {
           emitIpfs("progress", payload.value);
           return;

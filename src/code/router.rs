@@ -116,6 +116,47 @@ struct ProposeUpgradeParams {
     project_path: Option<String>,
 }
 
+fn summarize_upload_config(upload: &settings::UploadConfig) -> String {
+    match upload.provider {
+        settings::UploadProvider::ProtocolRelay => format!(
+            "provider=ProtocolRelay endpoint={} apiKeySet={}",
+            upload.protocol_relay.endpoint,
+            upload
+                .protocol_relay
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        ),
+        settings::UploadProvider::FourEverland => format!(
+            "provider=4EVERLAND endpoint={} accessTokenSet={}",
+            upload.four_everland.endpoint,
+            upload
+                .four_everland
+                .access_token
+                .as_deref()
+                .map(str::trim)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        ),
+        settings::UploadProvider::Pinata => format!(
+            "provider=Pinata endpoint={} apiKeySet={}",
+            upload.pinata.endpoint,
+            upload
+                .pinata
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        ),
+        settings::UploadProvider::LocalNode => {
+            format!("provider=LocalNode endpoint={}", upload.local_node.endpoint)
+        }
+    }
+}
+
 pub fn handle_code_ipc(
     state: &AppState,
     manager: &WebViewManager,
@@ -394,12 +435,20 @@ pub fn handle_code_ipc(
             let project_root = resolve_dev_server_project_root(state, params.project_path)?;
             let workspace_root = resolve_workspace_root(state)?;
             let upload = settings::load_settings(&workspace_root).upload;
+            let upload_summary = summarize_upload_config(&upload);
 
             let state_clone = state.clone();
             let webview_id = webview_id.to_string();
             let ipc_id = req.id;
 
             std::thread::spawn(move || {
+                tracing::info!(
+                    webview_id = %webview_id,
+                    ipc_id,
+                    project_root = %project_root.display(),
+                    upload = %upload_summary,
+                    "starting code_proposeUpgrade pipeline"
+                );
                 let result = (|| -> Result<serde_json::Value> {
                     let mut emit = |stage: &str, percent: u8, message: &str| {
                         let _ = state_clone.proxy.send_event(UserEvent::ProviderEvent {
@@ -443,7 +492,15 @@ pub fn handle_code_ipc(
                     }))
                 })()
                 .map_err(|e| {
-                    let message = e.to_string();
+                    let message = format!("{:#}", e);
+                    tracing::error!(
+                        webview_id = %webview_id,
+                        ipc_id,
+                        project_root = %project_root.display(),
+                        upload = %upload_summary,
+                        error = %message,
+                        "code_proposeUpgrade failed"
+                    );
                     let _ = state_clone.proxy.send_event(UserEvent::ProviderEvent {
                         webview_id: webview_id.clone(),
                         event: "codePublishError".to_string(),
