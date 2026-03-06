@@ -14,7 +14,7 @@ use sysinfo::{Pid, Signal, System};
 
 use crate::code::settings as code_settings;
 use crate::rpc_manager::{DEFAULT_MAX_CONCURRENT_RPC, RpcEndpoint, RpcEndpointManager};
-use crate::state::{AppState, RunningCodeAnvil, UserEvent};
+use crate::state::{AppState, Chain, CodeAnvilContext, RunningCodeAnvil, UserEvent, WalletState};
 
 const DEFAULT_ANVIL_HOST: &str = "127.0.0.1";
 const DEFAULT_ANVIL_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -235,122 +235,81 @@ fn effective_config(state: &AppState) -> Result<EffectiveAnvilConfig> {
 }
 
 fn apply_runtime_for_anvil(state: &AppState, port: u16, chain_id: u64) -> Result<()> {
+    {
+        let code = state
+            .code
+            .lock()
+            .map_err(|_| anyhow!("poisoned lock: code"))?;
+        if code.anvil_context.is_some() {
+            return Ok(());
+        }
+    }
+
     let signer: PrivateKeySigner = ANVIL_ACCOUNT_1_PRIVATE_KEY
         .parse()
         .context("failed to parse anvil account #1 private key")?;
     let signer = Arc::new(signer);
-
-    {
-        let mut s = state
-            .signer
-            .lock()
-            .map_err(|_| anyhow!("poisoned lock: signer"))?;
-        *s = Some(signer.clone());
-    }
-    {
-        let mut wc = state
-            .walletconnect
-            .lock()
-            .map_err(|_| anyhow!("poisoned lock: walletconnect"))?;
-        *wc = None;
-    }
-    {
-        let mut hs = state
-            .hardware_signer
-            .lock()
-            .map_err(|_| anyhow!("poisoned lock: hardware_signer"))?;
-        *hs = None;
-    }
-    {
-        let mut ws = state
-            .wallet
-            .lock()
-            .map_err(|_| anyhow!("poisoned lock: wallet"))?;
-        ws.authorized = false;
-        ws.account = None;
-        ws.walletconnect_uri = None;
-        ws.chain.chain_id = chain_id;
-    }
+    let account = format!("0x{:x}", signer.address());
+    let wallet = Arc::new(Mutex::new(WalletState {
+        authorized: false,
+        chain: Chain { chain_id },
+        account: None,
+        walletconnect_uri: None,
+    }));
 
     let endpoint = RpcEndpoint {
         url: format!("http://{DEFAULT_ANVIL_HOST}:{port}"),
         label: Some("Code Anvil".to_string()),
     };
-
-    let mut mgr = state
+    let http = if let Some(resolved) = state.resolved.as_ref() {
+        resolved.http_client.clone()
+    } else {
+        reqwest::blocking::Client::new()
+    };
+    let max_concurrent = state
         .rpc_manager
         .lock()
-        .map_err(|_| anyhow!("poisoned lock: rpc_manager"))?;
-    if let Some(existing) = mgr.as_ref() {
-        existing.set_endpoints(vec![endpoint]);
-    } else {
-        let http = if let Some(resolved) = state.resolved.as_ref() {
-            resolved.http_client.clone()
-        } else {
-            reqwest::blocking::Client::new()
-        };
-        *mgr = Some(RpcEndpointManager::new(
-            vec![endpoint],
-            http,
-            DEFAULT_MAX_CONCURRENT_RPC,
-        ));
+        .ok()
+        .and_then(|mgr| mgr.as_ref().map(RpcEndpointManager::get_max_concurrent))
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_RPC);
+    let rpc_manager = RpcEndpointManager::new(vec![endpoint], http, max_concurrent);
+
+    let mut code = state
+        .code
+        .lock()
+        .map_err(|_| anyhow!("poisoned lock: code"))?;
+    if code.anvil_context.is_none() {
+        code.anvil_context = Some(CodeAnvilContext {
+            signer,
+            account,
+            chain_id,
+            wallet,
+            rpc_manager,
+        });
     }
 
     Ok(())
 }
 
 fn restore_runtime_after_anvil(state: &AppState) {
-    if let Ok(mut signer) = state.signer.lock() {
-        *signer = None;
+    if let Ok(mut code) = state.code.lock() {
+        code.anvil_context = None;
     }
-    if let Ok(mut wc) = state.walletconnect.lock() {
-        *wc = None;
-    }
-    if let Ok(mut hs) = state.hardware_signer.lock() {
-        *hs = None;
-    }
-    if let Ok(mut ws) = state.wallet.lock() {
-        ws.authorized = false;
-        ws.account = None;
-        ws.walletconnect_uri = None;
-        ws.chain.chain_id = state.resolved.as_ref().map(|r| r.chain_id).unwrap_or(1);
-    }
+}
 
-    let mut mgr = match state.rpc_manager.lock() {
-        Ok(mgr) => mgr,
-        Err(_) => return,
-    };
+fn code_anvil_account(state: &AppState) -> Option<String> {
+    let code = state.code.lock().ok()?;
+    code.anvil_context.as_ref().map(|ctx| ctx.account.clone())
+}
 
-    let Some(resolved) = state.resolved.as_ref() else {
-        return;
-    };
-
-    let endpoints = if let Some(config_path) = resolved.config_path.as_ref() {
-        let user_settings = crate::settings::load_settings(config_path);
-        if user_settings.rpc_endpoints.is_empty() {
-            vec![RpcEndpoint {
-                url: resolved.rpc_url.clone(),
-                label: Some("Default".to_string()),
-            }]
-        } else {
-            user_settings.rpc_endpoints
-        }
-    } else {
-        vec![RpcEndpoint {
-            url: resolved.rpc_url.clone(),
-            label: Some("Default".to_string()),
-        }]
-    };
-
-    if let Some(existing) = mgr.as_ref() {
-        existing.set_endpoints(endpoints);
-    } else {
-        *mgr = Some(RpcEndpointManager::new(
-            endpoints,
-            resolved.http_client.clone(),
-            DEFAULT_MAX_CONCURRENT_RPC,
-        ));
-    }
+fn code_anvil_chain_id(state: &AppState) -> Option<u64> {
+    let code = state.code.lock().ok()?;
+    let ctx = code.anvil_context.as_ref()?;
+    ctx.wallet
+        .lock()
+        .ok()
+        .map(|ws| ws.chain.chain_id)
+        .or(Some(ctx.chain_id))
 }
 
 fn spawn_output_reader<R: std::io::Read + Send + 'static>(
@@ -431,7 +390,7 @@ fn maybe_emit_ready(
         return;
     }
 
-    let account = state.local_signer_address();
+    let account = code_anvil_account(state);
     emit_provider_event(
         &state.proxy,
         webview_id.to_string(),
@@ -575,7 +534,8 @@ fn status_json(state: &AppState, running: Option<&RunningSnapshot>, ok: bool) ->
         }
     };
 
-    let account = state.local_signer_address();
+    let account = code_anvil_account(state);
+    let chain_id = code_anvil_chain_id(state).unwrap_or(code_cfg.chain_id);
 
     if let Some(anvil) = running {
         json!({
@@ -586,7 +546,7 @@ fn status_json(state: &AppState, running: Option<&RunningSnapshot>, ok: bool) ->
             "projectPath": anvil.project_root.to_string_lossy().to_string(),
             "account": account,
             "accountIndex": 1,
-            "chainId": state.wallet.lock().ok().map(|ws| ws.chain.chain_id).unwrap_or(code_cfg.chain_id),
+            "chainId": chain_id,
             "config": code_cfg,
         })
     } else {
@@ -598,7 +558,7 @@ fn status_json(state: &AppState, running: Option<&RunningSnapshot>, ok: bool) ->
             "projectPath": Value::Null,
             "account": account,
             "accountIndex": 1,
-            "chainId": code_cfg.chain_id,
+            "chainId": chain_id,
             "config": code_cfg,
         })
     }

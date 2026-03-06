@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
 use wry::WebView;
 
 use crate::ipc_contract::{IpcRequest, KnownProviderId};
@@ -11,6 +12,22 @@ use crate::webview_manager::{AppWebViewKind, WebViewManager};
 use super::{
     hardware, ipfs, local, respond_option_result, respond_value_result, selector, walletconnect,
 };
+
+fn resolve_code_state(state: &AppState) -> Result<AppState> {
+    let code = lock_or_err(&state.code, "code")?;
+    let Some(ctx) = code.anvil_context.as_ref() else {
+        return Ok(state.clone());
+    };
+
+    let mut overlay = state.clone();
+    overlay.signer = Arc::new(Mutex::new(Some(ctx.signer.clone())));
+    overlay.wallet_backend = Arc::new(Mutex::new(Some(WalletBackend::Local)));
+    overlay.wallet = Arc::clone(&ctx.wallet);
+    overlay.walletconnect = Arc::new(Mutex::new(None));
+    overlay.hardware_signer = Arc::new(Mutex::new(None));
+    overlay.rpc_manager = Arc::new(Mutex::new(Some(ctx.rpc_manager.clone())));
+    Ok(overlay)
+}
 
 pub fn handle_ipc(
     webview: &WebView,
@@ -128,20 +145,25 @@ pub fn handle_ipc(
 
     // Code preview is isolated from the global wallet backend and always routes
     // through the local provider path when a local signer is available.
-    if is_code_surface && is_connect_request && state.local_signer().is_none() {
+    let code_state = if is_code_surface {
+        Some(resolve_code_state(state)?)
+    } else {
+        None
+    };
+    if let Some(code_state) = code_state.as_ref() {
+        if is_connect_request && code_state.local_signer().is_none() {
+            return respond_option_result(
+                webview,
+                req.id,
+                Err(anyhow!(
+                    "Code preview only supports the local Anvil wallet. Start Anvil in the Code sidebar and try again."
+                )),
+            );
+        }
         return respond_option_result(
             webview,
             req.id,
-            Err(anyhow!(
-                "Code preview only supports the local Anvil wallet. Start Anvil in the Code sidebar and try again."
-            )),
-        );
-    }
-    if is_code_surface {
-        return respond_option_result(
-            webview,
-            req.id,
-            local::handle_local_ipc(webview, state, webview_id, &req),
+            local::handle_local_ipc(webview, code_state, webview_id, &req),
         );
     }
 

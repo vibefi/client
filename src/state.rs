@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     collections::VecDeque,
+    fmt,
     path::PathBuf,
     process::Child,
     sync::{Arc, Mutex, MutexGuard},
@@ -117,6 +118,23 @@ pub struct WalletState {
     pub walletconnect_uri: Option<String>,
 }
 
+pub struct CodeAnvilContext {
+    pub signer: Arc<PrivateKeySigner>,
+    pub account: String,
+    pub chain_id: u64,
+    pub wallet: Arc<Mutex<WalletState>>,
+    pub rpc_manager: RpcEndpointManager,
+}
+
+impl fmt::Debug for CodeAnvilContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CodeAnvilContext")
+            .field("account", &self.account)
+            .field("chain_id", &self.chain_id)
+            .finish()
+    }
+}
+
 /// Tracks a pending `eth_requestAccounts` that is waiting for the user to
 /// pick a wallet backend in the selector tab.
 #[derive(Debug, Clone)]
@@ -165,6 +183,7 @@ pub struct CodeState {
     pub dev_server: Option<RunningCodeDevServer>,
     pub next_dev_server_id: u64,
     pub anvil: Option<RunningCodeAnvil>,
+    pub anvil_context: Option<CodeAnvilContext>,
     pub next_anvil_id: u64,
 }
 

@@ -197,6 +197,11 @@ pub fn handle_ipc_event(
                         tracing::error!(error = ?err, "failed to respond to tab-bar code IPC");
                     }
                 }
+                Some(KnownProviderId::Automation) => {
+                    if state.automation && req.method == "automation_result" {
+                        crate::automation::handle_automation_ipc_result(&req.params);
+                    }
+                }
                 _ => {}
             }
         }

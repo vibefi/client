@@ -120,6 +120,7 @@ pub fn handle_command(
 ) {
     match cmd_type.as_str() {
         "eval" => handle_eval(id, target, js, manager),
+        "eval_no_result" => handle_eval_no_result(&id, target, js, manager),
         "list_webviews" => handle_list_webviews(&id, manager),
         other => emit_result(&id, false, None, Some(format!("unknown command: {other}"))),
     }
@@ -160,6 +161,43 @@ fn handle_eval(id: String, target: Option<String>, js: Option<String>, manager: 
         );
     }
     // Result will arrive asynchronously via IPC → router → handle_automation_ipc_result.
+}
+
+fn handle_eval_no_result(
+    id: &str,
+    target: Option<String>,
+    js: Option<String>,
+    manager: &WebViewManager,
+) {
+    let Some(target) = target else {
+        emit_result(id, false, None, Some("missing 'target' field".into()));
+        return;
+    };
+    let Some(js) = js else {
+        emit_result(id, false, None, Some("missing 'js' field".into()));
+        return;
+    };
+    let Some(webview) = manager.webview_for_id(&target) else {
+        emit_result(
+            id,
+            false,
+            None,
+            Some(format!("webview not found: {target}")),
+        );
+        return;
+    };
+
+    if let Err(e) = webview.evaluate_script(&js) {
+        emit_result(
+            id,
+            false,
+            None,
+            Some(format!("evaluate_script failed: {e}")),
+        );
+        return;
+    }
+
+    emit_result(id, true, Some(Value::Null), None);
 }
 
 fn handle_list_webviews(id: &str, manager: &WebViewManager) {

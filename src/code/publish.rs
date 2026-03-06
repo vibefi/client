@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -151,6 +152,92 @@ fn read_project_manifest(project_root: &Path) -> Result<ProjectManifest> {
     let raw = fs::read_to_string(&manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parse {}", manifest_path.display()))
+}
+
+fn maybe_bump_upgrade_version(project_root: &Path) -> Result<Option<String>> {
+    let manifest_path = project_root.join("manifest.json");
+    let raw = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let mut manifest_value: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", manifest_path.display()))?;
+
+    let fork_dapp_id = manifest_value
+        .get("forkOf")
+        .and_then(|value| value.get("dappId"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if fork_dapp_id.is_none() {
+        return Ok(None);
+    }
+
+    let current = manifest_value
+        .get("version")
+        .and_then(|value| value.as_str())
+        .unwrap_or("0.0.0");
+    let next = bump_version_string(current);
+    manifest_value["version"] = serde_json::Value::String(next.clone());
+
+    let mut manifest_json =
+        serde_json::to_string_pretty(&manifest_value).context("serialize manifest.json")?;
+    manifest_json.push('\n');
+    fs::write(&manifest_path, manifest_json)
+        .with_context(|| format!("write {}", manifest_path.display()))?;
+
+    sync_package_version(project_root, &next)?;
+    Ok(Some(next))
+}
+
+fn bump_version_string(current: &str) -> String {
+    let trimmed = current.trim();
+    if trimmed.is_empty() {
+        return "0.0.1".to_string();
+    }
+
+    let parts: Option<Vec<u64>> = trimmed
+        .split('.')
+        .map(|part| {
+            let part = part.trim();
+            (!part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+                .then(|| part.parse::<u64>().ok())
+                .flatten()
+        })
+        .collect();
+
+    if let Some(mut parts) = parts {
+        if parts.is_empty() {
+            return "0.0.1".to_string();
+        }
+        let last = parts.len() - 1;
+        parts[last] = parts[last].saturating_add(1);
+        return parts
+            .into_iter()
+            .map(|part| part.to_string())
+            .collect::<Vec<_>>()
+            .join(".");
+    }
+
+    format!("{trimmed}.1")
+}
+
+fn sync_package_version(project_root: &Path, version: &str) -> Result<()> {
+    let package_path = project_root.join("package.json");
+    if !package_path.is_file() {
+        return Ok(());
+    }
+
+    let raw = fs::read_to_string(&package_path)
+        .with_context(|| format!("read {}", package_path.display()))?;
+    let mut package_value: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", package_path.display()))?;
+    package_value["version"] = serde_json::Value::String(version.to_string());
+
+    let mut package_json =
+        serde_json::to_string_pretty(&package_value).context("serialize package.json")?;
+    package_json.push('\n');
+    fs::write(&package_path, package_json)
+        .with_context(|| format!("write {}", package_path.display()))?;
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -305,20 +392,23 @@ fn build_upload_form(
 ) -> Result<reqwest::blocking::multipart::Form> {
     let mut form = reqwest::blocking::multipart::Form::new();
 
-    let files = bundle::walk_files(out_dir)?;
-    // Also include manifest.json which walk_files skips
+    let mut all_files = bundle::walk_files(out_dir)?;
     let manifest_path = out_dir.join("manifest.json");
-    let mut all_files = files;
-    if manifest_path.is_file() {
+    if manifest_path.is_file() && !all_files.iter().any(|path| path == &manifest_path) {
         all_files.push(manifest_path);
     }
 
+    let mut seen_rel_paths = HashSet::<String>::new();
     for file in &all_files {
         let rel = file
             .strip_prefix(out_dir)
             .unwrap_or(file)
             .to_string_lossy()
             .replace('\\', "/");
+        if !seen_rel_paths.insert(rel.clone()) {
+            tracing::warn!(path = %rel, "skipping duplicate upload path");
+            continue;
+        }
         let data = fs::read(file)
             .with_context(|| format!("read file for IPFS upload: {}", file.display()))?;
         let part = reqwest::blocking::multipart::Part::bytes(data).file_name(rel);
@@ -640,7 +730,17 @@ pub fn package_and_upload(
         );
     }
 
-    // 2. Read manifest metadata
+    // 2. Bump upgrade version before packaging so the proposal metadata and
+    // persisted project files stay in sync.
+    if let Some(next_version) = maybe_bump_upgrade_version(project_root)? {
+        progress(
+            "manifest",
+            8,
+            &format!("Bumped upgrade version to {}...", next_version),
+        );
+    }
+
+    // 3. Read manifest metadata
     progress("manifest", 10, "Reading project manifest...");
     let manifest = read_project_manifest(project_root)?;
     let name = manifest
@@ -658,7 +758,7 @@ pub fn package_and_upload(
     let description = manifest.description.as_deref().unwrap_or("").to_string();
     let dapp_id = manifest.fork_of.as_ref().and_then(|f| f.dapp_id.clone());
 
-    // 3. Detect layout and collect files
+    // 4. Detect layout and collect files
     progress("package", 20, "Detecting bundle layout...");
     let layout = detect_layout(project_root)?;
     let bundle_files = match layout {
@@ -671,7 +771,7 @@ pub fn package_and_upload(
         &format!("Packaging {} files...", bundle_files.len()),
     );
 
-    // 4. Build manifest and write bundle to temp dir
+    // 5. Build manifest and write bundle to temp dir
     let bundle_manifest = build_bundle_manifest(
         project_root,
         &bundle_files,
@@ -685,7 +785,7 @@ pub fn package_and_upload(
     write_bundle(project_root, &out_dir, &bundle_files, &bundle_manifest)?;
     progress("package", 40, "Bundle written to temp directory");
 
-    // 5. Upload to IPFS
+    // 6. Upload to IPFS
     let upload_label = upload_config.provider.label();
     progress("upload", 50, &format!("Uploading via {}...", upload_label));
     let root_cid = upload_bundle(&out_dir, upload_config)
@@ -696,7 +796,7 @@ pub fn package_and_upload(
         &format!("Uploaded via {}: {}", upload_label, root_cid),
     );
 
-    // 6. Clean up
+    // 7. Clean up
     let _ = fs::remove_dir_all(&out_dir);
     progress("complete", 100, &format!("Published as {}", root_cid));
 
@@ -707,4 +807,22 @@ pub fn package_and_upload(
         description,
         dapp_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bump_version_string;
+
+    #[test]
+    fn bumps_patch_version_for_numeric_dotted_versions() {
+        assert_eq!(bump_version_string("0.0.1"), "0.0.2");
+        assert_eq!(bump_version_string("1.2"), "1.3");
+        assert_eq!(bump_version_string("7"), "8");
+    }
+
+    #[test]
+    fn falls_back_for_empty_or_non_numeric_versions() {
+        assert_eq!(bump_version_string(""), "0.0.1");
+        assert_eq!(bump_version_string("release"), "release.1");
+    }
 }
