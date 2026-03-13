@@ -373,9 +373,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [commandPaletteVisible, quickOpenFiles, quickOpenIndex, quickOpenVisible]);
 
+  const expectedPreviewOrigin = devServer.status.port ? `http://localhost:${devServer.status.port}` : null;
+
   useEffect(() => {
     const onPreviewMessage = (event: MessageEvent) => {
-      if (typeof event.origin !== "string" || !event.origin.startsWith("http://localhost:")) return;
+      if (!expectedPreviewOrigin || event.origin !== expectedPreviewOrigin) return;
       if (!isRecord(event.data)) return;
 
       if (event.data.type === "vibefi-preview-eth-request") {
@@ -445,7 +447,7 @@ export default function App() {
     };
     window.addEventListener("message", onPreviewMessage);
     return () => window.removeEventListener("message", onPreviewMessage);
-  }, []);
+  }, [expectedPreviewOrigin]);
 
   useEffect(() => {
     const onCodeProviderEvent = (event: Event) => {

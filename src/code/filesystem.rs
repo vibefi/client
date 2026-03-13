@@ -126,6 +126,9 @@ pub fn delete_file(project_root: &Path, relative_path: &str) -> Result<()> {
 }
 
 pub fn delete_dir(project_root: &Path, relative_path: &str) -> Result<()> {
+    if relative_path == "." || relative_path.is_empty() {
+        bail!("cannot delete the project root");
+    }
     let path = validate_relative_path(project_root, relative_path)?;
     if !path.exists() {
         bail!("directory not found: {}", relative_path);

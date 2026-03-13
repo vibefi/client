@@ -110,7 +110,7 @@ const LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT: &str = r#"    <script>
             message: event.message || "Unknown runtime error",
             stack: event.error && event.error.stack ? String(event.error.stack) : "",
           },
-          "*"
+          "app://"
         );
       });
       window.addEventListener("unhandledrejection", (event) => {
@@ -119,7 +119,7 @@ const LEGACY_PREVIEW_ERROR_BRIDGE_SCRIPT: &str = r#"    <script>
             type: "vibefi-code-error",
             message: String(event.reason || "Unhandled promise rejection"),
           },
-          "*"
+          "app://"
         );
       });
     </script>"#;
@@ -132,7 +132,7 @@ const PREVIEW_CONSOLE_BRIDGE_SCRIPT: &str = r#"    <script>
         const postToParent = (payload) => {
           try {
             if (window.parent && window.parent !== window) {
-              window.parent.postMessage(payload, "*");
+              window.parent.postMessage(payload, "app://");
             }
           } catch (_) {}
         };
@@ -260,7 +260,7 @@ const PREVIEW_WALLET_BRIDGE_SCRIPT: &str = r#"    <script>
                 method,
                 params: Array.isArray(params) ? params : [],
               },
-              "*"
+              "app://"
             );
           });
 
@@ -739,7 +739,7 @@ fn allocate_fork_project_root(workspace_root: &Path, base_name: &str) -> Result<
 }
 
 fn should_skip_dir_name(name: &str) -> bool {
-    name == "node_modules" || name == ".vibefi" || name == "dist"
+    name == "node_modules" || name == ".vibefi" || name == "dist" || name == ".git"
 }
 
 fn copy_source_tree(source_root: &Path, target_root: &Path) -> Result<()> {
@@ -773,6 +773,9 @@ fn copy_source_tree(source_root: &Path, target_root: &Path) -> Result<()> {
         }
 
         if file_type.is_file() {
+            if file_name_string.starts_with(".env") {
+                continue;
+            }
             if let Some(parent) = target_path.parent() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {}", parent.display()))?;

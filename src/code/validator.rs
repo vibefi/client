@@ -228,6 +228,15 @@ fn has_allowed_extension(path: &str, allowed: &[&str]) -> bool {
 
 fn validate_package_json(project_root: &Path, errors: &mut Vec<ValidationError>) -> Result<()> {
     let package_json_path = project_root.join("package.json");
+    if !package_json_path.is_file() {
+        errors.push(ValidationError::error(
+            Some("package.json"),
+            None,
+            "package.json is missing.",
+            "missing-package-json",
+        ));
+        return Ok(());
+    }
     let raw = fs::read_to_string(&package_json_path)
         .with_context(|| format!("failed to read {}", package_json_path.display()))?;
     let value: Value = match serde_json::from_str(&raw) {
@@ -295,7 +304,7 @@ fn is_allowed_package(name: &str) -> bool {
             | "@tanstack/react-query"
             | "wagmi"
             | "viem"
-            | "shadcn"
+            | "@shadcn/ui"
             | "@types/react"
             | "@types/react-dom"
             | "@vitejs/plugin-react"
@@ -304,6 +313,15 @@ fn is_allowed_package(name: &str) -> bool {
 
 fn validate_manifest_json(project_root: &Path, errors: &mut Vec<ValidationError>) -> Result<()> {
     let manifest_path = project_root.join("manifest.json");
+    if !manifest_path.is_file() {
+        errors.push(ValidationError::error(
+            Some("manifest.json"),
+            None,
+            "manifest.json is missing.",
+            "missing-manifest",
+        ));
+        return Ok(());
+    }
     let raw = fs::read_to_string(&manifest_path)
         .with_context(|| format!("failed to read {}", manifest_path.display()))?;
     let value: Value = match serde_json::from_str(&raw) {

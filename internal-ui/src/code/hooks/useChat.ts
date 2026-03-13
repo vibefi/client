@@ -502,6 +502,7 @@ export function useChat(
               project.ensureDirExpanded(targetPath);
               editor.replaceOpenFileTabContent(targetPath, content);
               recordToolChange(targetPath, before, content);
+              readFileCache.set(normalizedTargetPath, content);
 
               const success: ToolExecutionResult = {
                 toolCallId: toolCall.id,
@@ -656,6 +657,7 @@ export function useChat(
               project.ensureDirExpanded(targetPath);
               editor.replaceOpenFileTabContent(targetPath, afterContent);
               recordToolChange(targetPath, safeBefore, afterContent);
+              readFileCache.set(normalizedTargetPath, afterContent);
 
               const success: ToolExecutionResult = {
                 toolCallId: toolCall.id,

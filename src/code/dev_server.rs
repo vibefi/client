@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 use sysinfo::{Pid, Signal, System};
 
+use crate::runtime_paths::resolve_bun_binary;
 use crate::state::{AppState, RunningCodeDevServer, UserEvent};
 
 const START_PORT: u16 = 5199;
@@ -45,7 +46,8 @@ pub fn start_dev_server(
     let port = find_available_port(START_PORT)?;
     let ready = Arc::new(AtomicBool::new(false));
 
-    let mut command = Command::new("bun");
+    let bun_bin = resolve_bun_binary().context("resolve bun runtime for dev server")?;
+    let mut command = Command::new(&bun_bin);
     command
         .arg("x")
         .arg("vite")
@@ -177,7 +179,8 @@ fn ensure_dependencies(project_root: &Path, state: &AppState, webview_id: &str) 
         }),
     );
 
-    let output = Command::new("bun")
+    let bun_bin = resolve_bun_binary().context("resolve bun runtime for install")?;
+    let output = Command::new(&bun_bin)
         .arg("install")
         .env("NO_COLOR", "1")
         .current_dir(project_root)
@@ -380,16 +383,20 @@ fn update_running_server_port(
 }
 
 fn detect_ready_port(line: &str, configured_port: u16) -> Option<u16> {
+    if !line.contains("Local:") {
+        // Fallback: check for configured port mention as before
+        if line.contains(&format!("localhost:{configured_port}"))
+            || line.contains(&format!("127.0.0.1:{configured_port}"))
+        {
+            return Some(configured_port);
+        }
+        return None;
+    }
     if let Some(port) = extract_port_after_prefix(line, "http://localhost:") {
         return Some(port);
     }
     if let Some(port) = extract_port_after_prefix(line, "http://127.0.0.1:") {
         return Some(port);
-    }
-    if line.contains(&format!("localhost:{configured_port}"))
-        || line.contains(&format!("127.0.0.1:{configured_port}"))
-    {
-        return Some(configured_port);
     }
     None
 }
@@ -627,7 +634,8 @@ fn force_kill_child_tree(child: &mut Child, uses_process_group: bool) -> Result<
 }
 
 fn send_signal_to_pid(pid: Pid, signal: Signal) -> bool {
-    let system = System::new_all();
+    let mut system = System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), false);
     if let Some(process) = system.process(pid) {
         if process.kill_with(signal).unwrap_or(false) {
             return true;
