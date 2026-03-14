@@ -304,7 +304,7 @@ fn is_allowed_package(name: &str) -> bool {
             | "@tanstack/react-query"
             | "wagmi"
             | "viem"
-            | "@shadcn/ui"
+            | "shadcn"
             | "@types/react"
             | "@types/react-dom"
             | "@vitejs/plugin-react"
