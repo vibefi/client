@@ -10,10 +10,11 @@ use wry::{
 
 use crate::ipc::{emit_accounts_changed, emit_chain_changed};
 use crate::state::{AppState, UserEvent};
+use crate::webview_manager::AppWebViewKind;
 use crate::{
-    HOME_JS, INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, PRELOAD_APP_JS, PRELOAD_SETTINGS_JS,
-    PRELOAD_TAB_BAR_JS, PRELOAD_WALLET_SELECTOR_JS, SETTINGS_HTML, SETTINGS_JS, TAB_BAR_HTML,
-    TAB_BAR_JS, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS,
+    CODE_HTML, CODE_JS, HOME_JS, INDEX_HTML, LAUNCHER_HTML, LAUNCHER_JS, PRELOAD_APP_JS,
+    PRELOAD_SETTINGS_JS, PRELOAD_TAB_BAR_JS, PRELOAD_WALLET_SELECTOR_JS, SETTINGS_HTML,
+    SETTINGS_JS, TAB_BAR_HTML, TAB_BAR_JS, WALLET_SELECTOR_HTML, WALLET_SELECTOR_JS,
 };
 
 /// Platform-aware container for building child webviews.
@@ -39,12 +40,8 @@ pub enum EmbeddedContent {
     WalletSelector,
     /// The settings tab.
     Settings,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CspProfile {
-    Strict,
-    StaticHtml,
+    /// The VibeFi Code tab.
+    Code,
 }
 
 fn serve_file(dist_dir: &PathBuf, path: &str) -> (Vec<u8>, String) {
@@ -96,6 +93,19 @@ fn normalized_app_path(uri: &wry::http::Uri) -> String {
     result
 }
 
+const STANDARD_CSP: &str = "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default";
+const STATIC_HTML_CSP: &str = "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' 'unsafe-inline' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
+const CODE_CSP: &str = "default-src 'self' app:; script-src 'self' 'unsafe-inline' app:; style-src 'self' 'unsafe-inline' app:; connect-src https://api.anthropic.com https://api.openai.com http://localhost:*; frame-src http://localhost:*; img-src 'self' data: app: http://localhost:*; font-src 'self' app: data:; object-src 'none'; base-uri 'none'; form-action 'none';";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CspProfile {
+    Strict,
+    StaticHtml,
+    Code,
+}
+
+/// Detect whether a dist bundle is a static-html type by reading its manifest.json.
+/// The manifest lives two levels up from the dist dir (bundle_root/dist/...).
 fn csp_profile_for_dist(dist_dir: &PathBuf) -> CspProfile {
     let Some(bundle_root) = dist_dir.parent().and_then(|p| p.parent()) else {
         return CspProfile::Strict;
@@ -127,12 +137,9 @@ fn csp_response(
     profile: CspProfile,
 ) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
     let csp = match profile {
-        CspProfile::Strict => {
-            "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default"
-        }
-        CspProfile::StaticHtml => {
-            "default-src 'self' app:; img-src 'self' data: app:; style-src 'self' 'unsafe-inline' app:; script-src 'self' 'unsafe-inline' app:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'"
-        }
+        CspProfile::Code => CODE_CSP,
+        CspProfile::StaticHtml => STATIC_HTML_CSP,
+        CspProfile::Strict => STANDARD_CSP,
     };
     Response::builder()
         .status(200)
@@ -154,7 +161,11 @@ fn should_enable_devtools(state: &AppState) -> bool {
         })
 }
 
-fn allow_navigation(url: &str) -> bool {
+fn is_allowed_loopback_host(host: &str) -> bool {
+    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
+}
+
+fn allow_navigation(url: &str, kind: AppWebViewKind) -> bool {
     if url == "about:blank" {
         return true;
     }
@@ -167,6 +178,13 @@ fn allow_navigation(url: &str) -> bool {
         Some("app") => true,
         Some("https") | Some("http") => {
             let host = uri.host().unwrap_or("");
+            if kind == AppWebViewKind::Code
+                && uri.scheme_str() == Some("http")
+                && uri.port().is_some()
+                && is_allowed_loopback_host(host)
+            {
+                return true;
+            }
             // wry rewrites custom protocol app://X to http://app.X/
             // e.g. app://index.html -> http://app.index.html/
             // Windows WebView2 uses app.index.html for rewritten app:// navigation.
@@ -185,14 +203,19 @@ pub fn build_app_webview(
     state: &AppState,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     bounds: Rect,
+    kind: AppWebViewKind,
 ) -> Result<WebView> {
     tracing::debug!(?id, ?embedded, ?dist_dir, ?bounds, "build_app_webview");
 
     let protocol_dist = dist_dir.clone();
-    let csp_profile = dist_dir
-        .as_ref()
-        .map(csp_profile_for_dist)
-        .unwrap_or(CspProfile::Strict);
+    let csp_profile = if kind == AppWebViewKind::Code {
+        CspProfile::Code
+    } else {
+        dist_dir
+            .as_ref()
+            .map(csp_profile_for_dist)
+            .unwrap_or(CspProfile::Strict)
+    };
     let app_id_for_log = id.to_string();
     let protocol = move |_webview_id: wry::WebViewId, request: wry::http::Request<Vec<u8>>| {
         tracing::trace!(
@@ -214,6 +237,7 @@ pub fn build_app_webview(
                         EmbeddedContent::Launcher => LAUNCHER_HTML,
                         EmbeddedContent::WalletSelector => WALLET_SELECTOR_HTML,
                         EmbeddedContent::Settings => SETTINGS_HTML,
+                        EmbeddedContent::Code => CODE_HTML,
                     };
                     tracing::trace!("serving embedded html for {embedded:?}, len={}", html.len());
                     csp_response(
@@ -238,6 +262,11 @@ pub fn build_app_webview(
                         csp_profile,
                     )
                 }
+                (EmbeddedContent::Code, "/code.js") => csp_response(
+                    CODE_JS.as_bytes().to_vec(),
+                    "application/javascript; charset=utf-8".to_string(),
+                    csp_profile,
+                ),
                 (EmbeddedContent::WalletSelector, "/wallet-selector.js") => csp_response(
                     WALLET_SELECTOR_JS.as_bytes().to_vec(),
                     "application/javascript; charset=utf-8".to_string(),
@@ -261,8 +290,8 @@ pub fn build_app_webview(
         }
     };
 
-    let navigation_handler = |url: String| {
-        let allowed = allow_navigation(&url);
+    let navigation_handler = move |url: String| {
+        let allowed = allow_navigation(&url, kind);
         tracing::trace!("navigation_handler: url={url:?} allowed={allowed}");
         allowed
     };
@@ -309,7 +338,7 @@ pub fn build_app_webview(
                 .wallet
                 .lock()
                 .expect("poisoned wallet lock while emitting initial account state");
-            if ws.authorized {
+            if ws.authorized && state.get_wallet_backend().is_some() {
                 if let Some(addr) = addr {
                     emit_accounts_changed(&webview, vec![addr]);
                 }
@@ -393,29 +422,91 @@ pub fn build_tab_bar_webview(
 #[cfg(test)]
 mod tests {
     use super::allow_navigation;
+    use crate::webview_manager::AppWebViewKind;
 
     #[test]
     fn allows_internal_navigation_origins() {
-        assert!(allow_navigation("app://index.html"));
+        assert!(allow_navigation(
+            "app://index.html",
+            AppWebViewKind::Standard
+        ));
         // wry rewrites app://index.html to http://app.index.html/
-        assert!(allow_navigation("http://app.index.html/"));
-        assert!(allow_navigation("about:blank"));
+        assert!(allow_navigation(
+            "http://app.index.html/",
+            AppWebViewKind::Standard
+        ));
+        assert!(allow_navigation("about:blank", AppWebViewKind::Standard));
     }
 
     #[test]
     fn rejects_external_or_similar_lookalike_origins() {
-        assert!(!allow_navigation("https://app.attacker.html/"));
-        assert!(!allow_navigation("https://app.localhost.evil.html/"));
         assert!(!allow_navigation(
-            "https://app.localhost.attacker.tld/index.html"
+            "https://app.attacker.html/",
+            AppWebViewKind::Standard
         ));
-        assert!(!allow_navigation("https://app.index.evil.html/"));
-        assert!(!allow_navigation("https://app.tabbar.html/"));
-        assert!(!allow_navigation("https://app.settings.html/"));
-        assert!(!allow_navigation("https://app..html/"));
-        assert!(!allow_navigation("https://app.localhost/index.html"));
-        assert!(!allow_navigation("https://evil.tld"));
-        assert!(!allow_navigation("https://app.localhost:8443/index.html"));
-        assert!(!allow_navigation("not-a-url"));
+        assert!(!allow_navigation(
+            "https://app.localhost.evil.html/",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://app.localhost.attacker.tld/index.html",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://app.index.evil.html/",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://app.tabbar.html/",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://app.settings.html/",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://app..html/",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://app.localhost/index.html",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://evil.tld",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://app.localhost:8443/index.html",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation("not-a-url", AppWebViewKind::Standard));
+    }
+
+    #[test]
+    fn allows_loopback_http_with_port_for_code_kind_only() {
+        assert!(allow_navigation(
+            "http://localhost:5173/",
+            AppWebViewKind::Code
+        ));
+        assert!(allow_navigation(
+            "http://127.0.0.1:5173/",
+            AppWebViewKind::Code
+        ));
+        assert!(allow_navigation("http://[::1]:5173/", AppWebViewKind::Code));
+
+        assert!(!allow_navigation(
+            "http://localhost:5173/",
+            AppWebViewKind::Standard
+        ));
+        assert!(!allow_navigation(
+            "https://localhost:5173/",
+            AppWebViewKind::Code
+        ));
+        assert!(!allow_navigation("http://localhost/", AppWebViewKind::Code));
+        assert!(!allow_navigation(
+            "http://evil.tld:5173/",
+            AppWebViewKind::Code
+        ));
     }
 }

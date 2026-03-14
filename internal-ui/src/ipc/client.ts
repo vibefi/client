@@ -58,6 +58,10 @@ export class IpcClient {
   }
 
   resolve(id: number, result: unknown, error: unknown) {
+    if (!Number.isFinite(id) || id <= 0) {
+      console.debug("[vibefi:ipc] ignoring non-callback id", id);
+      return;
+    }
     const callback = this.callbacks.get(id);
     if (!callback) {
       console.warn("[vibefi:ipc] unresolved callback id", id);

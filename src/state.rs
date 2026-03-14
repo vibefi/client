@@ -4,7 +4,9 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     collections::VecDeque,
+    fmt,
     path::PathBuf,
+    process::Child,
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -65,10 +67,13 @@ pub enum UserEvent {
     },
     StudioBundleResolved {
         placeholder_id: String,
-        result: Result<PathBuf, String>,
+        result: std::result::Result<PathBuf, String>,
     },
     CloseWalletSelector,
     TabAction(TabAction),
+    ProposalDraft {
+        draft: serde_json::Value,
+    },
     AutomationCommand {
         id: String,
         cmd_type: String,
@@ -79,7 +84,12 @@ pub enum UserEvent {
 
 #[derive(Debug, Clone)]
 pub enum TabAction {
-    OpenApp { name: String, dist_dir: PathBuf },
+    OpenApp {
+        name: String,
+        dist_dir: PathBuf,
+        source_dir: Option<PathBuf>,
+        dapp_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +118,23 @@ pub struct WalletState {
     pub walletconnect_uri: Option<String>,
 }
 
+pub struct CodeAnvilContext {
+    pub signer: Arc<PrivateKeySigner>,
+    pub account: String,
+    pub chain_id: u64,
+    pub wallet: Arc<Mutex<WalletState>>,
+    pub rpc_manager: RpcEndpointManager,
+}
+
+impl fmt::Debug for CodeAnvilContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CodeAnvilContext")
+            .field("account", &self.account)
+            .field("chain_id", &self.chain_id)
+            .finish()
+    }
+}
+
 /// Tracks a pending `eth_requestAccounts` that is waiting for the user to
 /// pick a wallet backend in the selector tab.
 #[derive(Debug, Clone)]
@@ -129,6 +156,37 @@ pub struct AppRuntimeCapabilities {
     pub ipfs_allow: Vec<IpfsCapabilityRule>,
 }
 
+#[derive(Debug)]
+pub struct RunningCodeDevServer {
+    pub id: u64,
+    pub project_root: PathBuf,
+    pub webview_id: String,
+    pub port: u16,
+    pub child: Arc<Mutex<Child>>,
+    pub uses_process_group: bool,
+}
+
+#[derive(Debug)]
+pub struct RunningCodeAnvil {
+    pub id: u64,
+    pub project_root: PathBuf,
+    pub webview_id: String,
+    pub port: u16,
+    pub child: Arc<Mutex<Child>>,
+    pub uses_process_group: bool,
+}
+
+#[derive(Debug)]
+pub struct CodeState {
+    pub active_project: Option<PathBuf>,
+    pub workspace_root: PathBuf,
+    pub dev_server: Option<RunningCodeDevServer>,
+    pub next_dev_server_id: u64,
+    pub anvil: Option<RunningCodeAnvil>,
+    pub anvil_context: Option<CodeAnvilContext>,
+    pub next_anvil_id: u64,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub wallet: Arc<Mutex<WalletState>>,
@@ -140,6 +198,7 @@ pub struct AppState {
     pub proxy: EventLoopProxy<UserEvent>,
     pub pending_connect: Arc<Mutex<VecDeque<PendingConnect>>>,
     pub app_capabilities: Arc<Mutex<HashMap<String, AppRuntimeCapabilities>>>,
+    pub code: Arc<Mutex<CodeState>>,
     /// Webview ID of the wallet selector tab, if open.
     pub selector_webview_id: Arc<Mutex<Option<String>>>,
     pub rpc_manager: Arc<Mutex<Option<RpcEndpointManager>>>,
